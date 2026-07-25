@@ -1,0 +1,40 @@
+html[data-bili-demo-video-active="true"],
+html[data-bili-demo-video-active="true"] body {
+  width: 100% !important;
+  max-width: 100% !important;
+  overflow-x: hidden !important;
+}
+
+html[data-bili-demo-video-active="true"] [data-bili-demo-hidden="true"] {
+  display: none !important;
+}
+
+html[data-bili-demo-video-active="true"] [data-bili-demo-video-main="true"] {
+  width: 100% !important;
+  max-width: 1600px !important;
+  margin-inline: auto !important;
+  padding-inline: clamp(8px, 2vw, 24px) !important;
+}
+
+html[data-bili-demo-video-active="true"] [data-bili-demo-video-article="true"] {
+  max-width: 1080px !important;
+  margin-inline: auto !important;
+}
+
+html[data-bili-demo-video-active="true"] video {
+  max-width: 100% !important;
+  max-height: 100dvh !important;
+  object-fit: contain !important;
+}
+
+@supports not (height: 100dvh) {
+  html[data-bili-demo-video-active="true"] video {
+    max-height: 100vh !important;
+  }
+}
+
+@media (min-width: 840px) {
+  html[data-bili-demo-video-active="true"] [data-bili-demo-video-main="true"] {
+    padding-inline: clamp(16px, 2.5vw, 32px) !important;
+  }
+}

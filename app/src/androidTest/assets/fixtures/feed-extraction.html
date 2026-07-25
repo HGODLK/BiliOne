@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>Feed extraction fixture</title>
+  </head>
+  <body>
+    <main>
+      <article id="normal-card">
+        <a href="https://www.bilibili.com/video/BVNORMAL1?spm_id_from=fixture#reply">
+          <img src="/fixtures/feed-extraction-cover.svg" alt="" />
+          <h2>正常视频标题</h2>
+        </a>
+        <a href="https://www.bilibili.com/space/100" rel="author">普通作者</a>
+        <span data-play-count="12.3万">12.3万播放</span>
+        <time data-duration="03:21">03:21</time>
+      </article>
+
+      <article id="duplicate-card">
+        <a href="https://www.bilibili.com/video/BVNORMAL1?different=query">
+          <img src="/fixtures/feed-extraction-cover.svg" alt="" />
+          <h2>重复视频标题</h2>
+        </a>
+      </article>
+
+      <article id="lazy-image-card">
+        <a href="https://m.bilibili.com/video/BVLAZY1" title="延迟图片视频">
+          <img
+            src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
+            data-src="//i0.hdslb.com/bfs/archive/lazy-cover.jpg"
+            alt=""
+          />
+        </a>
+      </article>
+
+      <article id="missing-title-card">
+        <a href="https://www.bilibili.com/video/BVMISSINGTITLE">
+          <img src="/fixtures/feed-extraction-cover.svg" alt="" />
+        </a>
+      </article>
+
+      <article id="missing-cover-card">
+        <a href="https://www.bilibili.com/video/BVMISSINGCOVER">
+          <h3>只有标题没有封面</h3>
+        </a>
+      </article>
+
+      <article id="relative-video-card">
+        <a href="/video/BVRELATIVE1?from=fixture">
+          <img src="/fixtures/feed-extraction-cover.svg" alt="" />
+          <span aria-label="相对链接视频标题"></span>
+        </a>
+      </article>
+
+      <article id="protocol-relative-image-card">
+        <a href="https://www.bilibili.com/video/BVIMAGE1">
+          <img
+            src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
+            data-original="//i1.hdslb.com/bfs/archive/protocol-relative.jpg"
+            alt=""
+          />
+          <figcaption>协议相对封面视频</figcaption>
+        </a>
+      </article>
+
+      <article id="non-video-card">
+        <a href="https://www.bilibili.com/read/cv123">
+          <img src="/fixtures/feed-extraction-cover.svg" alt="" />
+          <h2>这不是视频链接</h2>
+        </a>
+      </article>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,32 @@
+html[data-bili-demo-video-active="true"] {
+  width: 100% !important;
+  max-width: 100% !important;
+  overflow-x: hidden !important;
+}
+
+html[data-bili-demo-video-active="true"] body {
+  width: 100% !important;
+  max-width: 100% !important;
+  overflow-x: clip !important;
+  box-sizing: border-box !important;
+}
+
+html[data-bili-demo-video-active="true"] *,
+html[data-bili-demo-video-active="true"] *::before,
+html[data-bili-demo-video-active="true"] *::after {
+  box-sizing: border-box;
+}
+
+html[data-bili-demo-video-active="true"] img,
+html[data-bili-demo-video-active="true"] svg,
+html[data-bili-demo-video-active="true"] canvas,
+html[data-bili-demo-video-active="true"] iframe {
+  max-width: 100%;
+}
+
+@media (prefers-color-scheme: dark) {
+  html[data-bili-demo-video-active="true"] {
+    color-scheme: dark;
+    background: #111113;
+  }
+}
