@@ -437,6 +437,7 @@ internal fun CommentTextEditor(
   placeholder: String,
   emoteMarkers: Map<Char, BiliEmote>,
   focusRequester: FocusRequester,
+  enabled: Boolean = true,
   onFocused: () -> Unit = {},
   onLineCountChanged: (Int) -> Unit = {},
   modifier: Modifier = Modifier,
@@ -450,6 +451,7 @@ internal fun CommentTextEditor(
   val density = LocalDensity.current
   BasicTextField(
     state = state,
+    enabled = enabled,
     modifier =
       modifier
         .onFocusChanged { if (it.isFocused) onFocused() }
@@ -589,6 +591,30 @@ internal data class CommentEmoteMarkerSnapshot(
   val markerToEmote: Map<Char, BiliEmote>,
 ) {
   fun markerFor(emote: BiliEmote): Char? = tokenToMarker[emote.text]
+
+  fun encode(source: String): String {
+    val tokens = tokenToMarker.keys.filter(source::contains).sortedByDescending(String::length)
+    if (tokens.isEmpty()) return source
+    return buildString {
+      var index = 0
+      while (index < source.length) {
+        val token = tokens.firstOrNull { source.startsWith(it, index) }
+        if (token == null) {
+          append(source[index])
+          index += 1
+        } else {
+          append(tokenToMarker.getValue(token))
+          index += token.length
+        }
+      }
+    }
+  }
+
+  fun encodedOffset(source: String, decodedOffset: Int): Int =
+    encode(source.substring(0, decodedOffset.coerceIn(0, source.length))).length
+
+  fun decodedOffset(source: String, encodedOffset: Int): Int =
+    decode(source.substring(0, encodedOffset.coerceIn(0, source.length))).length
 
   fun decode(source: String): String = buildString {
     source.forEach { character -> append(markerToEmote[character]?.text ?: character) }

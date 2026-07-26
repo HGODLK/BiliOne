@@ -3100,8 +3100,43 @@ object BiliApi {
               )
             )
           }
-          business == "live" || business == "live_room" ->
-            add(AccountHistoryItem.Live(oid, item.optString("title"), item.optLong("view_at")))
+          business == "live" || business == "live_room" -> {
+            if (oid <= 0L) continue
+            val cover =
+              item.optString("cover").ifBlank {
+                item.optJSONArray("covers")?.optString(0).orEmpty()
+              }
+            val statusText =
+              listOf(item.optString("badge"), item.optString("show_title"))
+                .joinToString(" ")
+            add(
+              AccountHistoryItem.Live(
+                roomId = oid,
+                title = item.optString("title").ifBlank { "直播间 $oid" },
+                anchorUid = item.optLong("author_mid"),
+                anchorName = item.optString("author_name").ifBlank { "主播" },
+                anchorFace =
+                  dev.openbili.webdemo.UrlPolicy
+                    .normalizeImageUrl(item.optString("author_face")),
+                coverUrl = dev.openbili.webdemo.UrlPolicy.normalizeImageUrl(cover),
+                keyframeUrl =
+                  dev.openbili.webdemo.UrlPolicy
+                    .normalizeImageUrl(
+                      history.optString("keyframe").ifBlank { item.optString("keyframe") }
+                    ),
+                areaName =
+                  item
+                    .optString("tag_name")
+                    .ifBlank { item.optString("show_title") }
+                    .takeIf(String::isNotBlank),
+                parentAreaName = item.optString("parent_area_name").takeIf(String::isNotBlank),
+                liveStatus =
+                  if (item.has("live_status")) item.optInt("live_status")
+                  else if (statusText.contains("直播中")) 1 else 0,
+                viewAt = item.optLong("view_at"),
+              )
+            )
+          }
           pgcHistory -> {
             val episodeId =
               history
@@ -3809,7 +3844,7 @@ object BiliApi {
       else -> MessageTargetKind.UNKNOWN
     }
 
-  private fun getMessageUsers(ids: List<Long>): Map<Long, Pair<String, String>> {
+  internal fun getMessageUsers(ids: List<Long>): Map<Long, Pair<String, String>> {
     if (ids.isEmpty()) return emptyMap()
     val resp =
       BiliHttpClient.get(
@@ -3821,7 +3856,11 @@ object BiliApi {
     return buildMap {
       for (i in 0 until data.length()) {
         val row = data.optJSONObject(i) ?: continue
-        put(row.optLong("mid"), row.optString("name") to row.optString("face"))
+        put(
+          row.optLong("mid"),
+          row.optString("name") to
+            dev.openbili.webdemo.UrlPolicy.normalizeImageUrl(row.optString("face")).orEmpty(),
+        )
       }
     }
   }
@@ -5156,7 +5195,7 @@ object BiliApi {
     }
   }
 
-  private fun signedQuery(params: Map<String, String>): String =
+  internal fun signedQuery(params: Map<String, String>): String =
     signedParams(params).toSortedMap().entries.joinToString("&") { (k, v) ->
       "${URLEncoder.encode(k, "UTF-8")}" + "=${URLEncoder.encode(v, "UTF-8")}"
     }

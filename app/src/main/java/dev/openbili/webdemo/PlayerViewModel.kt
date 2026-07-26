@@ -21,6 +21,7 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.dash.DashMediaSource
+import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.MergingMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
@@ -30,6 +31,8 @@ import dev.openbili.webdemo.api.PremiumAudioMode
 import dev.openbili.webdemo.api.VideoPage
 import dev.openbili.webdemo.api.VideoStream
 import dev.openbili.webdemo.feed.FeedItem
+import dev.openbili.webdemo.live.LiveStreamFormat
+import dev.openbili.webdemo.live.LiveStreamSource
 import dev.openbili.webdemo.settings.AdvancedAudioPriority
 import dev.openbili.webdemo.settings.DeviceMediaCapabilities
 import dev.openbili.webdemo.settings.PreferredResolutionMode
@@ -69,6 +72,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
   private var playData: PlayUrlData? = null
   private var lastItem: FeedItem? = null
   private var loadedVideoId: String? = null
+  private var liveRoomId: Long? = null
   private var loadJob: Job? = null
   private var loadGeneration = 0L
   private var pendingStartPositionMs = 0L
@@ -134,6 +138,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     page: VideoPage? = null,
     restoreSavedProgress: Boolean = true,
   ) {
+    liveRoomId = null
     lastItem = item
     val requestedStartPositionMs = startPositionMs.coerceAtLeast(0L)
     pendingStartPositionMs = requestedStartPositionMs
@@ -234,7 +239,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
       object : Player.Listener {
         override fun onPlaybackStateChanged(playbackState: Int) {
           if (BuildConfig.DEBUG) Log.d(TAG, "playbackState=$playbackState")
-          if (playbackState == Player.STATE_BUFFERING) {
+          if (playbackState == Player.STATE_BUFFERING && liveRoomId == null) {
             if (!skipNextCdnBufferingFallback) scheduleCdnFallback(player)
           } else if (playbackState == Player.STATE_READY) {
             cdnFallbackJob?.cancel()
@@ -264,12 +269,81 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         override fun onPlayerError(error: PlaybackException) {
           Log.e(TAG, "playback failed: ${error.errorCodeName}", error)
           resetCdnBufferingDetector()
+          if (liveRoomId != null) return
           _playerState.value = PlayerState.Error("视频流加载失败，请重试或切换画质", playData)
         }
       }
     )
     exoPlayer = player
     return player
+  }
+
+  /**
+   * Switches the one root player into a non-cached live mode. The signed live URL is kept only in
+   * the active MediaItem and is never written to playback history or the VOD cache.
+   */
+  fun playLive(roomId: Long, source: LiveStreamSource) {
+    require(roomId > 0L) { "直播间号无效" }
+    loadJob?.cancel()
+    loadJob = null
+    loadGeneration++
+    resetCdnBufferingDetector()
+    lastItem = null
+    loadedVideoId = null
+    playData = null
+    liveRoomId = roomId
+    _renderedVideoId.value = null
+    _playerState.value = PlayerState.Idle
+    val player = preparePlayer()
+    val liveHttpFactory =
+      DefaultHttpDataSource.Factory()
+        .setUserAgent(
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36"
+        )
+        .setDefaultRequestProperties(
+          mapOf(
+            "Referer" to "https://live.bilibili.com/$roomId",
+            "Origin" to "https://live.bilibili.com",
+          )
+        )
+    val liveDataSourceFactory = DefaultDataSource.Factory(getApplication(), liveHttpFactory)
+    val mediaItem =
+      MediaItem.Builder()
+        .setMediaId("live:$roomId")
+        .setUri(source.url)
+        .setLiveConfiguration(
+          MediaItem.LiveConfiguration.Builder().setTargetOffsetMs(3_000L).build()
+        )
+        .build()
+    val mediaSource =
+      when (source.format) {
+        LiveStreamFormat.HLS_FMP4,
+        LiveStreamFormat.HLS_TS ->
+          HlsMediaSource.Factory(liveDataSourceFactory).createMediaSource(mediaItem)
+        LiveStreamFormat.HTTP_FLV ->
+          ProgressiveMediaSource.Factory(liveDataSourceFactory).createMediaSource(mediaItem)
+      }
+    player.stop()
+    player.clearMediaItems()
+    player.setMediaSource(mediaSource)
+    player.prepare()
+    player.playWhenReady = true
+  }
+
+  fun seekToLiveEdge() {
+    val player = exoPlayer ?: return
+    if (liveRoomId == null || !player.isCurrentMediaItemLive) return
+    player.seekToDefaultPosition()
+    player.play()
+  }
+
+  fun stopLive(roomId: Long) {
+    if (liveRoomId != roomId) return
+    exoPlayer?.stop()
+    exoPlayer?.clearMediaItems()
+    liveRoomId = null
+    _playerState.value = PlayerState.Idle
+    _renderedVideoId.value = null
   }
 
   /**

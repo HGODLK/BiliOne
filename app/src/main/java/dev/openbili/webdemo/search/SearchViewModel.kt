@@ -11,6 +11,8 @@ import dev.openbili.webdemo.api.SpaceContentCard
 import dev.openbili.webdemo.api.SpaceContentKind
 import dev.openbili.webdemo.feed.FeedItem
 import dev.openbili.webdemo.feed.FeedViewModel
+import dev.openbili.webdemo.live.BiliLiveApi
+import dev.openbili.webdemo.live.LiveSearchRoom
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -25,7 +27,7 @@ enum class SearchCategory(val title: String, val enabled: Boolean) {
   VIDEO("视频", true),
   BANGUMI("番剧", true),
   CINEMA("影视", true),
-  LIVE("直播", false),
+  LIVE("直播", true),
   ARTICLE("专栏", true),
   USER("用户", true),
 }
@@ -54,6 +56,7 @@ data class SearchUiState(
   val suggestionsLoading: Boolean = false,
   val results: List<FeedItem> = emptyList(),
   val bangumiResults: List<SpaceContentCard> = emptyList(),
+  val liveRooms: List<LiveSearchRoom> = emptyList(),
   val articles: List<ArticleItem> = emptyList(),
   val users: List<SearchUser> = emptyList(),
   val category: SearchCategory = SearchCategory.COMPREHENSIVE,
@@ -84,6 +87,7 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
         searched = false,
         results = emptyList(),
         bangumiResults = emptyList(),
+        liveRooms = emptyList(),
         articles = emptyList(),
         users = emptyList(),
         submittedQuery = "",
@@ -168,6 +172,7 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
         submittedQuery = keyword,
         results = emptyList(),
         bangumiResults = emptyList(),
+        liveRooms = emptyList(),
         articles = emptyList(),
         users = emptyList(),
         page = 0,
@@ -246,6 +251,10 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
               }
             else -> null
           }
+        val liveResponse =
+          if (category == SearchCategory.LIVE)
+            withContext(Dispatchers.IO) { BiliLiveApi.searchRooms(keyword, page) }
+          else null
         val articleResponse =
           if (category == SearchCategory.ARTICLE)
             withContext(Dispatchers.IO) {
@@ -283,6 +292,10 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
                   it.id
                 }
               else bangumiResponse?.cards.orEmpty(),
+            liveRooms =
+              if (append)
+                (_state.value.liveRooms + liveResponse?.rooms.orEmpty()).distinctBy { it.roomId }
+              else liveResponse?.rooms.orEmpty(),
             articles =
               if (append)
                 (_state.value.articles + articleResponse.orEmptyItems()).distinctBy { it.id }
@@ -295,6 +308,7 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
                 SearchCategory.ARTICLE -> articleResponse?.hasMore == true
                 SearchCategory.BANGUMI,
                 SearchCategory.CINEMA -> bangumiResponse?.hasMore == true
+                SearchCategory.LIVE -> liveResponse?.hasMore == true
                 else -> cards.size >= 20
               },
             loading = false,

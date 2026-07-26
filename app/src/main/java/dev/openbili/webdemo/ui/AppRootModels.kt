@@ -55,6 +55,8 @@ internal sealed interface PageOrigin {
 
   data object Search : PageOrigin
 
+  data class LiveRoom(val entryId: Long, val roomId: Long) : PageOrigin
+
   /** Independent PGC index page retained below a bangumi detail page. */
   data object BangumiIndex : PageOrigin
 

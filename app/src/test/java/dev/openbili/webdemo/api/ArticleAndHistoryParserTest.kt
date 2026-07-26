@@ -80,6 +80,48 @@ class ArticleAndHistoryParserTest {
   }
 
   @Test
+  fun historyParserKeepsLiveRoomPresentationFields() {
+    val response =
+      BiliApi.parseHistoryResponse(
+        JSONObject(
+          """
+          {
+            "code": 0,
+            "data": {
+              "list": [{
+                "title": "测试直播",
+                "cover": "//i0.hdslb.com/live-cover.jpg",
+                "keyframe": "//i0.hdslb.com/live-keyframe.jpg",
+                "author_name": "主播甲",
+                "author_mid": 123,
+                "author_face": "//i0.hdslb.com/live-face.jpg",
+                "tag_name": "单机游戏",
+                "parent_area_name": "游戏",
+                "live_status": 1,
+                "view_at": 1700000000,
+                "history": {"business": "live", "oid": 456}
+              }]
+            }
+          }
+          """
+        )
+      )
+
+    val item = response.items.single() as AccountHistoryItem.Live
+    assertEquals(456L, item.roomId)
+    assertEquals("测试直播", item.title)
+    assertEquals(123L, item.anchorUid)
+    assertEquals("主播甲", item.anchorName)
+    assertEquals("https://i0.hdslb.com/live-face.jpg", item.anchorFace)
+    assertEquals("https://i0.hdslb.com/live-cover.jpg", item.coverUrl)
+    assertEquals("https://i0.hdslb.com/live-keyframe.jpg", item.keyframeUrl)
+    assertEquals("单机游戏", item.areaName)
+    assertEquals("游戏", item.parentAreaName)
+    assertEquals(1, item.liveStatus)
+    assertEquals(1700000000L, item.viewAt)
+  }
+
+  @Test
   fun historyParserKeepsPgcIdentityAndMovieLabel() {
     val response =
       BiliApi.parseHistoryResponse(

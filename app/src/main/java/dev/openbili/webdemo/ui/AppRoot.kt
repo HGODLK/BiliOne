@@ -129,6 +129,8 @@ import dev.openbili.webdemo.feed.FeedScreen
 import dev.openbili.webdemo.feed.FeedViewModel
 import dev.openbili.webdemo.feed.LoadedFeedImageRegistry
 import dev.openbili.webdemo.feed.LocalCoverImageLoadingEnabled
+import dev.openbili.webdemo.live.LiveRoomScreen
+import dev.openbili.webdemo.live.LiveSearchRoom
 import dev.openbili.webdemo.my.MyScreen
 import dev.openbili.webdemo.my.MyViewModel
 import dev.openbili.webdemo.my.ProfilePrivateConversationPane
@@ -560,6 +562,14 @@ fun AppRoot(
   val latestMySection by rememberUpdatedState(myState.section)
   var showSearch by rememberSaveable { mutableStateOf(false) }
   var showSearchResults by rememberSaveable { mutableStateOf(false) }
+  var activeLiveRoom by remember { mutableStateOf<LiveSearchRoom?>(null) }
+  var activeLiveOrigin by remember { mutableStateOf<PageOrigin>(PageOrigin.Search) }
+  var livePlayerBounds by remember { mutableStateOf(Rect.Zero) }
+  var liveTransitionSession by remember { mutableStateOf<CardTransitionSession?>(null) }
+  var liveExitPrelude by remember { mutableStateOf<VideoExitPrelude?>(null) }
+  var liveVideoSurfaceVisible by remember { mutableStateOf(true) }
+  var liveTransitionJob by remember { mutableStateOf<Job?>(null) }
+  val livePageAlpha = remember { Animatable(1f) }
   var showBangumiIndex by rememberSaveable { mutableStateOf(false) }
   var bangumiIndexTransitionDirection by remember { mutableStateOf<SearchTransitionDirection?>(null) }
   var bangumiIndexTransitionSourceBounds by remember { mutableStateOf(Rect.Zero) }
@@ -1174,10 +1184,12 @@ fun AppRoot(
     playerReady,
     appState.isVideoScreen,
     rootPlayerOwnership.role,
+    activeLiveRoom,
   ) {
     if (
       !playerReady &&
         !appState.isVideoScreen &&
+        activeLiveRoom == null &&
         rootPlayerOwnership.role == RootPlayerSurfaceRole.IDLE
     ) {
       unbindPlayerView()
@@ -1191,8 +1203,9 @@ fun AppRoot(
       Boolean,
       Boolean,
       SharedPlayerViewRole,
+      Boolean?,
     ) -> Unit =
-    { modifier, fullscreenProgress, fullscreen, danmakuAllowed, role ->
+    { modifier, fullscreenProgress, fullscreen, danmakuAllowed, role, surfaceVisible ->
         // Read overlay inputs during composition. If they are read only inside AndroidView's
         // update lambda, rememberUpdatedState can change without invalidating that update block.
         val danmakuItems = if (danmakuAllowed) latestDanmaku else emptyList()
@@ -1213,6 +1226,9 @@ fun AppRoot(
           update = { playerView ->
             if (playerView.player !== playerViewModel.exoPlayer) {
               playerView.player = playerViewModel.exoPlayer
+            }
+            surfaceVisible?.let { visible ->
+              playerView.updateVideoSurfaceAlpha(if (visible) 1f else 0f)
             }
             val fullscreenRadius =
               if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) 14f else 0f
@@ -5533,7 +5549,10 @@ fun AppRoot(
 
   BackHandler(
     enabled =
-      searchTransitionDirection != null && !appState.isVideoScreen && articleStack.isEmpty(),
+      activeLiveRoom == null &&
+        searchTransitionDirection != null &&
+        !appState.isVideoScreen &&
+        articleStack.isEmpty(),
     onBack = ::closeSearchResultsAnimated,
   )
 
@@ -5573,6 +5592,244 @@ fun AppRoot(
         else if (videoStack.size > 1) startBackToPreviousVideo() else startExitVideo()
       else -> Unit
     }
+  }
+
+  fun liveTransitionItem(room: LiveSearchRoom): FeedItem =
+    FeedItem(
+      id = room.stableId,
+      title = room.title,
+      videoUrl = "https://live.bilibili.com/${room.roomId}",
+      coverUrl = room.keyframeUrl ?: room.coverUrl.orEmpty(),
+      uploader = room.uname,
+      playCount = null,
+      duration = null,
+      uploaderFace = room.faceUrl,
+      uploaderMid = room.uid,
+      description = listOfNotNull(room.parentAreaName, room.areaName).joinToString(" · "),
+    )
+
+  fun currentLiveTransitionBounds(session: CardTransitionSession): Rect {
+    val progress = session.progress.value.coerceIn(0f, 1f)
+    return Rect(
+      left = session.startBounds.left + (session.endBounds.left - session.startBounds.left) * progress,
+      top = session.startBounds.top + (session.endBounds.top - session.startBounds.top) * progress,
+      right =
+        session.startBounds.right + (session.endBounds.right - session.startBounds.right) * progress,
+      bottom =
+        session.startBounds.bottom +
+          (session.endBounds.bottom - session.startBounds.bottom) * progress,
+    )
+  }
+
+  fun setLiveSourceCoverHidden(room: LiveSearchRoom, hidden: Boolean) {
+    when (activeLiveOrigin) {
+      PageOrigin.My -> hiddenMyCoverItemId = room.stableId.takeIf { hidden }
+      else -> hiddenSearchCoverItemId = room.stableId.takeIf { hidden }
+    }
+  }
+
+  fun liveSourceBounds(room: LiveSearchRoom): Rect? =
+    when (activeLiveOrigin) {
+      PageOrigin.My -> myCardBounds[room.stableId]
+      else -> searchCardBounds[room.stableId]
+    }
+
+  fun startEnterLive(
+    room: LiveSearchRoom,
+    cardBounds: Rect?,
+    origin: PageOrigin = PageOrigin.Search,
+  ) {
+    if (activeLiveRoom != null || transitionSession != null || articleTransitionSession != null) return
+    playerViewModel.cancelPendingLoad()
+    playerViewModel.exoPlayer?.pause()
+    liveExitPrelude = null
+    liveVideoSurfaceVisible = false
+    rootPlayerOwnership = RootPlayerOwnership(RootPlayerSurfaceRole.IDLE)
+    livePlayerBounds = Rect.Zero
+    hiddenSearchCoverItemId = null
+    hiddenMyCoverItemId = null
+    activeLiveOrigin = origin
+    activeLiveRoom = room
+    val source = cardBounds?.takeIf { it.hasUsableSize() }
+    val item = liveTransitionItem(room)
+    val session =
+      source?.let {
+        CardTransitionSession(
+            token = ++transitionToken,
+            kind = TransitionKind.ENTER_ROOT,
+            item = item,
+            startBounds = it,
+            endBounds = it,
+            initialProgress = 0f,
+            requiredSignals = playerTransitionRequiredSignals,
+          )
+          .also { created ->
+            created.preparation.markReady(TransitionReadySignal.SOURCE_BOUNDS)
+            liveTransitionSession = created
+          }
+      }
+    val previous = liveTransitionJob
+    liveTransitionJob =
+      scope.launch {
+        previous?.cancelAndJoin()
+        livePageAlpha.snapTo(0f)
+        if (session == null) {
+          livePageAlpha.animateTo(
+            1f,
+            tween(if (settings.reduceMotion) 100 else 220, easing = FastOutSlowInEasing),
+          )
+          liveVideoSurfaceVisible = true
+          liveTransitionJob = null
+          return@launch
+        }
+        withFrameNanos {}
+        val target = prepareCardTransition(session) { livePlayerBounds }
+        if (!target.hasUsableSize()) {
+          session.phase = SessionPhase.CANCELLED
+          if (liveTransitionSession === session) liveTransitionSession = null
+          livePageAlpha.animateTo(
+            1f,
+            tween(if (settings.reduceMotion) 100 else 220, easing = FastOutSlowInEasing),
+          )
+          liveVideoSurfaceVisible = true
+          liveTransitionJob = null
+          return@launch
+        }
+        session.endBounds = target
+        setLiveSourceCoverHidden(room, true)
+        session.phase = SessionPhase.FLYING
+        withFrameNanos {}
+        kotlinx.coroutines.coroutineScope {
+          launch {
+            session.progress.animateTo(
+              1f,
+              tween(if (settings.reduceMotion) 140 else 400, easing = FastOutSlowInEasing),
+            )
+          }
+          launch {
+            delay(if (settings.reduceMotion) 10 else 45)
+            livePageAlpha.animateTo(
+              1f,
+              tween(if (settings.reduceMotion) 100 else 300, easing = FastOutSlowInEasing),
+            )
+          }
+        }
+        session.phase = SessionPhase.REVEALING
+        liveVideoSurfaceVisible = true
+        session.coverAlpha.animateTo(
+          0f,
+          tween(if (settings.reduceMotion) 90 else 180, easing = FastOutSlowInEasing),
+        )
+        session.phase = SessionPhase.COMPLETED
+        setLiveSourceCoverHidden(room, false)
+        if (liveTransitionSession === session) liveTransitionSession = null
+        liveTransitionJob = null
+      }
+  }
+
+  fun startExitLive(closeSearchAfter: Boolean = false) {
+    val room = activeLiveRoom ?: return
+    val item = liveTransitionItem(room)
+    val activeFlight = liveTransitionSession
+    val startBounds =
+      activeFlight
+        ?.takeIf { it.phase != SessionPhase.PREPARING }
+        ?.let(::currentLiveTransitionBounds)
+        ?.takeIf { it.hasUsableSize() } ?: livePlayerBounds.takeIf { it.hasUsableSize() }
+    val destination =
+      resolveExitTransitionTargetBounds(
+        latest = liveSourceBounds(room),
+        fallback = activeFlight?.startBounds,
+        playerBounds = livePlayerBounds,
+      )
+    val previous = liveTransitionJob
+    liveTransitionJob =
+      scope.launch {
+        previous?.cancelAndJoin()
+        activeFlight?.preparation?.cancel()
+        val prelude =
+          startBounds?.let { bounds ->
+            VideoExitPrelude(item = item, playerBounds = bounds).also {
+              it.transitionBitmap =
+                activeFlight?.transitionBitmap ?: LoadedFeedImageRegistry.bitmap(item.coverUrl)
+              liveExitPrelude = it
+            }
+          }
+        if (prelude != null) {
+          prelude.coverAlpha.animateTo(
+            1f,
+            tween(if (settings.reduceMotion) 80 else 180, easing = FastOutSlowInEasing),
+          )
+          liveVideoSurfaceVisible = false
+          withFrameNanos {}
+        }
+        if (startBounds == null || destination == null) {
+          livePageAlpha.animateTo(
+            0f,
+            tween(if (settings.reduceMotion) 90 else 180, easing = FastOutSlowInEasing),
+          )
+          activeLiveRoom = null
+          liveTransitionSession = null
+          liveExitPrelude = null
+          setLiveSourceCoverHidden(room, false)
+          liveVideoSurfaceVisible = true
+          livePageAlpha.snapTo(1f)
+          if (activeLiveOrigin == PageOrigin.My) myViewModel.refresh()
+          if (closeSearchAfter) {
+            if (activeLiveOrigin == PageOrigin.Search) closeSearchResultsAnimated()
+            else animateToRootTab(RootTab.HOME)
+          }
+          liveTransitionJob = null
+          return@launch
+        }
+        val session =
+          CardTransitionSession(
+            token = ++transitionToken,
+            kind = TransitionKind.EXIT_ROOT,
+            item = item,
+            startBounds = startBounds,
+            endBounds = destination,
+            initialProgress = 0f,
+            initialPanelAlpha = 1f,
+          )
+        session.transitionBitmap =
+          prelude?.transitionBitmap
+            ?: activeFlight?.transitionBitmap
+            ?: LoadedFeedImageRegistry.bitmap(item.coverUrl)
+        session.phase = SessionPhase.FLYING
+        liveTransitionSession = session
+        setLiveSourceCoverHidden(room, true)
+        withFrameNanos {}
+        liveExitPrelude = null
+        kotlinx.coroutines.coroutineScope {
+          launch {
+            session.progress.animateTo(
+              1f,
+              tween(if (settings.reduceMotion) 130 else 360, easing = FastOutSlowInEasing),
+            )
+          }
+          launch {
+            livePageAlpha.animateTo(
+              0f,
+              tween(if (settings.reduceMotion) 90 else 220, easing = FastOutSlowInEasing),
+            )
+          }
+        }
+        session.phase = SessionPhase.COMPLETED
+        activeLiveRoom = null
+        liveTransitionSession = null
+        liveExitPrelude = null
+        setLiveSourceCoverHidden(room, false)
+        livePlayerBounds = Rect.Zero
+        liveVideoSurfaceVisible = true
+        livePageAlpha.snapTo(1f)
+        if (activeLiveOrigin == PageOrigin.My) myViewModel.refresh()
+        if (closeSearchAfter) {
+          if (activeLiveOrigin == PageOrigin.Search) closeSearchResultsAnimated()
+          else animateToRootTab(RootTab.HOME)
+        }
+        liveTransitionJob = null
+      }
   }
 
   // ── Screen coexistence ───────────────────────────────────────────────
@@ -5699,6 +5956,14 @@ fun AppRoot(
                 if (sourceBounds != null) searchCardBounds[card.id] = sourceBounds
                 startSearchBangumi(card, bounds)
               },
+              onLive = { room, bounds ->
+                val sourceBounds = bounds.takeUnless { it == Rect.Zero }
+                if (sourceBounds != null) searchCardBounds[room.stableId] = sourceBounds
+                startEnterLive(room, sourceBounds)
+              },
+              onLiveBounds = { room, bounds ->
+                if (bounds.hasUsableSize()) searchCardBounds[room.stableId] = bounds
+              },
               onArticle = { article, bounds ->
                 val sourceBounds = bounds.takeUnless { it == Rect.Zero }
                 if (sourceBounds != null) searchArticleBounds[article.stableId] = sourceBounds
@@ -5716,7 +5981,10 @@ fun AppRoot(
               onBack = ::closeSearchResultsAnimated,
               hiddenCoverItemId = hiddenSearchCoverItemId,
               hiddenArticleItemId = hiddenSearchArticleItemId,
-              backEnabled = !appState.isVideoScreen && activeArticleFrame == null,
+              backEnabled =
+                activeLiveRoom == null &&
+                  !appState.isVideoScreen &&
+                  activeArticleFrame == null,
             )
           }
         } else {
@@ -5823,6 +6091,11 @@ fun AppRoot(
                   },
                   onArticleBounds = { article, bounds ->
                     if (bounds.hasUsableSize()) myArticleBounds[article.stableId] = bounds
+                  },
+                  onLive = { room, bounds ->
+                    val sourceBounds = bounds.takeUnless { it == Rect.Zero }
+                    if (sourceBounds != null) myCardBounds[room.stableId] = sourceBounds
+                    startEnterLive(room, sourceBounds, PageOrigin.My)
                   },
                   onHistoryFilter = myViewModel::selectHistoryFilter,
                   onLoadMoreHistory = myViewModel::loadMoreHistory,
@@ -6841,6 +7114,7 @@ fun AppRoot(
                 fullscreen,
                 true,
                 SharedPlayerViewRole.DETAIL,
+                true,
               )
             }
           },
@@ -6894,9 +7168,50 @@ fun AppRoot(
           host.fullscreen,
           host.danmakuAllowed,
           SharedPlayerViewRole.PREVIEW,
+          null,
         )
       },
     )
+
+    // Layer 1: Live room. It is a peer detail page to Video, Bangumi, and Article while retaining
+    // the search results underneath as its only first-stage entry source.
+    activeLiveRoom?.let { liveRoom ->
+      key(liveRoom.stableId) {
+        Box(Modifier.fillMaxSize().graphicsLayer { alpha = livePageAlpha.value }) {
+          LiveRoomScreen(
+            entry = liveRoom,
+            account = authUserInfo,
+            player = playerViewModel.preparePlayer(),
+            playerView = { modifier, fullscreenProgress, fullscreen ->
+              if (profileStack.isEmpty()) {
+                rootPlayerContent(
+                  modifier,
+                  fullscreenProgress,
+                  fullscreen,
+                  false,
+                  SharedPlayerViewRole.DETAIL,
+                  liveVideoSurfaceVisible,
+                )
+              }
+            },
+            onPlaySource = playerViewModel::playLive,
+            onStopPlayback = playerViewModel::stopLive,
+            onSeekLiveEdge = playerViewModel::seekToLiveEdge,
+            onBack = { startExitLive() },
+            onHome = { startExitLive(closeSearchAfter = true) },
+            onLogin = authViewModel::startLogin,
+            onAnchorProfile = { mid, face, name, bounds ->
+              playerViewModel.exoPlayer?.pause()
+              openAvatarProfile(mid, bounds, face, name)
+            },
+            settings = settings,
+            onSettingsChange = settingsViewModel::update,
+            onPlayerBoundsChanged = { bounds -> livePlayerBounds = bounds },
+            active = profileStack.isEmpty(),
+          )
+        }
+      }
+    }
 
     // Layer 1: Article. It is a peer detail page to Video and keeps its root source mounted.
     articleStack.forEachIndexed { frameIndex, frame ->
@@ -7172,6 +7487,40 @@ fun AppRoot(
           .background(MaterialTheme.colorScheme.background)
       )
   }
+  liveTransitionSession
+    ?.takeIf {
+      it.phase != SessionPhase.PREPARING &&
+        it.phase != SessionPhase.CANCELLED &&
+        it.phase != SessionPhase.COMPLETED
+    }
+    ?.let { session ->
+      CardTransitionOverlay(
+        item = session.item,
+        startBounds = session.startBounds,
+        endBounds = session.endBounds,
+        progress = { session.progress.value },
+        overlayAlpha = { session.coverAlpha.value },
+        modifier = Modifier.zIndex(4f),
+        bitmap = session.transitionBitmap,
+      )
+    }
+  liveExitPrelude
+    ?.takeIf {
+      it.playerBounds != Rect.Zero &&
+        it.playerBounds.width > 0f &&
+        it.playerBounds.height > 0f
+    }
+    ?.let { prelude ->
+      CardTransitionOverlay(
+        item = prelude.item,
+        startBounds = prelude.playerBounds,
+        endBounds = prelude.playerBounds,
+        progress = { 0f },
+        overlayAlpha = { prelude.coverAlpha.value },
+        bitmap = prelude.transitionBitmap,
+        modifier = Modifier.zIndex(5f),
+      )
+    }
   activeSession
     ?.takeIf {
       (!it.reusePlayerSurface || activeBangumiPage?.sourceOrigin == PageOrigin.BangumiHome) &&

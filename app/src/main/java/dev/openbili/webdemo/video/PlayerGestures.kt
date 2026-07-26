@@ -74,6 +74,9 @@ internal fun PlayerGestureLayer(
   isFullscreen: Boolean,
   onFullscreenChanged: (Boolean) -> Unit,
   seekEdgeInset: Dp,
+  enabledDoubleTap: Boolean = true,
+  enabledTemporarySpeed: Boolean = true,
+  enabledTwoFingerSeek: Boolean = true,
   modifier: Modifier = Modifier,
 ) {
   val view = LocalView.current
@@ -103,6 +106,7 @@ internal fun PlayerGestureLayer(
     modifier
       .twoFingerPlayerGesture(
         enabled = enabledFullscreenToggle,
+        enabledDoubleTapSeek = enabledTwoFingerSeek,
         edgeInset = 24.dp,
         isFullscreen = { latestFullscreen },
         onFullscreenChanged = { latestFullscreenChanged(it) },
@@ -137,7 +141,13 @@ internal fun PlayerGestureLayer(
               var boosted = false
               val boostJob = launch {
                 delay(500)
-                if (pointerGate.active || pointerGate.generation != tapGeneration) return@launch
+                if (
+                  !enabledTemporarySpeed ||
+                    pointerGate.active ||
+                    pointerGate.generation != tapGeneration
+                ) {
+                  return@launch
+                }
                 boosted = true
                 speedBoosting = true
                 latestTemporarySpeedChanged(true)
@@ -158,11 +168,16 @@ internal fun PlayerGestureLayer(
               latestToggleControls()
             }
           },
-          onDoubleTap = {
-            if (!pointerGate.active && pointerGate.generation == tapGeneration) {
-              latestDoubleTap()
-            }
-          },
+          onDoubleTap =
+            if (enabledDoubleTap) {
+              {
+                if (!pointerGate.active && pointerGate.generation == tapGeneration) {
+                  latestDoubleTap()
+                }
+              }
+            } else {
+              null
+            },
           onLongPress = {},
         )
       }
@@ -457,13 +472,14 @@ internal fun fullscreenTargetForSpan(
 
 internal fun Modifier.twoFingerPlayerGesture(
   enabled: Boolean,
+  enabledDoubleTapSeek: Boolean = true,
   edgeInset: Dp,
   isFullscreen: () -> Boolean,
   onFullscreenChanged: (Boolean) -> Unit,
   onSeekBy: (Long) -> Unit,
   onTwoFingerContactChanged: (Boolean) -> Unit,
 ): Modifier =
-  pointerInput(enabled, edgeInset) {
+  pointerInput(enabled, enabledDoubleTapSeek, edgeInset) {
     var previousTapAt = 0L
     var previousTapCenter = Offset.Unspecified
     awaitEachGesture {
@@ -525,6 +541,7 @@ internal fun Modifier.twoFingerPlayerGesture(
       }
       val wasTap =
         enabled &&
+          enabledDoubleTapSeek &&
           sawTwoPointers &&
           !invalid &&
           !fullscreenTriggered &&

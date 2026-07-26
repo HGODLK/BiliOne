@@ -524,9 +524,15 @@ private class FeedCardContentBounds {
   var uploaderName = Rect.Zero
 }
 
+enum class FeedCardMetadataMode {
+  VIDEO,
+  LIVE,
+}
+
 @Composable
 fun FeedCardContent(
   item: FeedItem,
+  metadataMode: FeedCardMetadataMode = FeedCardMetadataMode.VIDEO,
   textAlpha: Float = 1f,
   onProfileClick: (Long) -> Unit = {},
   onProfileBoundsClick: (Long, Rect) -> Unit = { mid, _ -> onProfileClick(mid) },
@@ -540,6 +546,9 @@ fun FeedCardContent(
   paletteRequestHeight: Int = 54,
   onCoverBoundsChanged: (Rect) -> Unit = {},
   onAvatarBoundsChanged: (Rect) -> Unit = {},
+  liveStatusText: String? = null,
+  liveSecondaryText: String? = null,
+  liveTrailingText: String? = null,
 ) {
   val measuredBounds = remember(item.id) { FeedCardContentBounds() }
   val fontScale = LocalDensity.current.fontScale.coerceIn(.85f, 2f)
@@ -624,7 +633,10 @@ fun FeedCardContent(
             Text(
               text = item.uploader.orEmpty(),
               modifier =
-                Modifier.weight(.42f)
+                Modifier.then(
+                    if (metadataMode == FeedCardMetadataMode.LIVE) Modifier.weight(1f)
+                    else Modifier.weight(.42f)
+                  )
                   .onGloballyPositioned { measuredBounds.uploaderName = it.boundsInRoot() }
                   .clickable(enabled = profileClickEnabled && item.uploaderMid > 0) {
                     onProfileBoundsClick(
@@ -638,39 +650,75 @@ fun FeedCardContent(
               overflow = TextOverflow.Ellipsis,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Text(
-              statsText,
-              modifier = Modifier.weight(.58f),
-              style = MaterialTheme.typography.labelSmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-              textAlign = TextAlign.End,
-            )
-          }
-          Row(
-            modifier = Modifier.fillMaxWidth().height(metadataLineHeight),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-          ) {
-            Text(
-              publishDate,
-              modifier = Modifier.weight(1f),
-              style = MaterialTheme.typography.labelSmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-            )
-            item.duration?.takeIf(String::isNotBlank)?.let {
+            if (metadataMode == FeedCardMetadataMode.VIDEO) {
               Text(
-                it,
-                modifier = Modifier.widthIn(max = 88.dp),
+                statsText,
+                modifier = Modifier.weight(.58f),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.End,
               )
+            } else {
+              liveStatusText?.takeIf(String::isNotBlank)?.let {
+                Text(
+                  it,
+                  style = MaterialTheme.typography.labelSmall,
+                  color = MaterialTheme.colorScheme.primary,
+                  maxLines = 1,
+                )
+              }
+            }
+          }
+          if (metadataMode == FeedCardMetadataMode.VIDEO) {
+            Row(
+              modifier = Modifier.fillMaxWidth().height(metadataLineHeight),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+              Text(
+                publishDate,
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+              item.duration?.takeIf(String::isNotBlank)?.let {
+                Text(
+                  it,
+                  modifier = Modifier.widthIn(max = 88.dp),
+                  style = MaterialTheme.typography.labelSmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                  textAlign = TextAlign.End,
+                )
+              }
+            }
+          } else if (!liveSecondaryText.isNullOrBlank() || !liveTrailingText.isNullOrBlank()) {
+            Row(
+              modifier = Modifier.fillMaxWidth().height(metadataLineHeight),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+              Text(
+                liveSecondaryText.orEmpty(),
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+              liveTrailingText?.takeIf(String::isNotBlank)?.let {
+                Text(
+                  it,
+                  style = MaterialTheme.typography.labelSmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  maxLines = 1,
+                )
+              }
             }
           }
         }

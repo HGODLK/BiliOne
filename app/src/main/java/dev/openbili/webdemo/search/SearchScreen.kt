@@ -84,10 +84,12 @@ import dev.openbili.webdemo.api.SearchUser
 import dev.openbili.webdemo.api.SpaceContentCard
 import dev.openbili.webdemo.article.ArticleCard
 import dev.openbili.webdemo.feed.FeedCardContent
+import dev.openbili.webdemo.feed.FeedCardMetadataMode
 import dev.openbili.webdemo.feed.FeedItem
 import dev.openbili.webdemo.feed.FeedImageLoadMode
 import dev.openbili.webdemo.feed.LocalFeedImageLoadPolicy
 import dev.openbili.webdemo.feed.rememberGridFeedImageLoadPolicy
+import dev.openbili.webdemo.live.LiveSearchRoom
 import dev.openbili.webdemo.profile.formatProfileFollowerCount
 import dev.openbili.webdemo.profile.BangumiPosterCard
 import dev.openbili.webdemo.video.CommentAuthorBadge
@@ -307,6 +309,8 @@ fun SearchResultsScreen(
   onVideoBounds: (FeedItem, Rect) -> Unit,
   onVideoProfile: (Long, String?, String?, Rect) -> Unit,
   onBangumi: (SpaceContentCard, Rect) -> Unit,
+  onLive: (LiveSearchRoom, Rect) -> Unit,
+  onLiveBounds: (LiveSearchRoom, Rect) -> Unit,
   onArticle: (ArticleItem, Rect) -> Unit,
   onArticleBounds: (ArticleItem, Rect) -> Unit,
   onUser: (Long, String, String, Rect) -> Unit,
@@ -456,6 +460,51 @@ fun SearchResultsScreen(
             items(state.users, key = { it.mid }) { user ->
               SearchUserCard(user = user, onClick = onUser)
             }
+          } else if (state.category == SearchCategory.LIVE) {
+            itemsIndexed(state.liveRooms, key = { _, room -> room.stableId }) { index, room ->
+              var coverBounds by remember(room.roomId) { mutableStateOf(Rect.Zero) }
+              val card =
+                FeedItem(
+                  id = room.stableId,
+                  title = room.title,
+                  videoUrl = "https://live.bilibili.com/${room.roomId}",
+                  coverUrl = room.keyframeUrl ?: room.coverUrl.orEmpty(),
+                  uploader = room.uname,
+                  playCount = null,
+                  duration = null,
+                  uploaderFace = room.faceUrl,
+                  uploaderMid = room.uid,
+                  description =
+                    listOfNotNull(room.parentAreaName, room.areaName).joinToString(" · "),
+                )
+              VideoCardReveal(
+                index = index,
+                batchKey = state.liveRooms.firstOrNull()?.stableId,
+                itemKey = room.stableId,
+              ) {
+                PressableVideoCard(
+                  onClick = { onLive(room, coverBounds) },
+                  onLongClick = {},
+                ) {
+                  FeedCardContent(
+                    item = card,
+                    metadataMode = FeedCardMetadataMode.LIVE,
+                    profileClickEnabled = false,
+                    onProfileBoundsClick = { _, _ -> },
+                    coverVisible = room.stableId != hiddenCoverItemId,
+                    liveStatusText = if (room.liveStatus == 1) "直播中" else "未开播",
+                    liveSecondaryText =
+                      listOfNotNull(room.parentAreaName, room.areaName)
+                        .distinct()
+                        .joinToString(" · "),
+                    onCoverBoundsChanged = {
+                      coverBounds = it
+                      onLiveBounds(room, it)
+                    },
+                  )
+                }
+              }
+            }
           } else if (state.category == SearchCategory.ARTICLE) {
             itemsIndexed(state.articles, key = { _, article -> article.stableId }) { index, article
               ->
@@ -543,6 +592,7 @@ fun SearchResultsScreen(
           state.loading &&
             state.results.isEmpty() &&
             state.bangumiResults.isEmpty() &&
+            state.liveRooms.isEmpty() &&
             state.articles.isEmpty() &&
             state.users.isEmpty()
         )
@@ -692,6 +742,7 @@ private fun SearchOrderChip(title: String, selected: Boolean, onClick: () -> Uni
 private fun searchResultCount(state: SearchUiState): Int =
   when (state.category) {
     SearchCategory.USER -> state.users.size
+    SearchCategory.LIVE -> state.liveRooms.size
     SearchCategory.ARTICLE -> state.articles.size
     SearchCategory.BANGUMI,
     SearchCategory.CINEMA -> state.bangumiResults.size

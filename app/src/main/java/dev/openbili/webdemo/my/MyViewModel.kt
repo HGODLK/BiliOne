@@ -1,9 +1,10 @@
 package dev.openbili.webdemo.my
 
+import android.app.Application
 import android.content.Context
 import android.graphics.BitmapFactory
 import android.net.Uri
-import androidx.lifecycle.ViewModel
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.openbili.webdemo.api.AccountHistoryItem
 import dev.openbili.webdemo.api.AccountHistoryResponse
@@ -22,6 +23,8 @@ import dev.openbili.webdemo.api.MessageCursor
 import dev.openbili.webdemo.api.SpaceContentCard
 import dev.openbili.webdemo.feed.FeedItem
 import dev.openbili.webdemo.feed.FeedViewModel
+import dev.openbili.webdemo.live.LiveHistoryStore
+import dev.openbili.webdemo.live.LiveSearchRoom
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -151,7 +154,7 @@ enum class FollowingOrder(val label: String, val apiValue: String) {
 enum class HistoryFilter(val label: String, val apiType: String, val enabled: Boolean = true) {
   ALL("全部", ""),
   VIDEO("仅视频", "archive"),
-  LIVE("仅直播", "live", enabled = false),
+  LIVE("仅直播", "live"),
   ARTICLE("仅专栏", "article"),
 }
 
@@ -177,6 +180,13 @@ sealed interface HistoryCardItem {
     override val viewAt: Long = item.publishedAt,
   ) : HistoryCardItem {
     override val stableId: String = item.stableId
+  }
+
+  data class Live(
+    val room: LiveSearchRoom,
+    override val viewAt: Long,
+  ) : HistoryCardItem {
+    override val stableId: String = room.stableId
   }
 }
 
@@ -255,7 +265,7 @@ internal fun favoriteActionConfirmed(
     else -> sourceContains && destinationContains == true
   }
 
-class MyViewModel : ViewModel() {
+class MyViewModel(application: Application) : AndroidViewModel(application) {
   private val _state = MutableStateFlow(MyUiState())
   val state: StateFlow<MyUiState> = _state.asStateFlow()
   private var mid = 0L
@@ -451,14 +461,18 @@ class MyViewModel : ViewModel() {
               )
           }
           MySection.HISTORY -> {
-            val response =
+            val (response, localLive) =
               withContext(Dispatchers.IO) {
-                BiliApi.getHistory(type = HistoryFilter.ALL.apiType)
+                BiliApi.getHistory(type = HistoryFilter.ALL.apiType) to readLocalLiveHistory()
               }
             if (!isCurrentLoad(generation, expectedMid, section)) return@launch
+            val remote = response.items.mapNotNull(::toHistoryCardItem)
             _state.value =
               _state.value.copy(
-                historyItems = response.items.mapNotNull(::toHistoryCardItem),
+                historyItems =
+                  (localLive + remote)
+                    .sortedByDescending(HistoryCardItem::viewAt)
+                    .distinctBy(HistoryCardItem::stableId),
                 historyCursor = response.cursor,
                 historyHasMore = response.hasMore,
                 loading = false,
@@ -642,10 +656,18 @@ class MyViewModel : ViewModel() {
       )
     loadJob = viewModelScope.launch {
       try {
-        val response = withContext(Dispatchers.IO) { loadFilteredHistory(cursor, filter) }
+        val (response, localLive) =
+          withContext(Dispatchers.IO) {
+            loadFilteredHistory(cursor, filter) to
+              if (reset && filter in setOf(HistoryFilter.ALL, HistoryFilter.LIVE)) {
+                readLocalLiveHistory()
+              } else {
+                emptyList()
+              }
+          }
         if (!isCurrentLoad(generation, expectedMid, MySection.HISTORY)) return@launch
         if (_state.value.historyFilter != filter) return@launch
-        val loaded =
+        val remoteLoaded =
           response.items
             .filter { item ->
               when (filter) {
@@ -656,12 +678,16 @@ class MyViewModel : ViewModel() {
               }
             }
             .mapNotNull(::toHistoryCardItem)
+        val loaded =
+          (localLive + remoteLoaded)
+            .sortedByDescending(HistoryCardItem::viewAt)
+            .distinctBy(HistoryCardItem::stableId)
         _state.value =
           _state.value.copy(
             historyItems =
-              (if (reset) loaded else _state.value.historyItems + loaded).distinctBy {
-                it.stableId
-              },
+              (if (reset) loaded else _state.value.historyItems + loaded)
+                .distinctBy(HistoryCardItem::stableId)
+                .sortedByDescending(HistoryCardItem::viewAt),
             historyCursor = response.cursor,
             historyHasMore = response.hasMore && response.cursor != cursor,
             historyLoadingMore = false,
@@ -1764,7 +1790,28 @@ class MyViewModel : ViewModel() {
           viewAt = item.viewAt,
         )
       is AccountHistoryItem.Article -> HistoryCardItem.Article(item.article, item.viewAt)
-      is AccountHistoryItem.Live -> null
+      is AccountHistoryItem.Live ->
+        HistoryCardItem.Live(
+          room =
+            LiveSearchRoom(
+              roomId = item.roomId,
+              uid = item.anchorUid,
+              title = item.title,
+              uname = item.anchorName,
+              faceUrl = item.anchorFace,
+              coverUrl = item.coverUrl,
+              keyframeUrl = item.keyframeUrl,
+              areaName = item.areaName,
+              parentAreaName = item.parentAreaName,
+              liveStatus = item.liveStatus,
+            ),
+          viewAt = item.viewAt,
+        )
+    }
+
+  private fun readLocalLiveHistory(): List<HistoryCardItem.Live> =
+    LiveHistoryStore.read(getApplication()).map { item ->
+      HistoryCardItem.Live(item.room, item.viewedAt)
     }
 
   private fun favoriteVideoId(card: FeedCard): String = card.bvid.ifBlank { card.aid.toString() }

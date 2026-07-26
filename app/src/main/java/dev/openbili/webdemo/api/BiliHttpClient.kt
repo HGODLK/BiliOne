@@ -168,10 +168,14 @@ object BiliHttpClient {
           original
             .newBuilder()
             .url(requestUrl)
-            .header("Referer", "https://www.bilibili.com/")
-            .header("Origin", "https://www.bilibili.com")
             .header("Accept", "application/json, text/plain, */*")
             .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+        if (original.header("Referer") == null) {
+          builder.header("Referer", "https://www.bilibili.com/")
+        }
+        if (original.header("Origin") == null) {
+          builder.header("Origin", "https://www.bilibili.com")
+        }
         cachedDesktopUa?.let { builder.header("User-Agent", it) }
         chain.proceed(builder.build()).also(RiskControlManager::inspectResponse)
       }
@@ -265,10 +269,20 @@ object BiliHttpClient {
     return publicClient.newCall(request).execute()
   }
 
-  fun postForm(url: String, fields: Map<String, String>): okhttp3.Response {
+  fun postForm(
+    url: String,
+    fields: Map<String, String>,
+    headers: Map<String, String> = emptyMap(),
+  ): okhttp3.Response {
     val body =
       FormBody.Builder().apply { fields.forEach { (name, value) -> add(name, value) } }.build()
-    return client.newCall(Request.Builder().url(url).post(body).build()).execute()
+    val request =
+      Request.Builder()
+        .url(url)
+        .post(body)
+        .apply { headers.forEach { (name, value) -> header(name, value) } }
+        .build()
+    return client.newCall(request).execute()
   }
 
   fun postMultipart(

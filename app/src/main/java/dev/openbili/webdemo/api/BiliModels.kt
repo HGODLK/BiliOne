@@ -191,6 +191,11 @@ data class PlayUrlData(
 
 // ── Danmaku ──────────────────────────────────────────────────────────────────
 
+data class DanmakuInlineEmote(
+  val token: String,
+  val imageUrl: String,
+)
+
 data class DanmakuItem(
   val timeMs: Long, // 弹幕出现时间（毫秒）
   val type: Int, // 1-3 滚动, 4 底部, 5 顶部
@@ -200,6 +205,10 @@ data class DanmakuItem(
   val isLocal: Boolean = false,
   val sourceId: String? = null,
   val colorful: Int = DANMAKU_COLORFUL_NONE,
+  /** Optional live-room emoji rendered by the same lane scheduler as text danmaku. */
+  val imageUrl: String? = null,
+  val imageLarge: Boolean = false,
+  val inlineEmotes: List<DanmakuInlineEmote> = emptyList(),
 )
 
 internal data class DanmakuMaskResource(
@@ -872,8 +881,20 @@ sealed interface AccountHistoryItem {
     override val stableId: String = article.stableId
   }
 
-  data class Live(val id: Long, val title: String, override val viewAt: Long = 0L) : AccountHistoryItem {
-    override val stableId: String = "live:$id"
+  data class Live(
+    val roomId: Long,
+    val title: String,
+    val anchorUid: Long,
+    val anchorName: String,
+    val anchorFace: String?,
+    val coverUrl: String?,
+    val keyframeUrl: String?,
+    val areaName: String?,
+    val parentAreaName: String?,
+    val liveStatus: Int,
+    override val viewAt: Long = 0L,
+  ) : AccountHistoryItem {
+    override val stableId: String = "live:$roomId"
   }
 }
 

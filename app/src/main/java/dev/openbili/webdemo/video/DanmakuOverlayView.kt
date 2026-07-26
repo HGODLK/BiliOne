@@ -15,14 +15,59 @@ import android.view.View
 import androidx.core.content.res.ResourcesCompat
 import androidx.core.graphics.withTranslation
 import androidx.core.view.ViewCompat
+import coil3.BitmapImage
+import coil3.imageLoader
+import coil3.request.ImageRequest
+import coil3.request.allowHardware
 import dev.openbili.webdemo.R
 import dev.openbili.webdemo.api.DANMAKU_COLORFUL_VIP_GRADIENT
+import dev.openbili.webdemo.api.DanmakuInlineEmote
 import dev.openbili.webdemo.api.DanmakuItem
 import dev.openbili.webdemo.api.DanmakuMaskTimeline
 import java.util.LinkedHashMap
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.max
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+
+internal sealed interface InlineDanmakuSegment {
+  data class Text(val value: String) : InlineDanmakuSegment
+
+  data class Emote(val value: DanmakuInlineEmote) : InlineDanmakuSegment
+}
+
+internal fun splitInlineDanmaku(
+  content: String,
+  emotes: List<DanmakuInlineEmote>,
+): List<InlineDanmakuSegment> {
+  val candidates =
+    emotes
+      .filter { it.token.isNotBlank() && it.imageUrl.isNotBlank() && content.contains(it.token) }
+      .distinctBy(DanmakuInlineEmote::token)
+      .sortedByDescending { it.token.length }
+  if (candidates.isEmpty()) return listOf(InlineDanmakuSegment.Text(content))
+  return buildList {
+    var index = 0
+    var textStart = 0
+    while (index < content.length) {
+      val emote = candidates.firstOrNull { content.startsWith(it.token, index) }
+      if (emote == null) {
+        index += 1
+        continue
+      }
+      if (index > textStart) add(InlineDanmakuSegment.Text(content.substring(textStart, index)))
+      add(InlineDanmakuSegment.Emote(emote))
+      index += emote.token.length
+      textStart = index
+    }
+    if (textStart < content.length) add(InlineDanmakuSegment.Text(content.substring(textStart)))
+  }
+}
 
 /**
  * A PlayerView-native danmaku layer.
@@ -47,6 +92,7 @@ class DanmakuOverlayView(context: Context) : View(context) {
       strokeWidth = 1.7f * density
       strokeJoin = Paint.Join.ROUND
     }
+  private val imagePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
   private var scheduled = emptyList<ScheduledDanmaku>()
   private var sourceItemsRef: List<DanmakuItem>? = null
   private var sourceItems = emptyList<DanmakuItem>()
@@ -61,9 +107,11 @@ class DanmakuOverlayView(context: Context) : View(context) {
   private var cachedMaskViewportHeight = 0f
   private var cachedProtectedMaskPath: Path? = null
   private val measurements = HashMap<DanmakuItem, DanmakuMeasurement>()
+  private val inlineSegmentCache = HashMap<DanmakuItem, List<InlineDanmakuSegment>>()
   private var prepared = emptyList<PreparedDanmaku>()
   private var scheduledLaneCount = 0
   private var scheduledViewportWidth = 0
+  private var scheduledLaneHeight = 0f
   private var positionProvider: () -> Long = { 0L }
   private var displayEnabled = false
   private var transitionSuppressed = false
@@ -85,6 +133,10 @@ class DanmakuOverlayView(context: Context) : View(context) {
   private var visualClockEpoch = Long.MIN_VALUE
   private var visualClockCatchingUp = false
   private val bitmapTextCache = BitmapTextCache()
+  private val imageBitmaps = LinkedHashMap<String, Bitmap>(32, .75f, true)
+  private val imageRequests = HashSet<String>()
+  private var imageAllocationBytes = 0L
+  private var imageScope = newImageScope()
 
   init {
     // A forced hardware layer allocates and refreshes a full-player offscreen texture every frame.
@@ -135,8 +187,12 @@ class DanmakuOverlayView(context: Context) : View(context) {
     if (itemsChanged) {
       sourceItemsRef = items
       sourceItems = items.sortedBy(DanmakuItem::timeMs)
+      requestImages(sourceItems)
     }
-    if (itemsChanged || fontScaleChanged) measurements.clear()
+    if (itemsChanged || fontScaleChanged) {
+      measurements.clear()
+      inlineSegmentCache.clear()
+    }
     val scheduleChanged =
       speedChanged || displayAreaChanged || densityLevelChanged || fontScaleChanged || itemsChanged
     if (scheduleChanged) {
@@ -190,11 +246,15 @@ class DanmakuOverlayView(context: Context) : View(context) {
 
   override fun onAttachedToWindow() {
     super.onAttachedToWindow()
+    if (!imageScope.isActive) imageScope = newImageScope()
+    requestImages(sourceItems)
     refreshRenderingState()
   }
 
   override fun onDetachedFromWindow() {
     stopFrames()
+    imageScope.cancel()
+    imageRequests.clear()
     clearRenderCache()
     super.onDetachedFromWindow()
   }
@@ -288,6 +348,23 @@ class DanmakuOverlayView(context: Context) : View(context) {
     val x =
       if (fixed) viewport.left + (viewport.width() - textWidth) / 2f
       else viewport.right - elapsed.toFloat() / motionDuration * (viewport.width() + textWidth)
+    item.imageUrl?.let { imageUrl ->
+      imageBitmaps[imageUrl]?.let { bitmap ->
+        imagePaint.alpha = (opacity * 255f).toInt().coerceIn(0, 255)
+        val top = baseline + value.ascent
+        canvas.drawBitmap(
+          bitmap,
+          null,
+          RectF(x, top, x + value.textWidth, top + value.descent - value.ascent),
+          imagePaint,
+        )
+      }
+      return
+    }
+    if (item.inlineEmotes.isNotEmpty()) {
+      drawInlineDanmaku(canvas, value, x, baseline)
+      return
+    }
     // Do not switch the complete active set between RenderNode and Bitmap when density crosses a
     // threshold. That transition uploads every visible label again and makes a few labels blink on
     // affected tablet GPU drivers. SDR uses one stable bitmap path; HDR keeps direct glyph drawing
@@ -317,6 +394,46 @@ class DanmakuOverlayView(context: Context) : View(context) {
     }
     canvas.drawText(item.content, x, baseline, outlinePaint)
     canvas.drawText(item.content, x, baseline, textPaint)
+  }
+
+  private fun drawInlineDanmaku(
+    canvas: Canvas,
+    value: PreparedDanmaku,
+    startX: Float,
+    baseline: Float,
+  ) {
+    configurePaints(value, textPaint, outlinePaint, startX)
+    val metrics = textPaint.fontMetrics
+    val imageSize = metrics.descent - metrics.ascent
+    var x = startX
+    inlineSegments(value.item).forEach { segment ->
+      when (segment) {
+        is InlineDanmakuSegment.Text -> {
+          canvas.drawText(segment.value, x, baseline, outlinePaint)
+          canvas.drawText(segment.value, x, baseline, textPaint)
+          x += textPaint.measureText(segment.value)
+        }
+        is InlineDanmakuSegment.Emote -> {
+          val width = max(imageSize, textPaint.measureText(segment.value.token))
+          val bitmap = imageBitmaps[segment.value.imageUrl]
+          if (bitmap != null) {
+            imagePaint.alpha = (opacity * 255f).toInt().coerceIn(0, 255)
+            val left = x + (width - imageSize) / 2f
+            val bottom = baseline + metrics.descent
+            canvas.drawBitmap(
+              bitmap,
+              null,
+              RectF(left, bottom - imageSize, left + imageSize, bottom),
+              imagePaint,
+            )
+          } else {
+            canvas.drawText(segment.value.token, x, baseline, outlinePaint)
+            canvas.drawText(segment.value.token, x, baseline, textPaint)
+          }
+          x += width
+        }
+      }
+    }
   }
 
   private fun requestFrame() {
@@ -485,6 +602,7 @@ class DanmakuOverlayView(context: Context) : View(context) {
     scrollingMotionDurationMs() + (SCROLL_EXIT_GUARD_MS / speed).toLong()
 
   private fun rebuildSchedule() {
+    scheduledLaneHeight = estimatedLaneHeight()
     scheduledLaneCount = laneCountFor(displayArea)
     scheduledViewportWidth = width
     scheduled = schedule(sourceItems, scheduledLaneCount, densityLevel)
@@ -604,7 +722,9 @@ class DanmakuOverlayView(context: Context) : View(context) {
         lane = scheduledItem.lane,
         textSize = measurement.textSize,
         textWidth = measurement.textWidth,
-        laneHeight = measurement.laneHeight,
+        laneHeight =
+          if (sourceItems.any { !it.imageUrl.isNullOrBlank() }) scheduledLaneHeight
+          else measurement.laneHeight,
         ascent = measurement.ascent,
         descent = measurement.descent,
         endMs =
@@ -618,14 +738,49 @@ class DanmakuOverlayView(context: Context) : View(context) {
 
   private fun measurementFor(item: DanmakuItem): DanmakuMeasurement =
     measurements.getOrPut(item) {
+      if (!item.imageUrl.isNullOrBlank()) {
+        val imageSize =
+          (if (item.imageLarge) LIVE_LARGE_EMOJI_SIZE_DP else LIVE_EMOJI_SIZE_DP) *
+            density *
+            fontScale
+        return@getOrPut DanmakuMeasurement(
+          textSize = imageSize,
+          textWidth = imageSize,
+          laneHeight = imageSize + LIVE_EMOJI_LANE_GAP_DP * density,
+          ascent = -imageSize,
+          descent = 0f,
+          color = Color.WHITE,
+        )
+      }
       val textSize = (item.fontSize.coerceIn(18, 36) / 25f) * 14f * scaledDensity * fontScale
       textPaint.textSize = textSize
       val metrics = textPaint.fontMetrics
       val rawColor = item.color and 0xFFFFFF
+      val inlineImageSize = metrics.descent - metrics.ascent
+      val measuredWidth =
+        if (item.inlineEmotes.isEmpty()) {
+          textPaint.measureText(item.content)
+        } else {
+          inlineSegments(item).sumOf { segment ->
+            when (segment) {
+              is InlineDanmakuSegment.Text -> textPaint.measureText(segment.value).toDouble()
+              is InlineDanmakuSegment.Emote ->
+                max(inlineImageSize, textPaint.measureText(segment.value.token)).toDouble()
+            }
+          }.toFloat()
+        }
       DanmakuMeasurement(
         textSize = textSize,
-        textWidth = textPaint.measureText(item.content),
-        laneHeight = max(27f * density, metrics.descent - metrics.ascent + metrics.leading),
+        textWidth = measuredWidth,
+        laneHeight =
+          max(
+            27f * density,
+            max(
+              metrics.descent - metrics.ascent + metrics.leading,
+              if (item.inlineEmotes.isEmpty()) 0f
+              else inlineImageSize + LIVE_EMOJI_LANE_GAP_DP * density,
+            ),
+          ),
         ascent = metrics.ascent,
         descent = metrics.descent,
         color = Color.rgb(rawColor shr 16, rawColor shr 8 and 0xFF, rawColor and 0xFF),
@@ -755,7 +910,72 @@ class DanmakuOverlayView(context: Context) : View(context) {
       .coerceAtLeast(1)
   }
 
-  private fun estimatedLaneHeight(): Float = (27f * density * fontScale).coerceAtLeast(1f)
+  private fun estimatedLaneHeight(): Float {
+    val textLaneHeight = (27f * density * fontScale).coerceAtLeast(1f)
+    return sourceItems
+      .asSequence()
+      .filter { !it.imageUrl.isNullOrBlank() || it.inlineEmotes.isNotEmpty() }
+      .map { measurementFor(it).laneHeight }
+      .maxOrNull()
+      ?.coerceAtLeast(textLaneHeight) ?: textLaneHeight
+  }
+
+  private fun newImageScope(): CoroutineScope =
+    CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+  private fun requestImages(items: List<DanmakuItem>) {
+    items
+      .asSequence()
+      .flatMap { item ->
+        sequence {
+          item.imageUrl?.let { yield(it) }
+          item.inlineEmotes.forEach { yield(it.imageUrl) }
+        }
+      }
+      .filter(String::isNotBlank)
+      .distinct()
+      .forEach { url ->
+        if (imageBitmaps.containsKey(url) || !imageRequests.add(url)) return@forEach
+        imageScope.launch {
+          val targetSize =
+            ceil(LIVE_LARGE_EMOJI_SIZE_DP * density * fontScale).toInt().coerceAtLeast(1)
+          val bitmap =
+            runCatching {
+                context.imageLoader
+                  .execute(
+                    ImageRequest.Builder(context)
+                      .data(url)
+                      .size(targetSize, targetSize)
+                      .allowHardware(false)
+                      .build()
+                  )
+                  .image
+              }
+              .getOrNull()
+              ?.let { it as? BitmapImage }
+              ?.bitmap
+          imageRequests.remove(url)
+          bitmap?.let {
+            imageBitmaps[url] = it
+            imageAllocationBytes += it.allocationByteCount
+            trimImageCache()
+            invalidate()
+          }
+        }
+      }
+  }
+
+  private fun inlineSegments(item: DanmakuItem): List<InlineDanmakuSegment> =
+    inlineSegmentCache.getOrPut(item) {
+      splitInlineDanmaku(item.content, item.inlineEmotes)
+    }
+
+  private fun trimImageCache() {
+    while (imageAllocationBytes > IMAGE_CACHE_BYTES && imageBitmaps.isNotEmpty()) {
+      val eldestKey = imageBitmaps.entries.first().key
+      imageAllocationBytes -= imageBitmaps.remove(eldestKey)?.allocationByteCount ?: 0
+    }
+  }
 
   private fun clearRenderCache() {
     bitmapTextCache.clear()
@@ -883,6 +1103,10 @@ class DanmakuOverlayView(context: Context) : View(context) {
     const val FIXED_DURATION_MS = 4_000L
     const val BITMAP_TEXT_CACHE_BYTES = 24 * 1024 * 1024L
     const val MAX_CACHED_TEXT_BITMAP_DIMENSION = 2_048
+    const val IMAGE_CACHE_BYTES = 16 * 1024 * 1024L
+    const val LIVE_EMOJI_SIZE_DP = 36f
+    const val LIVE_LARGE_EMOJI_SIZE_DP = 54f
+    const val LIVE_EMOJI_LANE_GAP_DP = 4f
     const val FRAME_WAKE_MARGIN_MS = 12L
     const val MIN_IDLE_FRAME_DELAY_MS = 16L
     const val MAX_IDLE_FRAME_DELAY_MS = 250L

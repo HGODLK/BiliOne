@@ -1342,7 +1342,7 @@ internal class CommentImagePreviewSession(
   }
 }
 
-private fun Modifier.floatingPlayerLayout(
+internal fun Modifier.floatingPlayerLayout(
   progress: Float,
   sourceBounds: Rect,
   targetInsetPx: Int,

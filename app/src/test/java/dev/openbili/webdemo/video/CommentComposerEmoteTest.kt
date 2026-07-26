@@ -107,6 +107,18 @@ class CommentComposerEmoteTest {
   }
 
   @Test
+  fun tokenBackedEditorsPreserveCursorAcrossEncodeAndDecode() {
+    val snapshot = CommentEmoteMarkerRegistry().snapshot(listOf(doge, smile))
+    val source = "前[doge]中[微笑]后"
+    val encoded = snapshot.encode(source)
+
+    assertEquals("前${snapshot.markerFor(doge)}中${snapshot.markerFor(smile)}后", encoded)
+    assertEquals(2, snapshot.encodedOffset(source, "前[doge]".length))
+    assertEquals("前[doge]".length, snapshot.decodedOffset(encoded, 2))
+    assertEquals(source, snapshot.decode(encoded))
+  }
+
+  @Test
   fun emoteIsInsertedAtCurrentSelectionAsOneCharacter() {
     val snapshot = CommentEmoteMarkerRegistry().snapshot(listOf(doge))
     val marker = requireNotNull(snapshot.markerFor(doge))

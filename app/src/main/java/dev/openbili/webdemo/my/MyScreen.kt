@@ -150,9 +150,12 @@ import dev.openbili.webdemo.article.ArticleCard
 import dev.openbili.webdemo.feed.CoverImage
 import dev.openbili.webdemo.feed.FeedImageLoadMode
 import dev.openbili.webdemo.feed.FeedItem
+import dev.openbili.webdemo.feed.FeedCardContent
+import dev.openbili.webdemo.feed.FeedCardMetadataMode
 import dev.openbili.webdemo.feed.LoadedFeedImageRegistry
 import dev.openbili.webdemo.feed.LocalFeedImageLoadPolicy
 import dev.openbili.webdemo.feed.rememberGridFeedImageLoadPolicy
+import dev.openbili.webdemo.live.LiveSearchRoom
 import dev.openbili.webdemo.settings.AdvancedAudioPriority
 import dev.openbili.webdemo.settings.AppSettings
 import dev.openbili.webdemo.settings.DeviceMediaCapabilities
@@ -200,6 +203,7 @@ fun MyScreen(
   onVideoLongClick: (FeedItem) -> Unit,
   onArticle: (ArticleItem, Rect) -> Unit,
   onArticleBounds: (ArticleItem, Rect) -> Unit,
+  onLive: (LiveSearchRoom, Rect) -> Unit,
   onHistoryFilter: (HistoryFilter) -> Unit,
   onLoadMoreHistory: () -> Unit,
   onFavoriteQuery: (String) -> Unit,
@@ -363,6 +367,7 @@ fun MyScreen(
                     onVideoLongClick = onVideoLongClick,
                     onArticle = onArticle,
                     onArticleBounds = onArticleBounds,
+                    onLive = onLive,
                     onFilter = onHistoryFilter,
                     onLoadMore = onLoadMoreHistory,
                     hiddenCoverItemId = hiddenCoverItemId,
@@ -956,6 +961,7 @@ private fun HistoryPanel(
   onVideoLongClick: (FeedItem) -> Unit,
   onArticle: (ArticleItem, Rect) -> Unit,
   onArticleBounds: (ArticleItem, Rect) -> Unit,
+  onLive: (LiveSearchRoom, Rect) -> Unit,
   onFilter: (HistoryFilter) -> Unit,
   onLoadMore: () -> Unit,
   hiddenCoverItemId: String?,
@@ -986,6 +992,10 @@ private fun HistoryPanel(
               item.item.title.contains(keyword, ignoreCase = true) ||
                 item.item.authorName.contains(keyword, ignoreCase = true) ||
                 item.item.summary.contains(keyword, ignoreCase = true)
+            is HistoryCardItem.Live ->
+              item.room.title.contains(keyword, ignoreCase = true) ||
+                item.room.uname.contains(keyword, ignoreCase = true) ||
+                item.room.areaName.orEmpty().contains(keyword, ignoreCase = true)
           }
         }
     }
@@ -1098,6 +1108,7 @@ private fun HistoryPanel(
                   when {
                     query.isNotBlank() -> "没有找到相关历史"
                     state.historyFilter == HistoryFilter.ARTICLE -> "暂无专栏历史"
+                    state.historyFilter == HistoryFilter.LIVE -> "暂无直播历史"
                     else -> "暂无历史记录"
                   },
                   color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1164,6 +1175,46 @@ private fun HistoryPanel(
                         loadKey = history.stableId,
                         historyLabel = formatHistoryWatchTime(history.viewAt),
                       )
+                    is HistoryCardItem.Live -> {
+                      var coverBounds by
+                        remember(history.room.roomId) { mutableStateOf(Rect.Zero) }
+                      val room = history.room
+                      val card =
+                        FeedItem(
+                          id = room.stableId,
+                          title = room.title,
+                          videoUrl = "https://live.bilibili.com/${room.roomId}",
+                          coverUrl = room.keyframeUrl ?: room.coverUrl.orEmpty(),
+                          uploader = room.uname,
+                          playCount = null,
+                          duration = null,
+                          uploaderFace = room.faceUrl,
+                          uploaderMid = room.uid,
+                          description =
+                            listOfNotNull(room.parentAreaName, room.areaName)
+                              .distinct()
+                              .joinToString(" · "),
+                        )
+                      PressableVideoCard(
+                        onClick = { onLive(room, coverBounds) },
+                        onLongClick = {},
+                      ) {
+                        FeedCardContent(
+                          item = card,
+                          metadataMode = FeedCardMetadataMode.LIVE,
+                          profileClickEnabled = false,
+                          onProfileBoundsClick = { _, _ -> },
+                          coverVisible = room.stableId != hiddenCoverItemId,
+                          onCoverBoundsChanged = { coverBounds = it },
+                          liveStatusText = if (room.liveStatus == 1) "直播中" else "未开播",
+                          liveSecondaryText =
+                            listOfNotNull(room.parentAreaName, room.areaName)
+                              .distinct()
+                              .joinToString(" · "),
+                          liveTrailingText = formatHistoryWatchTime(history.viewAt),
+                        )
+                      }
+                    }
                   }
                 }
               }

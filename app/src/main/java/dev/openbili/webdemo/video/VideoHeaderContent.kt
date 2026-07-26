@@ -110,189 +110,65 @@ internal fun VideoHeader(
   onShowInfo: () -> Unit,
   panelSlideProgress: () -> Float,
 ) {
-  var uploaderBounds by remember(item.id) { mutableStateOf(Rect.Zero) }
-  Surface(
-    modifier =
-      Modifier.fillMaxWidth().height(94.dp).graphicsLayer {
-        val progress = panelSlideProgress().coerceIn(0f, 1f)
-        alpha = progress
-      },
-    color = MaterialTheme.colorScheme.background,
-    tonalElevation = 2.dp,
-  ) {
-    Row(
-      modifier = Modifier.fillMaxSize().padding(end = 18.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      IconButton(onClick = onBack, modifier = Modifier.testTag("video_back_button")) {
-        Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back))
-      }
-      IconButton(onClick = onHome) {
-        Icon(Icons.Default.Home, contentDescription = "返回首页")
-      }
-      Column(
-        modifier =
-          Modifier.weight(1f)
-            .clip(RoundedCornerShape(18.dp))
-            .clickable(onClick = onShowInfo)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(5.dp),
-      ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-          Text(
-            text = info?.title ?: item.title,
-            modifier = Modifier.weight(1f),
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-          val collection = info?.collection
-          val collectionIndex = collection?.episodes?.indexOfFirst { it.bvid == info.bvid } ?: -1
-          val pageIndex = info?.pages?.indexOfFirst { it.cid == currentCid } ?: -1
-          val selectionTitle =
-            when {
-              collection != null -> "合集 ${collection.title}"
-              (info?.pages?.size ?: 0) > 1 -> "视频选集"
-              else -> null
-            }
-          val selectionProgress =
-            when {
-              collection != null ->
-                "(${collectionIndex.coerceAtLeast(0) + 1}/${collection.episodes.size})"
-              (info?.pages?.size ?: 0) > 1 ->
-                "(${pageIndex.coerceAtLeast(0) + 1}/${info?.pages?.size ?: 0})"
-              else -> ""
-            }
-          if (selectionTitle != null) {
-            Surface(
-              modifier =
-                Modifier.padding(start = 10.dp)
-                  .widthIn(min = 138.dp, max = 210.dp)
-                  .clickable(onClick = onOpenSelection),
-              shape = RoundedCornerShape(13.dp),
-              color = MaterialTheme.colorScheme.primaryContainer,
-              contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-            ) {
-              Column(
-                Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-              ) {
-                Text(
-                  selectionTitle,
-                  style = MaterialTheme.typography.labelMedium,
-                  fontWeight = FontWeight.Bold,
-                  maxLines = 1,
-                  overflow = TextOverflow.Ellipsis,
-                )
-                Text(selectionProgress, style = MaterialTheme.typography.labelSmall)
-              }
-            }
-          }
-          Icon(
-            Icons.Default.Info,
-            contentDescription = "查看完整视频信息",
-            modifier = Modifier.padding(start = 10.dp).size(18.dp),
-            tint = MaterialTheme.colorScheme.primary,
-          )
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-          val face = info?.uploaderFace?.takeIf(String::isNotBlank) ?: item.uploaderFace
-          if (!face.isNullOrBlank()) {
-            AsyncImage(
-              model = face,
-              contentDescription = null,
-              modifier =
-                Modifier.size(22.dp)
-                  .onGloballyPositioned { uploaderBounds = it.boundsInRoot() }
-                  .clip(CircleShape)
-                  .clickable {
-                    val mid = info?.uploaderMid ?: item.uploaderMid
-                    if (mid > 0) {
-                      onUploaderProfileClick(
-                        mid,
-                        face,
-                        info?.uploaderName ?: item.uploader,
-                        uploaderBounds,
-                      )
-                    }
-                  },
-              contentScale = ContentScale.Crop,
-            )
-            Spacer(Modifier.width(6.dp))
-          }
-          val uploaderName = info?.uploaderName ?: item.uploader.orEmpty()
-          Text(
-            text = uploaderName,
-            modifier =
-              Modifier.onGloballyPositioned {
-                  if (face.isNullOrBlank()) uploaderBounds = it.boundsInRoot()
-                }
-                .clickable(enabled = (info?.uploaderMid ?: item.uploaderMid) > 0) {
-                  onUploaderProfileClick(
-                    info?.uploaderMid ?: item.uploaderMid,
-                    face,
-                    info?.uploaderName ?: item.uploader,
-                    uploaderBounds,
-                  )
-                },
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.primary,
-            maxLines = 1,
-          )
-          if (showFollowButton) {
-            FollowButton(
-              followed = followed,
-              busy = followBusy,
-              groups = followingGroups,
-              groupsLoading = followingGroupsLoading,
-              loggedIn = loggedIn,
-              onLoadGroups = onLoadFollowingGroups,
-              onSelectGroup = onSelectFollowingGroup,
-              onUnfollow = onUnfollow,
-              onLogin = onLogin,
-              // Reserve the button's compact intrinsic width. This keeps the
-              // action readable when the title row also contains collection/page data.
-              modifier = Modifier.padding(start = 7.dp).widthIn(min = 72.dp),
-              compact = true,
-            )
-          }
-          Text(
-            text = "  ·  ",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-          BiliRichText(
-            text = description.ifBlank { "暂无简介" },
-            emotes = emptyMap(),
-            modifier = Modifier.weight(1f),
-            style =
-              MaterialTheme.typography.labelMedium.copy(
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-              ),
-            maxLines = 1,
-          )
-          val metadata =
-            buildList {
-                add("${formatCompactCount(info?.playCount ?: 0)} 播放")
-                add("${formatCompactCount(info?.danmakuCount ?: item.danmakuCount)} 弹幕")
-                onlineViewerText?.takeIf(String::isNotBlank)?.let { add("$it 人在看") }
-                formatPublishDate(info?.publishedAt ?: 0)?.let(::add)
-                (info?.bvid ?: item.id).takeIf { it.startsWith("BV") }?.let(::add)
-              }
-              .joinToString("  ·  ")
-          Text(
-            text = metadata,
-            modifier = Modifier.padding(start = 16.dp),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-          )
-        }
-      }
-      DeviceStatusCluster()
+  val collection = info?.collection
+  val collectionIndex = collection?.episodes?.indexOfFirst { it.bvid == info.bvid } ?: -1
+  val pageIndex = info?.pages?.indexOfFirst { it.cid == currentCid } ?: -1
+  val selectionTitle =
+    when {
+      collection != null -> "合集 ${collection.title}"
+      (info?.pages?.size ?: 0) > 1 -> "视频选集"
+      else -> null
     }
-  }
+  val selectionProgress =
+    when {
+      collection != null ->
+        "(${collectionIndex.coerceAtLeast(0) + 1}/${collection.episodes.size})"
+      (info?.pages?.size ?: 0) > 1 ->
+        "(${pageIndex.coerceAtLeast(0) + 1}/${info?.pages?.size ?: 0})"
+      else -> ""
+    }
+  val face = info?.uploaderFace?.takeIf(String::isNotBlank) ?: item.uploaderFace
+  val ownerName = info?.uploaderName ?: item.uploader.orEmpty()
+  val ownerMid = info?.uploaderMid ?: item.uploaderMid
+  val metadata =
+    buildList {
+        add("${formatCompactCount(info?.playCount ?: 0)} 播放")
+        add("${formatCompactCount(info?.danmakuCount ?: item.danmakuCount)} 弹幕")
+        onlineViewerText?.takeIf(String::isNotBlank)?.let { add("$it 人在看") }
+        formatPublishDate(info?.publishedAt ?: 0)?.let(::add)
+        (info?.bvid ?: item.id).takeIf { it.startsWith("BV") }?.let(::add)
+      }
+      .joinToString("  ·  ")
+  PlaybackHeader(
+    model =
+      PlaybackHeaderUiModel(
+        stableId = item.id,
+        title = info?.title ?: item.title,
+        ownerMid = ownerMid,
+        ownerName = ownerName,
+        ownerFace = face,
+        description = description,
+        metadata = metadata,
+        selectionTitle = selectionTitle,
+        selectionProgress = selectionProgress,
+      ),
+    onBack = onBack,
+    onHome = onHome,
+    onOwnerProfileClick = onUploaderProfileClick,
+    showFollowButton = showFollowButton,
+    followed = followed,
+    followBusy = followBusy,
+    followingGroups = followingGroups,
+    followingGroupsLoading = followingGroupsLoading,
+    loggedIn = loggedIn,
+    onLoadFollowingGroups = onLoadFollowingGroups,
+    onSelectFollowingGroup = onSelectFollowingGroup,
+    onUnfollow = onUnfollow,
+    onLogin = onLogin,
+    onShowInfo = onShowInfo,
+    onOpenSelection = onOpenSelection.takeIf { selectionTitle != null },
+    panelSlideProgress = panelSlideProgress,
+  )
 }
 
 @Composable
