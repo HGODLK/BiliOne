@@ -1,5 +1,6 @@
 package dev.openbili.webdemo.ui
 
+import dev.openbili.webdemo.feed.feedReturnScrollAnchorAfterBringIntoView
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -44,5 +45,17 @@ class NavigationBringIntoViewTest {
         bottomClearancePx = 112,
       )
     )
+  }
+
+  @Test
+  fun returnAnchorUsesThePositionMeasuredAfterBringIntoView() {
+    val anchor =
+      feedReturnScrollAnchorAfterBringIntoView(
+        firstVisibleItemIndex = 18,
+        firstVisibleItemScrollOffset = 72,
+      )
+
+    assertEquals(18, anchor.firstVisibleItemIndex)
+    assertEquals(72, anchor.firstVisibleItemScrollOffset)
   }
 }

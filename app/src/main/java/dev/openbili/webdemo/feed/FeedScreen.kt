@@ -283,11 +283,20 @@ fun FeedScreen(
   }
 }
 
-/** Exact feed position before a partially visible card is brought on-screen for navigation. */
+/** Exact safe-viewport position retained after a navigation target has been brought fully on-screen. */
 data class FeedScrollAnchor(
   val firstVisibleItemIndex: Int,
   val firstVisibleItemScrollOffset: Int,
 )
+
+internal fun feedReturnScrollAnchorAfterBringIntoView(
+  firstVisibleItemIndex: Int,
+  firstVisibleItemScrollOffset: Int,
+): FeedScrollAnchor =
+  FeedScrollAnchor(
+    firstVisibleItemIndex = firstVisibleItemIndex,
+    firstVisibleItemScrollOffset = firstVisibleItemScrollOffset,
+  )
 
 // ── FeedGrid ─────────────────────────────────────────────────────────────────
 
@@ -775,14 +784,14 @@ private fun FeedCard(
           onClick = {
             scope.launch {
               settleFeedForNavigation(gridState, flingTracker)
-              val scrollAnchor =
-                FeedScrollAnchor(
-                  firstVisibleItemIndex = gridState.firstVisibleItemIndex,
-                  firstVisibleItemScrollOffset = gridState.firstVisibleItemScrollOffset,
-                )
               bringFeedItemIntoSafeViewport(gridState, item.id, bottomClearancePx)
               withFrameNanos {}
               withFrameNanos {}
+              val scrollAnchor =
+                feedReturnScrollAnchorAfterBringIntoView(
+                  firstVisibleItemIndex = gridState.firstVisibleItemIndex,
+                  firstVisibleItemScrollOffset = gridState.firstVisibleItemScrollOffset,
+                )
               onClick(navigationBounds.cover, scrollAnchor)
             }
           },

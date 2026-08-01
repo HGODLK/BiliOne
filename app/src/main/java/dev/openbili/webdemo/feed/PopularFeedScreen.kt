@@ -577,14 +577,14 @@ private fun PopularVideoCard(
           onClick = {
             scope.launch {
               settleFeedForNavigation(gridState, flingTracker)
-              val anchor =
-                FeedScrollAnchor(
-                  firstVisibleItemIndex = gridState.firstVisibleItemIndex,
-                  firstVisibleItemScrollOffset = gridState.firstVisibleItemScrollOffset,
-                )
               bringIntoViewRequester.bringIntoView()
               withFrameNanos {}
               withFrameNanos {}
+              val anchor =
+                feedReturnScrollAnchorAfterBringIntoView(
+                  firstVisibleItemIndex = gridState.firstVisibleItemIndex,
+                  firstVisibleItemScrollOffset = gridState.firstVisibleItemScrollOffset,
+                )
               onClick(coverBounds, anchor)
             }
           },

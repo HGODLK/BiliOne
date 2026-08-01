@@ -4072,40 +4072,6 @@ fun AppRoot(
             withFrameNanos {}
           }
         }
-        val latestBounds = resolveReturnBounds(bounds) ?: bounds
-        val safeTop = with(rootDensity) { 86.dp.toPx() }
-        if (
-          frame.parentPage == PageOrigin.Home &&
-            frame.rootFeedScrollAnchor == null &&
-            latestBounds.top < safeTop
-        ) {
-          val items = (feedState as? dev.openbili.webdemo.feed.FeedUiState.Content)?.items
-          val index = items?.indexOfFirst { it.id == item.id } ?: -1
-          if (index >= 0) {
-            val rowStart = index - index % 3
-            val anchorRowStart = (rowStart - 3).coerceAtLeast(0)
-            feedGridState.scrollToItem(anchorRowStart)
-            delay(32)
-          }
-        }
-        if (
-          frame.parentPage == PageOrigin.Search &&
-            latestBounds.top < with(rootDensity) { 176.dp.toPx() }
-        ) {
-          val portraitResults =
-            searchState.category == dev.openbili.webdemo.search.SearchCategory.BANGUMI ||
-              searchState.category == dev.openbili.webdemo.search.SearchCategory.CINEMA
-          val index =
-            if (portraitResults) searchState.bangumiResults.indexOfFirst { it.id == item.id }
-            else searchState.results.indexOfFirst { it.id == item.id }
-          if (index >= 0) {
-            val columns = if (portraitResults) 5 else 3
-            val rowStart = index - index % columns
-            searchGridState.scrollToItem((rowStart - columns).coerceAtLeast(0))
-            withFrameNanos {}
-            withFrameNanos {}
-          }
-        }
         bounds = resolveReturnBounds(bounds)
       }
       transitionPhase = TransitionPhase.ToFeed(item, bounds)
