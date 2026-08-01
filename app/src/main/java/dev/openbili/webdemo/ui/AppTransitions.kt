@@ -227,6 +227,7 @@ internal fun ExpandingPageTransitionOverlay(
 
 internal enum class VideoOrigin {
   HOME,
+  POPULAR,
   MY,
   SEARCH,
   BANGUMI,

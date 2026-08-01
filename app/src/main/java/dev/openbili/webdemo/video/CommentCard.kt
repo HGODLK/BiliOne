@@ -72,6 +72,7 @@ import dev.openbili.webdemo.feed.FeedItem
 import dev.openbili.webdemo.feed.LocalFeedImageLoadPolicy
 import dev.openbili.webdemo.feed.LoadedFeedImageRegistry
 import dev.openbili.webdemo.article.ArticleCard
+import dev.openbili.webdemo.ui.NavigationCardBottomClearance
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -183,6 +184,14 @@ data class CommentProfileAnchor(
   val currentAvatarBounds: () -> Rect,
 )
 
+internal fun commentUpActionLabel(upLiked: Boolean, upReplied: Boolean): String? =
+  when {
+    upLiked && upReplied -> "UP主觉得很赞并回复了此条评论"
+    upReplied -> "UP主回复了此条评论"
+    upLiked -> "UP主觉得很赞"
+    else -> null
+  }
+
 @Composable
 internal fun CommentRow(
   comment: CommentItem,
@@ -230,7 +239,8 @@ internal fun CommentRow(
   // setting follows the same palette as system dark mode.
   val darkTheme = MaterialTheme.colorScheme.surface.luminance() < 0.5f
   val paletteScope = rememberCoroutineScope()
-  val fallbackBottomClearancePx = with(LocalDensity.current) { 96.dp.toPx() }
+  val fallbackBottomClearancePx =
+    with(LocalDensity.current) { NavigationCardBottomClearance.toPx() }
   val bringIntoViewMarginPx = with(LocalDensity.current) { 16.dp.toPx() }
   suspend fun revealCommentForNavigation() {
     val clearance = maxOf(bottomClearancePx, fallbackBottomClearancePx)
@@ -690,18 +700,39 @@ internal fun CommentRow(
                       else MaterialTheme.typography.labelSmall,
                   )
                 }
-                if (comment.replyCount > 0) {
+                val upActionLabel =
+                  commentUpActionLabel(
+                    upLiked = comment.upLiked,
+                    upReplied = comment.upReplied,
+                  )
+                if (comment.replyCount > 0 || upActionLabel != null) {
+                  val replySummary = buildString {
+                    if (comment.replyCount > 0) append("${comment.replyCount} 条回复")
+                    if (upActionLabel != null) {
+                      if (isNotEmpty()) append("（$upActionLabel）") else append(upActionLabel)
+                    }
+                  }
                   Text(
-                    "${comment.replyCount} 条回复",
+                    replySummary,
                     modifier =
                       Modifier.padding(start = 12.dp)
                         .clip(RoundedCornerShape(10.dp))
-                        .clickable { onReplies(comment, measuredBounds.card.rect()) }
+                        .then(
+                          if (comment.replyCount > 0) {
+                            Modifier.clickable {
+                              onReplies(comment, measuredBounds.card.rect())
+                            }
+                          } else {
+                            Modifier
+                          }
+                        )
                         .padding(horizontal = 6.dp, vertical = 4.dp),
                     style =
                       if (largeText) MaterialTheme.typography.bodySmall
                       else MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                   )
                 }
               }

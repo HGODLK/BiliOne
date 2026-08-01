@@ -20,6 +20,7 @@ import dev.openbili.webdemo.api.VideoInfo
 import dev.openbili.webdemo.feed.FeedItem
 import dev.openbili.webdemo.feed.FeedScrollAnchor
 import dev.openbili.webdemo.feed.FeedViewModel
+import dev.openbili.webdemo.live.LiveSearchRoom
 
 internal enum class SearchTransitionDirection {
   ENTER,
@@ -75,7 +76,18 @@ internal const val MAX_VIDEO_ENTRY_CACHE = 8
 internal const val MAX_VIDEO_STACK_DEPTH = 8
 internal const val MAX_PROFILE_STACK_DEPTH = 8
 internal const val MAX_ARTICLE_STACK_DEPTH = 8
+internal const val MAX_LIVE_ROOM_STACK_DEPTH = 8
 internal const val FIRST_FRAME_REVEAL_TIMEOUT_MS = 4_500L
+
+internal data class LiveRoomParentFrame(
+  val entryId: Long,
+  val room: LiveSearchRoom,
+  val childRoomId: Long,
+  val childCoverBounds: Rect,
+)
+
+internal fun liveRecommendationBoundsKey(parentRoomId: Long, childRoomId: Long): String =
+  "$parentRoomId:$childRoomId"
 
 internal data class StackFrame(
   val entryId: String,
@@ -139,6 +151,14 @@ internal data class ProfilePageEntry(
   val selectedDynamicId: String?,
   val commentReturnTransition: CommentProfileTransition?,
   val avatarReturnTransition: AvatarProfileTransition?,
+  val collections: List<dev.openbili.webdemo.api.SpaceContentCard> = emptyList(),
+  val collectionsError: String? = null,
+  val selectedCollectionId: String? = null,
+  val collectionVideos: List<FeedItem> = emptyList(),
+  val collectionPage: Int = 0,
+  val collectionHasMore: Boolean = false,
+  val collectionError: String? = null,
+  val collectionTotal: Int = 0,
 )
 
 internal data class CommentProfileTransition(
@@ -176,6 +196,17 @@ internal data class CommentProfileTransition(
 
 internal fun resolvedCommentProfileBounds(fallback: Rect, current: Rect): Rect =
   current.takeIf { it.width > 0f && it.height > 0f } ?: fallback
+
+/**
+ * Locks global pointer input only while a profile transition is actively running.
+ *
+ * Return-transition sessions are intentionally not inputs here: they remain retained for the
+ * entire lifetime of the destination profile so the eventual back animation can reuse them.
+ */
+internal fun profileTransitionInputLocked(
+  activeCommentTransitionBlocksInput: Boolean,
+  activeAvatarTransition: Boolean,
+): Boolean = activeCommentTransitionBlocksInput || activeAvatarTransition
 
 internal data class AvatarProfileTransition(
   val token: Long,

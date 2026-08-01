@@ -218,6 +218,7 @@ internal fun CommentComposer(
         modifier = Modifier.fillMaxSize(),
         shape = RoundedCornerShape(22.dp),
         color = MaterialTheme.colorScheme.surface.copy(alpha = .92f),
+        contentColor = MaterialTheme.colorScheme.onSurface,
         tonalElevation = 2.dp,
         shadowElevation = 7.dp,
         border =
@@ -260,6 +261,7 @@ internal fun CommentComposer(
       modifier = Modifier.fillMaxWidth(),
       shape = RoundedCornerShape(30.dp),
       color = MaterialTheme.colorScheme.surface.copy(alpha = .92f),
+      contentColor = MaterialTheme.colorScheme.onSurface,
       shadowElevation = 3.dp,
       border =
         androidx.compose.foundation.BorderStroke(
@@ -372,6 +374,7 @@ internal fun CommentComposer(
           Surface(
             shape = CircleShape,
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .92f),
+            contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
           ) {
             IconButton(
               onClick = {
@@ -651,6 +654,7 @@ internal fun CommentToolPanel(
     modifier = modifier,
     shape = RoundedCornerShape(22.dp),
     color = MaterialTheme.colorScheme.surface.copy(alpha = .92f),
+    contentColor = MaterialTheme.colorScheme.onSurface,
     border =
       androidx.compose.foundation.BorderStroke(.75.dp, MaterialTheme.colorScheme.outlineVariant),
   ) {

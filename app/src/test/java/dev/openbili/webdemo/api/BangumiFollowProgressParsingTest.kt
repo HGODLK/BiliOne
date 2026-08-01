@@ -40,6 +40,66 @@ class BangumiFollowProgressParsingTest {
   }
 
   @Test
+  fun `guochuang history is sorted by the latest view time`() {
+    val older =
+      SpaceContentCard(
+        id = "history:pgc:ep1",
+        title = "较早观看",
+        seasonId = 1L,
+        episodeId = 11L,
+        seasonType = 4,
+        kind = SpaceContentKind.BANGUMI,
+        lastViewedAt = 100L,
+      )
+    val newer =
+      SpaceContentCard(
+        id = "history:pgc:ep2",
+        title = "最近观看",
+        seasonId = 2L,
+        episodeId = 22L,
+        seasonType = 4,
+        kind = SpaceContentKind.BANGUMI,
+        lastViewedAt = 200L,
+      )
+
+    val merged =
+      BiliApi.mergeBangumiWatchingCards(
+        followed = emptyList(),
+        history = listOf(older, newer),
+        seasonType = 4,
+      )
+
+    assertEquals(listOf(2L, 1L), merged.map(SpaceContentCard::seasonId))
+  }
+
+  @Test
+  fun `follow only card keeps server watch progress for episode cover resolution`() {
+    val progress = BangumiWatchProgress(episodeId = 22L, episodeIndex = "2", positionMs = 30_000L)
+    val followed =
+      SpaceContentCard(
+        id = "bangumi:2",
+        title = "有服务端进度",
+        coverUrl = "https://example.com/season.jpg",
+        seasonId = 2L,
+        episodeId = 99L,
+        watchProgress = progress,
+        seasonType = 1,
+        kind = SpaceContentKind.BANGUMI,
+      )
+
+    val merged =
+      BiliApi.mergeBangumiWatchingCards(
+        followed = listOf(followed),
+        history = emptyList(),
+        seasonType = 1,
+      ).single()
+
+    assertEquals(22L, merged.episodeId)
+    assertEquals(progress, merged.watchProgress)
+    assertEquals("https://www.bilibili.com/bangumi/play/ep22", merged.videoUrl)
+  }
+
+  @Test
   fun `web player history uses milliseconds and title field`() {
     val row = JSONObject("""
       {

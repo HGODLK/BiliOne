@@ -1,9 +1,13 @@
 package dev.openbili.webdemo.live
 
 import android.app.Application
+import android.net.Uri
 import android.os.SystemClock
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.media3.common.PlaybackException
+import androidx.media3.datasource.HttpDataSource
 import dev.openbili.webdemo.api.BiliApi
 import dev.openbili.webdemo.api.UserInfo
 import java.util.LinkedHashMap
@@ -28,18 +32,33 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
 
   private data class QueuedMessage(val generation: Long, val message: LiveChatMessage)
 
+  private data class QueuedDanmaku(
+    val generation: Long,
+    val message: LiveChatMessage,
+    val enterAtElapsedMs: Long,
+  )
+
   private val messageQueue =
     Channel<QueuedMessage>(capacity = 64, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+  private val liveDanmakuQueue =
+    Channel<QueuedDanmaku>(
+      capacity = LIVE_DANMAKU_QUEUE_CAPACITY,
+      onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
   private var roomJob: Job? = null
   private var playbackJob: Job? = null
+  private var playbackRetryJob: Job? = null
   private var audienceJob: Job? = null
   private var guardJob: Job? = null
+  private var recommendationsJob: Job? = null
   private var avatarJob: Job? = null
   private var lotteryJob: Job? = null
   private var danmakuClient: LiveDanmakuClient? = null
   private var danmuConfig: LiveDanmuConfig? = null
   private var generation = 0L
   private var foreground = true
+  private var lastPlayUrlReloadAtMs = 0L
+  private val playbackRecovery = LivePlaybackRecovery()
   private var account = UserInfo(0L, "", "", false)
   private val pendingAvatarUids = linkedSetOf<Long>()
   private val avatarRetryAfter = mutableMapOf<Long, Long>()
@@ -69,6 +88,18 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
         if (batch.size >= 3) delay(90L)
       }
     }
+    viewModelScope.launch {
+      while (true) {
+        val first = liveDanmakuQueue.receive()
+        val batch = mutableListOf(first)
+        withTimeoutOrNull(LIVE_DANMAKU_BATCH_WINDOW_MS) {
+          while (batch.size < MAX_LIVE_DANMAKU_BATCH_SIZE) {
+            batch += liveDanmakuQueue.receive()
+          }
+        }
+        mergeLiveDanmaku(batch)
+      }
+    }
   }
 
   fun updateAccount(value: UserInfo) {
@@ -82,13 +113,17 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
     }
   }
 
-  fun open(entry: LiveSearchRoom) {
+  fun open(entry: LiveSearchRoom, navigationEntryId: Long = 0L) {
     foreground = true
     val nextGeneration = ++generation
     roomJob?.cancel()
     playbackJob?.cancel()
+    playbackRetryJob?.cancel()
+    playbackRecovery.reset()
+    lastPlayUrlReloadAtMs = 0L
     audienceJob?.cancel()
     guardJob?.cancel()
+    recommendationsJob?.cancel()
     avatarJob?.cancel()
     lotteryJob?.cancel()
     pendingAvatarUids.clear()
@@ -98,6 +133,7 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
     _state.value =
       LiveRoomUiState(
         entryRoomId = entry.roomId,
+        navigationEntryId = navigationEntryId,
         generation = nextGeneration,
         loading = true,
         watchedText = entry.watchedText,
@@ -118,6 +154,7 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
           ),
         anchorInfo = LiveAnchorInfo(entry.uid, entry.uname, entry.faceUrl),
       )
+    loadRecommendations(nextGeneration, entry.roomId)
     LiveHistoryStore.record(getApplication(), entry)
     roomJob = viewModelScope.launch {
       try {
@@ -158,6 +195,9 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
 
   fun close() {
     foreground = false
+    playbackJob?.cancel()
+    playbackRetryJob?.cancel()
+    playbackRecovery.reset()
     danmakuClient?.stop()
     danmakuClient = null
     _state.update { it.copy(connection = LiveConnectionState.DISCONNECTED) }
@@ -197,11 +237,18 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
         parentAreaName = room?.parentAreaName,
         watchedText = current.watchedText,
         liveStatus = room?.liveStatus ?: 0,
-      )
+      ),
+      navigationEntryId = current.navigationEntryId,
     )
   }
 
   fun loadPlayback(qn: Int) {
+    playbackRetryJob?.cancel()
+    playbackRecovery.reset()
+    requestPlayback(qn, reason = "explicit")
+  }
+
+  private fun requestPlayback(qn: Int, reason: String) {
     val roomId = _state.value.roomInfo?.roomId ?: return
     val safeQn = qn.takeIf { it > 0 }?.coerceAtMost(LIVE_ORIGINAL_QN) ?: LIVE_ORIGINAL_QN
     val requestGeneration = _state.value.generation
@@ -224,6 +271,11 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
       } catch (error: Exception) {
         if (error is CancellationException) throw error
         if (!isCurrent(requestGeneration)) return@launch
+        Log.e(
+          TAG,
+          "play URL request failed room=$roomId qn=$safeQn reason=$reason " +
+            "cause=${error.javaClass.simpleName}",
+        )
         _state.update {
           it.copy(
             playbackLoading = false,
@@ -234,19 +286,95 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
     }
   }
 
-  fun advancePlaybackSource() {
+  fun onPlaybackError(sourceIndex: Int, error: PlaybackException) {
     val current = _state.value
     val sources = current.playback?.sources.orEmpty()
-    if (sources.isEmpty()) {
-      loadPlayback(current.playback?.currentQn ?: 10_000)
+    if (sourceIndex != current.activeSourceIndex) {
+      Log.d(
+        TAG,
+        "ignored stale playback failure room=${current.roomInfo?.roomId} " +
+          "source=$sourceIndex active=${current.activeSourceIndex}",
+      )
       return
     }
-    val next = current.activeSourceIndex + 1
-    if (next in sources.indices) {
-      _state.update { it.copy(activeSourceIndex = next, playbackError = null) }
-    } else {
-      loadPlayback(current.playback?.currentQn ?: 10_000)
+    val source = sources.getOrNull(sourceIndex)
+    val httpCode = findHttpResponseCode(error)
+    val causeName = deepestCauseName(error)
+    Log.e(
+      TAG,
+      buildString {
+        append("playback failed room=${current.roomInfo?.roomId}")
+        append(" qn=${current.playback?.currentQn}")
+        append(" source=$sourceIndex/${sources.size}")
+        source?.let { append(" ${safeSourceDescription(it)}") }
+        append(" code=${error.errorCodeName}")
+        if (httpCode != null) append(" http=$httpCode")
+        append(" cause=$causeName")
+      },
+    )
+
+    when (
+      val action =
+        playbackRecovery.onFailure(
+          nowMs = SystemClock.elapsedRealtime(),
+          currentSourceIndex = sourceIndex,
+          sourceCount = sources.size,
+        )
+    ) {
+      is LivePlaybackRecoveryAction.SwitchSource -> {
+        playbackRetryJob?.cancel()
+        _state.update {
+          if (it.activeSourceIndex != sourceIndex) it
+          else
+            it.copy(
+              activeSourceIndex = action.index,
+              playbackLoading = true,
+              playbackError = null,
+            )
+        }
+      }
+      is LivePlaybackRecoveryAction.RefreshUrls -> {
+        playbackRetryJob?.cancel()
+        val requestGeneration = current.generation
+        val qn = current.playback?.currentQn ?: LIVE_ORIGINAL_QN
+        _state.update {
+          it.copy(playbackLoading = true, playbackError = null)
+        }
+        playbackRetryJob = viewModelScope.launch {
+          delay(action.delayMs)
+          if (!isCurrent(requestGeneration)) return@launch
+          requestPlayback(qn, reason = "recovery-${action.round}")
+        }
+      }
+      LivePlaybackRecoveryAction.Stop -> {
+        playbackRetryJob?.cancel()
+        _state.update {
+          it.copy(
+            playbackLoading = false,
+            playbackError = "直播流连续加载失败，请手动重试",
+          )
+        }
+      }
+      LivePlaybackRecoveryAction.Ignore ->
+        Log.d(TAG, "ignored duplicate playback failure source=$sourceIndex")
     }
+  }
+
+  fun onPlaybackReady(sourceIndex: Int) {
+    val current = _state.value
+    if (sourceIndex != current.activeSourceIndex) return
+    val source = current.playback?.sources?.getOrNull(sourceIndex)
+    playbackRetryJob?.cancel()
+    playbackRecovery.onReady()
+    _state.update {
+      if (it.activeSourceIndex != sourceIndex) it
+      else it.copy(playbackLoading = false, playbackError = null)
+    }
+    Log.i(
+      TAG,
+      "playback ready room=${current.roomInfo?.roomId} qn=${current.playback?.currentQn} " +
+        "source=$sourceIndex ${source?.let(::safeSourceDescription).orEmpty()}",
+    )
   }
 
   fun setComposerText(value: String, selectionStart: Int) {
@@ -362,9 +490,8 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
         val composer = it.composer
         val cursor = composer.selectionStart.coerceIn(0, composer.text.length)
         val available = (MAX_COMPOSER_LENGTH - composer.text.length).coerceAtLeast(0)
-        val token = emoji.sendToken.take(available)
-        val next =
-          composer.text.substring(0, cursor) + token + composer.text.substring(cursor)
+        val token = emoji.inputText.take(available)
+        val next = composer.text.substring(0, cursor) + token + composer.text.substring(cursor)
         it.copy(
           composer =
             composer.copy(
@@ -496,7 +623,32 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
 
   fun selectRankTab(tab: LiveRankTab) {
     _state.update { it.copy(rankTab = tab) }
-    if (tab == LiveRankTab.GUARD && _state.value.guardRank.items.isEmpty()) loadMoreGuards()
+    when (tab) {
+      LiveRankTab.AUDIENCE ->
+        if (_state.value.audienceRank.items.isEmpty()) loadAudienceRank(_state.value.generation)
+      LiveRankTab.GUARD -> if (_state.value.guardRank.items.isEmpty()) loadMoreGuards()
+    }
+  }
+
+  fun ensureRankLoaded() {
+    when (_state.value.rankTab) {
+      LiveRankTab.AUDIENCE ->
+        if (_state.value.audienceRank.items.isEmpty() && !_state.value.audienceRank.isLoading) {
+          loadAudienceRank(_state.value.generation)
+        }
+      LiveRankTab.GUARD ->
+        if (_state.value.guardRank.items.isEmpty() && !_state.value.guardRank.isLoading) {
+          loadMoreGuards()
+        }
+    }
+  }
+
+  fun retryRecommendations() {
+    val current = _state.value
+    val roomId = current.roomInfo?.roomId ?: current.entryRoomId
+    if (roomId > 0L && !current.recommendationsLoading) {
+      loadRecommendations(current.generation, roomId)
+    }
   }
 
   fun selectAudienceRank(type: String, switch: String) {
@@ -648,10 +800,43 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
     loadPlayback(10_000)
     loadDanmakuConfig(requestGeneration, room)
     loadEmojiPacks(requestGeneration, room)
-    loadAudienceRank(requestGeneration)
-    loadMoreGuards()
     loadAccountInteraction(requestGeneration)
     loadInteractiveLottery(requestGeneration)
+  }
+
+  private fun loadRecommendations(requestGeneration: Long, roomId: Long) {
+    recommendationsJob?.cancel()
+    _state.update {
+      it.copy(recommendationsLoading = true, recommendationsError = null)
+    }
+    recommendationsJob = viewModelScope.launch {
+      try {
+        val rooms =
+          withContext(Dispatchers.IO) {
+            BiliLiveApi.getHomeRecommendations(limit = 14)
+              .filterNot { it.roomId == roomId }
+              .distinctBy(LiveSearchRoom::roomId)
+              .take(12)
+          }
+        if (!isCurrent(requestGeneration)) return@launch
+        _state.update {
+          it.copy(
+            recommendations = rooms,
+            recommendationsLoading = false,
+            recommendationsError = null,
+          )
+        }
+      } catch (error: Exception) {
+        if (error is CancellationException) throw error
+        if (!isCurrent(requestGeneration)) return@launch
+        _state.update {
+          it.copy(
+            recommendationsLoading = false,
+            recommendationsError = error.message ?: "推荐直播加载失败",
+          )
+        }
+      }
+    }
   }
 
   private fun loadDanmakuConfig(requestGeneration: Long, room: LiveRoomInfo) {
@@ -710,7 +895,15 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
       }
       is LiveSocketEvent.Message ->
         event.value.let { message ->
-          enqueueLiveDanmaku(requestGeneration, message)
+          if (message.content !is LiveChatContent.System) {
+            liveDanmakuQueue.trySend(
+              QueuedDanmaku(
+                generation = requestGeneration,
+                message = message,
+                enterAtElapsedMs = SystemClock.elapsedRealtime() + LIVE_DANMAKU_ENTRY_DELAY_MS,
+              )
+            )
+          }
           messageQueue.trySend(QueuedMessage(requestGeneration, message))
         }
       is LiveSocketEvent.Online -> _state.update { it.copy(online = event.value) }
@@ -726,7 +919,18 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
         _state.update { state ->
           state.copy(roomInfo = state.roomInfo?.copy(liveStatus = if (event.living) 1 else 0))
         }
-      LiveSocketEvent.PlayUrlReload -> loadPlayback(_state.value.playback?.currentQn ?: 10_000)
+      LiveSocketEvent.PlayUrlReload -> {
+        val nowMs = SystemClock.elapsedRealtime()
+        if (
+          lastPlayUrlReloadAtMs == 0L ||
+            nowMs - lastPlayUrlReloadAtMs >= PLAY_URL_RELOAD_DEBOUNCE_MS
+        ) {
+          lastPlayUrlReloadAtMs = nowMs
+          loadPlayback(_state.value.playback?.currentQn ?: LIVE_ORIGINAL_QN)
+        } else {
+          Log.d(TAG, "ignored duplicate PLAYURL_RELOAD")
+        }
+      }
       is LiveSocketEvent.LotteryStarted -> {
         val roomId = _state.value.roomInfo?.roomId
         if (event.lottery.roomId <= 0L || event.lottery.roomId == roomId) {
@@ -960,20 +1164,31 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
     _state.update { it.copy(messages = (it.messages + message).takeLast(MAX_MESSAGES)) }
   }
 
-  private fun enqueueLiveDanmaku(requestGeneration: Long, message: LiveChatMessage) {
-    if (!isCurrent(requestGeneration) || message.content is LiveChatContent.System) return
-    val enterAtElapsedMs = SystemClock.elapsedRealtime() + LIVE_DANMAKU_ENTRY_DELAY_MS
+  private fun mergeLiveDanmaku(batch: List<QueuedDanmaku>) {
+    if (batch.isEmpty()) return
+    val requestGeneration = _state.value.generation
+    val queued = batch.filter {
+      it.generation == requestGeneration && it.message.content !is LiveChatContent.System
+    }
+    if (queued.isEmpty()) return
+    val cutoff = SystemClock.elapsedRealtime() - LIVE_DANMAKU_RETAIN_MS
     _state.update { current ->
       if (current.generation != requestGeneration) return@update current
-      if (current.liveDanmaku.any { it.stableId == message.stableId }) return@update current
-      val cutoff = enterAtElapsedMs - LIVE_DANMAKU_RETAIN_MS
+      val seenIds = current.liveDanmaku.asSequence().mapTo(HashSet(), LiveDanmakuEvent::stableId)
+      val additions = queued.mapNotNull { value ->
+        val message = value.message
+        if (!seenIds.add(message.stableId)) return@mapNotNull null
+        LiveDanmakuEvent(
+          stableId = message.stableId,
+          content = message.content,
+          enterAtElapsedMs = value.enterAtElapsedMs,
+        )
+      }
+      if (additions.isEmpty() && current.liveDanmaku.none { it.enterAtElapsedMs < cutoff }) {
+        return@update current
+      }
       val next =
-        (current.liveDanmaku +
-            LiveDanmakuEvent(
-              stableId = message.stableId,
-              content = message.content,
-              enterAtElapsedMs = enterAtElapsedMs,
-            ))
+        (current.liveDanmaku + additions)
           .asSequence()
           .filter { it.enterAtElapsedMs >= cutoff }
           .toList()
@@ -1091,11 +1306,11 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
         .flatMap { it.emojis.asSequence() }
         .filter { emoji ->
           !emoji.isBulge &&
-            emoji.sendToken.isNotBlank() &&
+            emoji.inputText.isNotBlank() &&
             emoji.imageUrl.isNotBlank() &&
-            text.contains(emoji.sendToken)
+            text.contains(emoji.inputText)
         }
-        .associate { it.sendToken to it.imageUrl }
+        .associate { it.inputText to it.imageUrl }
     return LiveChatContent.Text(text = text, emotes = emotes)
   }
 
@@ -1109,19 +1324,51 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
   private fun isCurrent(requestGeneration: Long): Boolean =
     requestGeneration == generation && requestGeneration == _state.value.generation
 
+  private fun safeSourceDescription(source: LiveStreamSource): String {
+    val host =
+      runCatching { Uri.parse(source.url).host }.getOrNull().orEmpty().ifBlank { "unknown" }
+    return "format=${source.format} codec=${source.codec} cdn=${source.cdnIndex} host=$host"
+  }
+
+  private fun findHttpResponseCode(error: Throwable): Int? {
+    var current: Throwable? = error
+    repeat(8) {
+      val value = current ?: return null
+      if (value is HttpDataSource.InvalidResponseCodeException) return value.responseCode
+      current = value.cause
+    }
+    return null
+  }
+
+  private fun deepestCauseName(error: Throwable): String {
+    var current = error
+    repeat(8) {
+      val cause = current.cause ?: return current.javaClass.simpleName
+      current = cause
+    }
+    return current.javaClass.simpleName
+  }
+
   override fun onCleared() {
     danmakuClient?.stop()
     danmakuClient = null
+    playbackJob?.cancel()
+    playbackRetryJob?.cancel()
     avatarJob?.cancel()
     lotteryJob?.cancel()
   }
 
   private companion object {
+    const val TAG = "LiveRoomPlayback"
+    const val PLAY_URL_RELOAD_DEBOUNCE_MS = 2_000L
     const val MAX_MESSAGES = 20
     const val MAX_COMPOSER_LENGTH = 200
     const val MAX_AVATAR_CACHE = 400
     const val AVATAR_BATCH_DELAY_MS = 80L
     const val AVATAR_FAILURE_BACKOFF_MS = 60_000L
+    const val LIVE_DANMAKU_QUEUE_CAPACITY = 128
+    const val LIVE_DANMAKU_BATCH_WINDOW_MS = 110L
+    const val MAX_LIVE_DANMAKU_BATCH_SIZE = 8
     const val MAX_LIVE_DANMAKU = 120
     const val LIVE_DANMAKU_ENTRY_DELAY_MS = 180L
     const val LIVE_DANMAKU_RETAIN_MS = 15_000L

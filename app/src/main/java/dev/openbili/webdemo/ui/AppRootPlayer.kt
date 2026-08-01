@@ -23,14 +23,16 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** Player interaction state that must survive recomposition while AppRoot moves between pages. */
-internal class AppRootPlayerSessionState {
+internal class AppRootPlayerSessionState(
+  initialShowDanmaku: Boolean = true,
+) {
   var currentPositionMs by mutableStateOf(0L)
   var scrubPreviewMs by mutableStateOf<Long?>(null)
   var pendingSeekTargetMs by mutableStateOf<Long?>(null)
   var seekWasPlaying by mutableStateOf(false)
   var isPlaying by mutableStateOf(false)
   var isBuffering by mutableStateOf(false)
-  var showDanmaku by mutableStateOf(true)
+  var showDanmaku by mutableStateOf(initialShowDanmaku)
   var playerReady by mutableStateOf(false)
   var playerControlsVisible by mutableStateOf(true)
   var playbackEnded by mutableStateOf(false)
@@ -223,7 +225,10 @@ internal fun AppRootPlayerEffects(
   DisposableEffect(Unit) { onDispose { playerViewModel.release() } }
 
   LaunchedEffect(playerState) {
-    if (playerState is PlayerState.Ready) playerViewModel.playInitialStream()
+    if (playerState is PlayerState.Ready) {
+      playerViewModel.playInitialStream()
+      sessionState.setPlaybackSpeed(playerViewModel, sessionState.playbackSpeed)
+    }
   }
 
   LaunchedEffect(playerState) {

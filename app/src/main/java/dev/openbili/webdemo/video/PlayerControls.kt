@@ -56,6 +56,7 @@ import dev.openbili.webdemo.api.DANMAKU_COLORFUL_NONE
 import dev.openbili.webdemo.api.DANMAKU_COLORFUL_VIP_GRADIENT
 import dev.openbili.webdemo.api.PlayUrlData
 import dev.openbili.webdemo.api.PremiumAudioMode
+import kotlin.math.roundToInt
 
 @Composable
 internal fun DanmakuComposer(
@@ -277,12 +278,14 @@ internal fun ModernPlayerControls(
   onComposeDanmaku: () -> Unit,
   danmakuDisplayArea: Float,
   danmakuDensity: Int,
+  danmakuBlockLevel: Int,
   danmakuOpacity: Float,
   danmakuFontScale: Float,
   danmakuSpeed: Float,
   playbackSpeed: Float,
   onDanmakuDisplayAreaChange: (Float) -> Unit,
   onDanmakuDensityChange: (Int) -> Unit,
+  onDanmakuBlockLevelChange: (Int) -> Unit,
   onDanmakuOpacityChange: (Float) -> Unit,
   onDanmakuFontScaleChange: (Float) -> Unit,
   onDanmakuSpeedChange: (Float) -> Unit,
@@ -483,6 +486,18 @@ internal fun ModernPlayerControls(
               Slider(
                 value = danmakuDensity.toFloat(),
                 onValueChange = { onDanmakuDensityChange(it.toInt().coerceIn(1, 5)) },
+                valueRange = 1f..5f,
+                steps = 3,
+              )
+              Text(
+                "屏蔽等级  ${danmakuBlockLevel.coerceIn(1, 5)}级",
+                style = MaterialTheme.typography.labelMedium,
+              )
+              Slider(
+                value = danmakuBlockLevel.toFloat(),
+                onValueChange = {
+                  onDanmakuBlockLevelChange(it.roundToInt().coerceIn(1, 5))
+                },
                 valueRange = 1f..5f,
                 steps = 3,
               )

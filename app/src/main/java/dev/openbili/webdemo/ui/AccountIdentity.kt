@@ -114,6 +114,7 @@ fun AccountIdentity(
       Text(
         text = if (user.isLogin) user.name else "登录账号",
         style = nameStyle ?: MaterialTheme.typography.titleMedium,
+        color = MaterialTheme.colorScheme.onSurface,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
       )

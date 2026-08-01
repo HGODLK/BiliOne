@@ -10,7 +10,8 @@ import kotlin.math.ceil
 import kotlin.math.hypot
 
 /**
- * Converts Bilibili's webmask resource into a compact timeline of normalized protected rectangles.
+ * Converts Bilibili's webmask resource into a compact timeline of normalized allowed-background
+ * contours.
  *
  * Parsing, gzip inflation, SVG path decoding, and rasterization are intended to run off the main
  * thread. The player only performs a binary time lookup and applies a cached Canvas clip path.
@@ -43,10 +44,8 @@ internal object DanmakuMaskParser {
 
     val frameTimes = mutableListOf<Int>()
     val frameContours = mutableListOf<FloatArray>()
-    val frameInverseFills = mutableListOf<Boolean>()
     val frameEvenOddFills = mutableListOf<Boolean>()
     var previousContours: FloatArray? = null
-    var previousInverseFill = false
     var previousEvenOddFill = false
     var pendingTimeMs = -1
     var pendingSvgData: ByteArray? = null
@@ -63,18 +62,16 @@ internal object DanmakuMaskParser {
         pendingSvgData = null
         return
       }
-      val mask = decodeProtectedMask(svgData)
+      val mask = decodeAllowedMask(svgData)
       if (
-        previousContours?.contentEquals(mask.contours) != true ||
-          previousInverseFill != mask.inverseFill ||
-          previousEvenOddFill != mask.evenOddFill
+        mask != null &&
+          (previousContours?.contentEquals(mask.contours) != true ||
+            previousEvenOddFill != mask.evenOddFill)
       ) {
         frameTimes += pendingTimeMs
         frameContours += mask.contours
-        frameInverseFills += mask.inverseFill
         frameEvenOddFills += mask.evenOddFill
         previousContours = mask.contours
-        previousInverseFill = mask.inverseFill
         previousEvenOddFill = mask.evenOddFill
       }
       lastOutputSampleSlot = sampleSlot
@@ -120,16 +117,15 @@ internal object DanmakuMaskParser {
     flushPendingFrame()
     return DanmakuMaskTimeline(
       frameTimesMs = frameTimes.toIntArray(),
-      protectedContours = frameContours,
-      inverseFills = frameInverseFills.toBooleanArray(),
+      allowedContours = frameContours,
       evenOddFills = frameEvenOddFills.toBooleanArray(),
     )
   }
 
-  private fun decodeProtectedMask(encodedFrame: ByteArray): DecodedMask {
+  private fun decodeAllowedMask(encodedFrame: ByteArray): DecodedMask? {
     val encoded = String(encodedFrame, Charsets.US_ASCII)
     val markerIndex = encoded.indexOf(BASE64_MARKER)
-    if (markerIndex < 0) return DecodedMask()
+    if (markerIndex < 0) return null
     val svg =
       runCatching {
           String(
@@ -137,20 +133,21 @@ internal object DanmakuMaskParser {
             Charsets.UTF_8,
           )
         }
-        .getOrNull() ?: return DecodedMask()
+        .getOrNull() ?: return null
     return decodeSvgPath(svg)
   }
 
   /** Keeps the SVG silhouette itself; rasterization is intentionally avoided to prevent block edges. */
-  private fun decodeSvgPath(svg: String): DecodedMask {
-    val viewBoxMatch = VIEW_BOX_REGEX.find(svg) ?: return DecodedMask()
-    val minX = viewBoxMatch.groupValues[1].toFloatOrNull() ?: return DecodedMask()
-    val minY = viewBoxMatch.groupValues[2].toFloatOrNull() ?: return DecodedMask()
+  private fun decodeSvgPath(svg: String): DecodedMask? {
+    val viewBoxMatch = VIEW_BOX_REGEX.find(svg) ?: return null
+    val minX = viewBoxMatch.groupValues[1].toFloatOrNull() ?: return null
+    val minY = viewBoxMatch.groupValues[2].toFloatOrNull() ?: return null
     val viewWidth =
-      viewBoxMatch.groupValues[3].toFloatOrNull()?.takeIf { it > 0f } ?: return DecodedMask()
+      viewBoxMatch.groupValues[3].toFloatOrNull()?.takeIf { it > 0f } ?: return null
     val viewHeight =
-      viewBoxMatch.groupValues[4].toFloatOrNull()?.takeIf { it > 0f } ?: return DecodedMask()
+      viewBoxMatch.groupValues[4].toFloatOrNull()?.takeIf { it > 0f } ?: return null
     val pathMatches = PATH_DATA_REGEX.findAll(svg).toList()
+    // A valid path-less SVG explicitly means that this sample has no protected subject.
     if (pathMatches.isEmpty()) return DecodedMask()
 
     val evenOdd = svg.contains("fill-rule=\"evenodd\"", ignoreCase = true)
@@ -172,7 +169,8 @@ internal object DanmakuMaskParser {
         .takeIf(List<FloatArray>::isNotEmpty)
     }
     val contours = flattenedPaths.flatten()
-    if (contours.isEmpty()) return DecodedMask()
+    // A declared path that cannot be decoded is a bad sample, not an intentional empty mask.
+    if (contours.isEmpty()) return null
     val packed = ArrayList<Float>()
     contours.forEach { contour ->
       contour.forEachIndexed { index, value ->
@@ -183,12 +181,10 @@ internal object DanmakuMaskParser {
     }
     packed.removeAt(packed.lastIndex)
     packed.removeAt(packed.lastIndex)
-    // Official masks normally paint the allowed background and leave the subject transparent.
-    // Use the exact contour area only to choose the fill direction; the rendered outline itself
-    // remains the original SVG contour.
-    val coveredArea = contours.sumOf { contourArea(it).toDouble() }.toFloat()
-    val inverseFill = coveredArea > viewWidth * viewHeight * .5f
-    return DecodedMask(packed.toFloatArray(), inverseFill = inverseFill, evenOddFill = evenOdd)
+    // The filled SVG path always describes the background where danmaku may be shown. The
+    // transparent remainder is the protected subject, even when a close-up leaves less than half
+    // of the frame as background.
+    return DecodedMask(packed.toFloatArray(), evenOddFill = evenOdd)
   }
 
   private fun flattenPathData(
@@ -490,22 +486,6 @@ internal object DanmakuMaskParser {
     return contours
   }
 
-  private fun contourArea(contour: FloatArray): Float {
-    var area = 0f
-    var previousX = contour[contour.size - 2]
-    var previousY = contour[contour.size - 1]
-    var index = 0
-    while (index + 1 < contour.size) {
-      val currentX = contour[index]
-      val currentY = contour[index + 1]
-      area += previousX * currentY - currentX * previousY
-      previousX = currentX
-      previousY = currentY
-      index += 2
-    }
-    return abs(area) * .5f
-  }
-
   private fun inflateSegment(bytes: ByteArray, offset: Int, length: Int): ByteArray {
     val output = ByteArrayOutputStream()
     GZIPInputStream(ByteArrayInputStream(bytes, offset, length)).use { input ->
@@ -576,7 +556,6 @@ internal object DanmakuMaskParser {
 
   private data class DecodedMask(
     val contours: FloatArray = FloatArray(0),
-    val inverseFill: Boolean = false,
     val evenOddFill: Boolean = false,
   )
 }

@@ -49,6 +49,22 @@ class BangumiRecommendationScreenTest {
   }
 
   @Test
+  fun previewPlaybackRequiresVisiblePageAndStartedLifecycle() {
+    assertTrue(
+      shouldPlayBangumiPreview(active = true, mainPageVisible = false, lifecycleStarted = true)
+    )
+    assertFalse(
+      shouldPlayBangumiPreview(active = true, mainPageVisible = false, lifecycleStarted = false)
+    )
+    assertFalse(
+      shouldPlayBangumiPreview(active = true, mainPageVisible = true, lifecycleStarted = true)
+    )
+    assertFalse(
+      shouldPlayBangumiPreview(active = false, mainPageVisible = false, lifecycleStarted = true)
+    )
+  }
+
+  @Test
   fun previewCoverGestureStartsOnlyAfterHorizontalTouchSlop() {
     assertNull(bangumiCardGestureIsHorizontal(Offset(7f, 1f), touchSlop = 8f))
     assertTrue(bangumiCardGestureIsHorizontal(Offset(20f, 4f), touchSlop = 8f)!!)

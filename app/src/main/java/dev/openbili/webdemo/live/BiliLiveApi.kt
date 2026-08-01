@@ -1,6 +1,6 @@
 package dev.openbili.webdemo.live
 
-import android.text.Html
+import androidx.core.text.HtmlCompat
 import dev.openbili.webdemo.UrlPolicy
 import dev.openbili.webdemo.api.BiliApi
 import dev.openbili.webdemo.api.BiliHttpClient
@@ -9,6 +9,171 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 object BiliLiveApi {
+  fun getLiveAreas(): List<LiveAreaFilter> {
+    return getLiveAreaGroups().map { it.parent }
+  }
+
+  fun getLiveAreaGroups(): List<LiveAreaGroup> {
+    val json =
+      getJson(
+        "https://api.live.bilibili.com/room/v1/Area/getList",
+        "直播分区",
+      )
+    return parseLiveAreaGroups(json)
+  }
+
+  fun getHomeRecommendations(limit: Int = 5): List<LiveSearchRoom> {
+    val query =
+      buildQuery(
+        mapOf(
+          "platform" to "web",
+          "web_location" to "333.1007",
+        )
+      )
+    val json =
+      getJson(
+        "https://api.live.bilibili.com/xlive/web-interface/v1/webMain/getMoreRecList?$query",
+        "直播首页推荐",
+      )
+    return parseLiveHomeRecommendations(json).take(limit.coerceAtLeast(1))
+  }
+
+  fun getFollowedLiveRooms(): LiveFollowingResponse {
+    if (BiliHttpClient.cookieValue("SESSDATA").isNullOrBlank()) {
+      return LiveFollowingResponse(isLoggedIn = false, rooms = emptyList())
+    }
+    // The current live homepage loads the personalized follow module together with its other
+    // modules. The request interceptor adds the WBI signature used by the web page.
+    val query =
+      BiliApi.signedQuery(
+        linkedMapOf(
+          "platform" to "web",
+          "web_location" to "444.7",
+        )
+      )
+    val json =
+      try {
+        getJson(
+          "https://api.live.bilibili.com/xlive/web-interface/v1/index/getList?$query",
+          "我的关注",
+        )
+      } catch (homepageError: Exception) {
+        val fallbackRooms =
+          runCatching { getAllFollowedLiveRooms(expectedCount = 0) }
+            .getOrElse { throw homepageError }
+        return LiveFollowingResponse(
+          isLoggedIn = true,
+          rooms = enrichMissingFollowedCovers(fallbackRooms),
+        )
+      }
+    val homepageRooms = parseFollowedLiveRooms(json)
+    val onlineCount = parseFollowedLiveOnlineCount(json)
+    val needsFullList =
+      onlineCount > homepageRooms.size || homepageRooms.size >= HOMEPAGE_FOLLOWING_LIMIT
+    val fullRooms =
+      if (needsFullList) {
+        runCatching { getAllFollowedLiveRooms(expectedCount = onlineCount) }
+          .getOrDefault(emptyList())
+      } else {
+        emptyList()
+      }
+    val mergedRooms = mergeFollowedLiveRooms(homepageRooms, fullRooms)
+    return LiveFollowingResponse(
+      isLoggedIn = true,
+      rooms = enrichMissingFollowedCovers(mergedRooms),
+    )
+  }
+
+  internal fun mergeFollowedLiveRooms(
+    homepageRooms: List<LiveSearchRoom>,
+    fullRooms: List<LiveSearchRoom>,
+  ): List<LiveSearchRoom> {
+    val fullRoomsById = fullRooms.associateBy(LiveSearchRoom::roomId)
+    val homepageRoomIds = homepageRooms.mapTo(hashSetOf(), LiveSearchRoom::roomId)
+    val mergedHomepageRooms = homepageRooms.map { homepageRoom ->
+      val fullRoom = fullRoomsById[homepageRoom.roomId] ?: return@map homepageRoom
+      homepageRoom.copy(
+        shortRoomId = homepageRoom.shortRoomId ?: fullRoom.shortRoomId,
+        uid = homepageRoom.uid.takeIf { it > 0L } ?: fullRoom.uid,
+        faceUrl = homepageRoom.faceUrl ?: fullRoom.faceUrl,
+        coverUrl = fullRoom.coverUrl ?: homepageRoom.coverUrl,
+        keyframeUrl = homepageRoom.keyframeUrl ?: fullRoom.keyframeUrl,
+        areaName = homepageRoom.areaName ?: fullRoom.areaName,
+        parentAreaName = homepageRoom.parentAreaName ?: fullRoom.parentAreaName,
+        watchedText = homepageRoom.watchedText ?: fullRoom.watchedText,
+      )
+    }
+    return mergedHomepageRooms + fullRooms.filterNot { it.roomId in homepageRoomIds }
+  }
+
+  private fun enrichMissingFollowedCovers(rooms: List<LiveSearchRoom>): List<LiveSearchRoom> =
+    rooms.map { room ->
+      if (!room.coverUrl.isNullOrBlank()) return@map room
+      val info = runCatching { getRoomInfo(room.roomId) }.getOrNull() ?: return@map room
+      room.copy(
+        shortRoomId = room.shortRoomId ?: info.shortRoomId,
+        uid = room.uid.takeIf { it > 0L } ?: info.anchorUid,
+        coverUrl = info.coverUrl,
+        keyframeUrl = room.keyframeUrl ?: info.keyframeUrl,
+        areaName = room.areaName ?: info.areaName,
+        parentAreaName = room.parentAreaName ?: info.parentAreaName,
+      )
+    }
+
+  private fun getAllFollowedLiveRooms(expectedCount: Int): List<LiveSearchRoom> {
+    val rooms = mutableListOf<LiveSearchRoom>()
+    val seenRoomIds = hashSetOf<Long>()
+    var page = 1
+    var reportedCount = expectedCount.coerceAtLeast(0)
+    while (page <= MAX_FOLLOWING_PAGES) {
+      val json =
+        getJson(
+          "https://api.live.bilibili.com/xlive/web-ucenter/v1/xfetter/GetWebList?page=$page",
+          "完整关注直播",
+        )
+      reportedCount = maxOf(reportedCount, parseFollowedLiveOnlineCount(json))
+      val pageRooms = parseFollowedLiveRooms(json)
+      val added = pageRooms.filter { seenRoomIds.add(it.roomId) }
+      rooms += added
+      val reachedReportedEnd = reportedCount > 0 && rooms.size >= reportedCount
+      val reachedShortPage = reportedCount <= 0 && pageRooms.size < FOLLOWING_PAGE_SIZE
+      if (pageRooms.isEmpty() || added.isEmpty() || reachedReportedEnd || reachedShortPage) break
+      page++
+    }
+    return rooms
+  }
+
+  fun getLiveRooms(
+    parentAreaId: Int = 0,
+    areaId: Int = 0,
+    page: Int = 1,
+    pageSize: Int = 30,
+  ): LiveSearchResponse {
+    val safePage = page.coerceAtLeast(1)
+    val safePageSize = pageSize.coerceIn(1, 30)
+    val parameters =
+      linkedMapOf(
+        "platform" to "web",
+        "parent_area_id" to parentAreaId.coerceAtLeast(0).toString(),
+        "area_id" to areaId.coerceAtLeast(0).toString(),
+        "page" to safePage.toString(),
+        "page_size" to safePageSize.toString(),
+        "sort_type" to "online",
+      )
+    // `second/getList` currently returns -352 for this app's ordinary live-home session. The
+    // shared HTTP interceptor correctly opens a global Gaia challenge for that response, but the
+    // compatibility endpoint below already serves the same room-card contract. Do not probe the
+    // blocked endpoint first: otherwise cards load through the fallback while an unnecessary,
+    // and sometimes blank, challenge dialog remains on top of the page.
+    val query = buildQuery(parameters + ("tag_version" to "1"))
+    val json =
+      getJson(
+        "https://api.live.bilibili.com/room/v3/area/getRoomList?$query",
+        "直播列表",
+      )
+    return parseLiveRoomList(json, safePage, safePageSize)
+  }
+
   fun searchRooms(keyword: String, page: Int = 1): LiveSearchResponse {
     val query =
       BiliApi.signedQuery(
@@ -131,30 +296,16 @@ object BiliLiveApi {
                 formatName.contains("flv", ignoreCase = true) -> LiveStreamFormat.HTTP_FLV
               else -> return@forEach
             }
-          codec.optJSONArray("url_info").objects().forEach { urlInfo ->
+          codec.optJSONArray("url_info").objects().forEachIndexed { cdnIndex, urlInfo ->
             val url = urlInfo.optString("host") + baseUrl + urlInfo.optString("extra")
             if (url.startsWith("http")) {
-              sources += LiveStreamSource(url, streamFormat, codecName)
+              sources += LiveStreamSource(url, streamFormat, codecName, cdnIndex)
             }
           }
         }
       }
     }
-    val ordered =
-      sources
-        .distinctBy { it.url }
-        .sortedWith(
-          compareBy<LiveStreamSource>(
-            {
-              when (it.format) {
-                LiveStreamFormat.HLS_FMP4 -> 0
-                LiveStreamFormat.HLS_TS -> 1
-                LiveStreamFormat.HTTP_FLV -> 3
-              }
-            },
-            { if (it.codec.contains("avc", ignoreCase = true)) 0 else 1 },
-          )
-        )
+    val ordered = orderLiveSources(sources)
     if (ordered.isEmpty()) throw IllegalStateException("当前直播流格式暂不受支持")
     return LivePlayInfo(
       requestedQn = safeQn,
@@ -163,6 +314,23 @@ object BiliLiveApi {
       sources = ordered,
     )
   }
+
+  internal fun orderLiveSources(sources: List<LiveStreamSource>): List<LiveStreamSource> =
+    sources
+      .distinctBy { it.url }
+      .sortedWith(
+        compareBy<LiveStreamSource>(
+          { if (it.codec.contains("avc", ignoreCase = true)) 0 else 1 },
+          { it.cdnIndex },
+          {
+            when (it.format) {
+              LiveStreamFormat.HLS_FMP4 -> 0
+              LiveStreamFormat.HLS_TS -> 1
+              LiveStreamFormat.HTTP_FLV -> 2
+            }
+          },
+        )
+      )
 
   fun getDanmuConfig(roomId: Long): LiveDanmuConfig {
     val query = BiliApi.signedQuery(mapOf("id" to roomId.toString(), "type" to "0"))
@@ -189,6 +357,10 @@ object BiliLiveApi {
           "?platform=pc&room_id=$roomId",
         "直播表情",
       )
+    return parseEmojiPacks(json, roomId)
+  }
+
+  internal fun parseEmojiPacks(json: JSONObject, roomId: Long): List<LiveEmojiPack> {
     val data = json.optJSONObject("data")
     val packages = data?.optJSONArray("data") ?: data?.optJSONArray("packages")
     return packages.objects().mapNotNull { pack ->
@@ -206,25 +378,27 @@ object BiliLiveApi {
           else -> LiveEmojiKind.OWNED
         }
       val emojis = rawEmojis.mapNotNull { item ->
-        val token =
-          item
-            .optString("emoticon_unique")
-            .ifBlank { item.optString("emoji") }
-            .takeIf(String::isNotBlank) ?: return@mapNotNull null
+        val uniqueToken = item.optString("emoticon_unique")
+        val inputText = item.optString("emoji")
+        if (uniqueToken.isBlank() && inputText.isBlank()) return@mapNotNull null
+        val sendToken = uniqueToken.ifBlank { inputText }
         val url = imageUrl(item.optString("url"))
         val permitted = item.optInt("perm", 1) != 0
         val isBulge = item.optInt("bulge_display", if (roomExclusive) 1 else 0) != 0
         LiveEmoji(
           displayName =
             item.optString("descript").ifBlank {
-              item.optString("emoji").ifBlank { token }
+              inputText.ifBlank { sendToken }
             },
-          sendToken = token,
-          fileId = item.optString("emoticon_unique").takeIf(String::isNotBlank),
+          inputText = inputText.ifBlank { sendToken },
+          sendToken = sendToken,
+          fileId = uniqueToken.takeIf(String::isNotBlank),
           imageUrl = url,
           kind = kind,
           roomId = roomId.takeIf { kind == LiveEmojiKind.ROOM_EXCLUSIVE },
-          directSend = roomExclusive || (kind != LiveEmojiKind.BASE && isBulge),
+          // Every entry returned by GetEmoticons is a real image emote. Inserting BASE entries
+          // into the composer routes them through dm_type=0 and sends their label as plain text.
+          directSend = true,
           isBulge = isBulge,
           available = permitted,
           unavailableReason =
@@ -271,8 +445,7 @@ object BiliLiveApi {
     val lottery =
       when (data) {
         is JSONObject -> {
-          data.takeIf { it.optLong("id") > 0L }
-            ?: data.optJSONArray("anchor")?.optJSONObject(0)
+          data.takeIf { it.optLong("id") > 0L } ?: data.optJSONArray("anchor")?.optJSONObject(0)
         }
         is JSONArray -> data.optJSONObject(0)
         else -> null
@@ -415,25 +588,32 @@ object BiliLiveApi {
     if (emoji.kind == LiveEmojiKind.ROOM_EXCLUSIVE) {
       require(emoji.roomId == roomId) { "这个专属表情不属于当前直播间" }
     }
-    val options =
-      JSONObject()
-        .put("bulge_display", 1)
-        .put("emoticon_unique", emoji.fileId ?: emoji.sendToken)
-        .put("in_player_area", 1)
-        .put("is_dynamic", 1)
-        .put("url", emoji.imageUrl)
-        .toString()
     sendDanmaku(
       roomId = roomId,
-      fields =
-        mapOf(
-          "msg" to emoji.sendToken,
-          "color" to "16777215",
-          "mode" to "1",
-          "fontsize" to "25",
-          "dm_type" to "1",
-          "emoticon_options" to options,
-        ),
+      fields = emojiDanmakuFields(emoji),
+    )
+  }
+
+  internal fun emojiDanmakuFields(emoji: LiveEmoji): Map<String, String> {
+    val options =
+      if (!emoji.isBulge) {
+        "{}"
+      } else {
+        JSONObject()
+          .put("bulge_display", 1)
+          .put("emoticon_unique", emoji.fileId ?: emoji.sendToken)
+          .put("in_player_area", 1)
+          .put("is_dynamic", 1)
+          .put("url", emoji.imageUrl)
+          .toString()
+      }
+    return mapOf(
+      "msg" to emoji.sendToken,
+      "color" to "16777215",
+      "mode" to "1",
+      "fontsize" to "25",
+      "dm_type" to "1",
+      "emoticon_options" to options,
     )
   }
 
@@ -486,6 +666,133 @@ object BiliLiveApi {
     }
   }
 
+  internal fun parseLiveAreas(json: JSONObject): List<LiveAreaFilter> =
+    parseLiveAreaGroups(json).map { it.parent }
+
+  internal fun parseLiveAreaGroups(json: JSONObject): List<LiveAreaGroup> =
+    json
+      .optJSONArray("data")
+      .objects()
+      .mapNotNull { item ->
+        val parentAreaId = item.optInt("id")
+        val name = decodeHtml(item.optString("name")).trim()
+        if (parentAreaId <= 0 || name.isBlank()) {
+          null
+        } else {
+          val parent =
+            LiveAreaFilter(
+              parentAreaId = parentAreaId,
+              name = name,
+              iconUrl =
+                imageUrl(item.optString("pic", item.optString("icon"))).takeIf(String::isNotBlank),
+            )
+          val children =
+            item
+              .optJSONArray("list")
+              .objects()
+              .mapNotNull { child ->
+                val areaId = child.optInt("id")
+                val childName = decodeHtml(child.optString("name")).trim()
+                if (areaId <= 0 || childName.isBlank()) {
+                  null
+                } else {
+                  LiveAreaFilter(
+                    parentAreaId =
+                      child.optInt("parent_id", parentAreaId).takeIf { it > 0 } ?: parentAreaId,
+                    areaId = areaId,
+                    name = childName,
+                    iconUrl =
+                      imageUrl(child.optString("pic", child.optString("icon")))
+                        .takeIf(String::isNotBlank),
+                  )
+                }
+              }
+              .distinctBy(LiveAreaFilter::stableId)
+          LiveAreaGroup(parent = parent, children = children)
+        }
+      }
+      .distinctBy { it.parent.parentAreaId }
+
+  internal fun parseLiveHomeRecommendations(json: JSONObject): List<LiveSearchRoom> {
+    val data = json.optJSONObject("data") ?: return emptyList()
+    val list =
+      data.optJSONArray("recommend_room_list")
+        ?: data.optJSONArray("recommend_list")
+        ?: data.optJSONArray("list")
+        ?: return emptyList()
+    return list
+      .objects()
+      .mapNotNull(::parseLiveSearchRoom)
+      .filter { it.roomId > 0L && it.liveStatus == 1 }
+      .distinctBy(LiveSearchRoom::roomId)
+  }
+
+  internal fun parseFollowedLiveRooms(json: JSONObject): List<LiveSearchRoom> {
+    val data = json.optJSONObject("data") ?: return emptyList()
+    val homepageModules = data.optJSONArray("room_list")
+    val moduleObjects = homepageModules?.objects().orEmpty()
+    val followModule = moduleObjects.firstOrNull {
+      it.optJSONObject("module_info")?.optInt("id") == 13
+    }
+    val hasHomepageModules = moduleObjects.any { it.has("module_info") }
+    val list =
+      when {
+        followModule != null -> followModule.optJSONArray("list")
+        hasHomepageModules -> null
+        else -> data.optJSONArray("rooms") ?: data.optJSONArray("list") ?: homepageModules
+      } ?: return emptyList()
+    return list
+      .objects()
+      .filter(::isLiveFollowingRoom)
+      .mapNotNull(::parseLiveSearchRoom)
+      .filter { it.roomId > 0L }
+      .distinctBy(LiveSearchRoom::roomId)
+  }
+
+  internal fun parseFollowedLiveOnlineCount(json: JSONObject): Int {
+    val data = json.optJSONObject("data") ?: return 0
+    val followModule =
+      data.optJSONArray("room_list").objects().firstOrNull {
+        it.optJSONObject("module_info")?.optInt("id") == 13
+      }
+    return followModule?.optJSONObject("extra")?.optInt("follow_Online")?.coerceAtLeast(0)
+      ?: data.optInt("count", 0).coerceAtLeast(0)
+  }
+
+  private fun isLiveFollowingRoom(item: JSONObject): Boolean {
+    val status = item.opt("status")
+    return when (status) {
+      is Boolean -> status
+      is Number -> status.toInt() != 0
+      is String -> status == "1" || status.equals("true", ignoreCase = true)
+      else -> item.optInt("live_status", 1) == 1
+    }
+  }
+
+  internal fun parseLiveRoomList(
+    json: JSONObject,
+    page: Int,
+    pageSize: Int,
+  ): LiveSearchResponse {
+    val data = json.optJSONObject("data") ?: return LiveSearchResponse(emptyList(), false)
+    val rooms =
+      data
+        .optJSONArray("list")
+        .objects()
+        .mapNotNull(::parseLiveSearchRoom)
+        .filter { it.roomId > 0L && it.liveStatus == 1 }
+        .distinctBy(LiveSearchRoom::roomId)
+    val total = data.longValue("count")
+    val safePage = page.coerceAtLeast(1)
+    val safePageSize = pageSize.coerceAtLeast(1)
+    return LiveSearchResponse(
+      rooms = rooms,
+      hasMore =
+        rooms.isNotEmpty() &&
+          if (total > 0L) safePage.toLong() * safePageSize < total else rooms.size >= safePageSize,
+    )
+  }
+
   private fun parseLiveSearchRoom(item: JSONObject): LiveSearchRoom? {
     val roomId = item.longValue("roomid", "room_id", "roomid_str")
     if (roomId <= 0L) return null
@@ -494,24 +801,54 @@ object BiliLiveApi {
         .optJSONObject("watched_show")
         ?.optString("text_large")
         ?.ifBlank { item.optJSONObject("watched_show")?.optString("text_small") }
-        ?.takeIf(String::isNotBlank) ?: item.optString("online").takeIf(String::isNotBlank)
+        ?.takeIf(String::isNotBlank) ?: formatLivePopularity(item.longValue("online"))
     return LiveSearchRoom(
       roomId = roomId,
       shortRoomId = item.longValue("short_id", "short_room_id").takeIf { it > 0L },
       uid = item.longValue("uid", "mid"),
       title = decodeHtml(item.optString("title")).ifBlank { "直播间 $roomId" },
       uname = item.optString("uname", item.optString("name")).ifBlank { "主播" },
-      faceUrl =
-        imageUrl(item.optString("uface", item.optString("face"))).takeIf(String::isNotBlank),
+      faceUrl = firstImageUrl(item, "uface", "face", "face_url"),
       coverUrl =
-        imageUrl(item.optString("user_cover", item.optString("cover"))).takeIf(String::isNotBlank),
-      keyframeUrl =
-        imageUrl(item.optString("keyframe", item.optString("pic"))).takeIf(String::isNotBlank),
-      areaName = item.optString("area_name").takeIf(String::isNotBlank),
-      parentAreaName = item.optString("parent_area_name").takeIf(String::isNotBlank),
+        firstImageUrl(
+          item,
+          "user_cover",
+          "cover_from_user",
+          "cover",
+          "room_cover",
+          "cover_url",
+        ),
+      keyframeUrl = firstImageUrl(item, "keyframe", "keyframe_url", "system_cover", "pic"),
+      areaName =
+        item.optString("area_v2_name", item.optString("area_name")).takeIf(String::isNotBlank),
+      parentAreaName =
+        item
+          .optString("area_v2_parent_name", item.optString("parent_area_name"))
+          .takeIf(String::isNotBlank),
       watchedText = watched,
       liveStatus = item.optInt("live_status", 1),
     )
+  }
+
+  private fun firstImageUrl(item: JSONObject, vararg keys: String): String? =
+    keys
+      .asSequence()
+      .map { key -> item.optString(key).trim() }
+      .filter { value -> value.isNotBlank() && !value.equals("null", ignoreCase = true) }
+      .map(::imageUrl)
+      .firstOrNull(String::isNotBlank)
+
+  internal fun formatLivePopularity(value: Long): String? =
+    when {
+      value <= 0L -> null
+      value >= 100_000_000L -> "${formatCompact(value / 100_000_000.0)}亿人气"
+      value >= 10_000L -> "${formatCompact(value / 10_000.0)}万人气"
+      else -> "${value}人气"
+    }
+
+  private fun formatCompact(value: Double): String {
+    val rounded = kotlin.math.round(value * 10.0) / 10.0
+    return if (rounded % 1.0 == 0.0) rounded.toLong().toString() else rounded.toString()
   }
 
   private fun parseRankUser(item: JSONObject, anchorUid: Long): LiveRankUser? {
@@ -566,8 +903,7 @@ object BiliLiveApi {
     val id = value.longValue("id")
     if (id <= 0L) return null
     val currentSeconds =
-      value.longValue("current_time").takeIf { it > 0L }
-        ?: System.currentTimeMillis() / 1_000L
+      value.longValue("current_time").takeIf { it > 0L } ?: System.currentTimeMillis() / 1_000L
     val remainingSeconds = value.longValue("time").coerceAtLeast(0L)
     val joined = value.optInt("status") == 2
     return LiveInteractiveLottery(
@@ -634,7 +970,7 @@ object BiliLiveApi {
     }
 
   private fun decodeHtml(value: String): String =
-    Html.fromHtml(value, Html.FROM_HTML_MODE_LEGACY).toString()
+    HtmlCompat.fromHtml(value, HtmlCompat.FROM_HTML_MODE_LEGACY).toString()
 
   private fun imageUrl(value: String): String = UrlPolicy.normalizeImageUrl(value).orEmpty()
 
@@ -658,4 +994,8 @@ object BiliLiveApi {
       for (index in 0 until length()) optJSONObject(index)?.let(::add)
     }
   }
+
+  private const val HOMEPAGE_FOLLOWING_LIMIT = 6
+  private const val FOLLOWING_PAGE_SIZE = 10
+  private const val MAX_FOLLOWING_PAGES = 20
 }

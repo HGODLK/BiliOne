@@ -4,8 +4,6 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.relocation.BringIntoViewRequester
-import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.*
@@ -238,7 +236,12 @@ internal fun BangumiIndexScreen(
             columns = GridCells.Adaptive(minSize = 148.dp),
             state = gridState,
             modifier = Modifier.fillMaxSize(),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 20.dp, end = 20.dp, bottom = 28.dp),
+            contentPadding =
+              androidx.compose.foundation.layout.PaddingValues(
+                start = 20.dp,
+                end = 20.dp,
+                bottom = NavigationCardBottomClearance,
+              ),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp),
           ) {
@@ -421,7 +424,7 @@ private fun BangumiIndexCard(
   onBounds: (BangumiIndexItem, Rect) -> Unit,
 ) {
   var bounds by remember(item.stableId) { mutableStateOf(Rect.Zero) }
-  val bringIntoViewRequester = remember { BringIntoViewRequester() }
+  val bringIntoViewRequester = rememberNavigationBringIntoViewRequester()
   val scope = rememberCoroutineScope()
   var opening by remember(item.stableId) { mutableStateOf(false) }
   val chromeAlpha = remember(item.stableId) { Animatable(1f) }
@@ -434,7 +437,7 @@ private fun BangumiIndexCard(
   Box(
     Modifier.fillMaxWidth()
       .aspectRatio(3f / 4f)
-      .bringIntoViewRequester(bringIntoViewRequester)
+      .navigationBringIntoViewTarget(bringIntoViewRequester)
       .clip(RoundedCornerShape(16.dp))
       .background(MaterialTheme.colorScheme.surfaceVariant)
       .clickable(enabled = !opening && !hidden) {

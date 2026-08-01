@@ -659,6 +659,7 @@ internal fun VideoContent(
                   enabledVolume = settings.volumeGesture,
                   enabledSeek = settings.horizontalSeekGesture,
                   enabledFullscreenToggle = settings.twoFingerFullscreenGesture,
+                  enabledTwoFingerSeek = settings.twoFingerSeekGesture,
                   positionProvider = playerPositionProvider,
                   durationMs = durationMs,
                   onSeek = onSeek,
@@ -692,9 +693,11 @@ internal fun VideoContent(
                   exitMillis = GESTURE_INDICATOR_FADE_OUT_MS,
                   modifier =
                     Modifier.align(
-                        if (localGestureFeedback?.kind == GestureIndicatorKind.BRIGHTNESS)
-                          Alignment.CenterStart
-                        else Alignment.CenterEnd
+                        when (localGestureFeedback?.kind) {
+                          GestureIndicatorKind.BRIGHTNESS -> Alignment.CenterStart
+                          GestureIndicatorKind.VOLUME -> Alignment.CenterEnd
+                          else -> Alignment.Center
+                        }
                       )
                       .padding(horizontal = 18.dp)
                       .zIndex(2.5f),
@@ -740,6 +743,7 @@ internal fun VideoContent(
                     },
                     danmakuDisplayArea = settings.danmakuDisplayArea,
                     danmakuDensity = settings.danmakuDensity,
+                    danmakuBlockLevel = settings.danmakuBlockLevel,
                     danmakuOpacity = settings.danmakuOpacity,
                     danmakuFontScale = settings.danmakuFontScale,
                     danmakuSpeed = settings.danmakuSpeed,
@@ -749,6 +753,9 @@ internal fun VideoContent(
                     },
                     onDanmakuDensityChange = { value ->
                       onSettingsChange { it.copy(danmakuDensity = value) }
+                    },
+                    onDanmakuBlockLevelChange = { value ->
+                      onSettingsChange { it.copy(danmakuBlockLevel = value) }
                     },
                     onDanmakuOpacityChange = { value ->
                       onSettingsChange { it.copy(danmakuOpacity = value) }
@@ -799,6 +806,7 @@ internal fun VideoContent(
                       nextTitle = nextPlaybackTarget.title,
                       seconds = autoNextSeconds,
                       triggered = autoNextTriggered,
+                      autoPlayEnabled = settings.autoPlayNext,
                       handoffProgress = autoNextHandoffProgress,
                       revealAlpha = playbackEndRevealAlpha,
                       isFullscreen = false,

@@ -20,9 +20,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -30,6 +28,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -76,6 +75,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
@@ -106,6 +106,7 @@ import dev.openbili.webdemo.feed.rememberGridFeedImageLoadPolicy
 import dev.openbili.webdemo.settings.AppSettings
 import dev.openbili.webdemo.ui.BackdropGlassSurface
 import dev.openbili.webdemo.ui.FollowButton
+import dev.openbili.webdemo.ui.NavigationCardBottomClearance
 import dev.openbili.webdemo.ui.PressableVideoCard
 import dev.openbili.webdemo.ui.PullRefreshContainer
 import dev.openbili.webdemo.ui.VideoCardGradient
@@ -207,6 +208,16 @@ fun ProfileScreen(
   dynamicsHasMore: Boolean,
   dynamicsError: String?,
   selectedDynamicId: String?,
+  collections: List<SpaceContentCard>,
+  collectionsLoading: Boolean,
+  collectionsError: String?,
+  selectedCollectionId: String?,
+  collectionVideos: List<FeedItem>,
+  collectionPage: Int,
+  collectionHasMore: Boolean,
+  collectionLoading: Boolean,
+  collectionError: String?,
+  collectionTotal: Int,
   loading: Boolean,
   hasMore: Boolean,
   error: String?,
@@ -235,6 +246,10 @@ fun ProfileScreen(
   onLoadMoreDynamics: () -> Unit,
   onRefreshDynamics: () -> Unit,
   onSelectedDynamicIdChange: (String?) -> Unit,
+  onEnsureCollections: () -> Unit,
+  onRefreshCollections: () -> Unit,
+  onSelectedCollectionChange: (SpaceContentCard?) -> Unit,
+  onLoadMoreCollection: () -> Unit,
   onDynamicLike: (dev.openbili.webdemo.api.SpaceDynamicItem) -> Unit,
   onDynamicDelete: (dev.openbili.webdemo.api.SpaceDynamicItem) -> Unit,
   onDynamicPin: (dev.openbili.webdemo.api.SpaceDynamicItem) -> Unit,
@@ -262,11 +277,8 @@ fun ProfileScreen(
   var section by rememberSaveable(profile?.mid) { mutableStateOf(ProfileSection.POSTS) }
   var contentSearchQuery by rememberSaveable(profile?.mid) { mutableStateOf("") }
   var extraCards by remember(profile?.mid) { mutableStateOf<List<SpaceContentCard>>(emptyList()) }
-  var extraLoading by remember(profile?.mid) { mutableStateOf(false) }
-  var extraError by remember(profile?.mid) { mutableStateOf<String?>(null) }
   var extraRefreshGeneration by remember(profile?.mid) { mutableStateOf(0) }
-  var bangumiPaging by
-    remember(profile?.mid) { mutableStateOf(ProfileBangumiPagingState()) }
+  var bangumiPaging by remember(profile?.mid) { mutableStateOf(ProfileBangumiPagingState()) }
   var dramaPaging by remember(profile?.mid) { mutableStateOf(ProfileBangumiPagingState()) }
   var bangumiRequestToken by remember(profile?.mid) { mutableStateOf(0L) }
   var headerInfoState by
@@ -404,13 +416,16 @@ fun ProfileScreen(
       onEnsureDynamics()
       return@LaunchedEffect
     }
+    if (section == ProfileSection.COLLECTIONS) {
+      onEnsureCollections()
+      return@LaunchedEffect
+    }
     if (section == ProfileSection.PRIVATE_MESSAGES) {
       onPrivateMessagesSelected(mid, profile.name, profile.face)
       return@LaunchedEffect
     }
     if (section == ProfileSection.BANGUMI) {
       extraCards = emptyList()
-      extraError = null
       bangumiPaging = ProfileBangumiPagingState()
       dramaPaging = ProfileBangumiPagingState()
       loadBangumiTypes(
@@ -420,21 +435,6 @@ fun ProfileScreen(
       )
       return@LaunchedEffect
     }
-    extraLoading = true
-    extraError = null
-    extraCards = emptyList()
-    runCatching {
-        withContext(Dispatchers.IO) {
-          when (section) {
-            ProfileSection.COLLECTIONS -> BiliApi.getSpaceCollections(mid)
-            ProfileSection.PRIVATE_MESSAGES -> emptyList()
-            else -> emptyList()
-          }
-        }
-      }
-      .onSuccess { extraCards = it }
-      .onFailure { extraError = it.message ?: "加载失败" }
-    extraLoading = false
   }
 
   Surface(
@@ -452,6 +452,7 @@ fun ProfileScreen(
         onSelected = {
           headerInfoState = ProfileHeaderInfoState.COLLAPSED
           if (it != ProfileSection.DYNAMICS) onSelectedDynamicIdChange(null)
+          if (it != ProfileSection.COLLECTIONS) onSelectedCollectionChange(null)
           section = it
           contentSearchQuery = ""
         },
@@ -494,13 +495,14 @@ fun ProfileScreen(
               ProfileSection.POSTS -> loading
               ProfileSection.DYNAMICS -> dynamicsLoading
               ProfileSection.BANGUMI -> bangumiPaging.loading || dramaPaging.loading
+              ProfileSection.COLLECTIONS -> collectionsLoading
               ProfileSection.PRIVATE_MESSAGES -> false
-              else -> extraLoading
             },
           onRefresh = {
             when (section) {
               ProfileSection.POSTS -> onRefresh()
               ProfileSection.DYNAMICS -> onRefreshDynamics()
+              ProfileSection.COLLECTIONS -> onRefreshCollections()
               ProfileSection.PRIVATE_MESSAGES ->
                 profile?.let { onPrivateMessagesSelected(it.mid, it.name, it.face) }
               else -> extraRefreshGeneration++
@@ -609,17 +611,22 @@ fun ProfileScreen(
                 },
               )
             ProfileSection.COLLECTIONS ->
-              ProfileExtraGrid(
-                cards =
-                  extraCards.filter { card ->
-                    matchesProfileContentSearch(contentSearchQuery, card.title, card.subtitle)
-                  },
-                loading = extraLoading,
-                error = extraError,
-                emptyMessage =
-                  if (contentSearchQuery.isBlank()) "暂无公开内容" else "没有找到相关内容",
+              ProfileCollectionGrid(
+                collections = collections,
+                loading = collectionsLoading,
+                error = collectionsError,
                 searchQuery = contentSearchQuery,
                 profile = profile,
+                selectedCollectionId = selectedCollectionId,
+                collectionVideos = collectionVideos,
+                collectionPage = collectionPage,
+                collectionHasMore = collectionHasMore,
+                collectionLoading = collectionLoading,
+                collectionError = collectionError,
+                collectionTotal = collectionTotal,
+                settings = settings,
+                onSelectedCollectionChange = onSelectedCollectionChange,
+                onLoadMore = onLoadMoreCollection,
                 onVideoClick = onVideoClick,
                 onVideoLongClick = onVideoLongClick,
                 hiddenCoverItemId = hiddenCoverItemId,
@@ -633,6 +640,7 @@ fun ProfileScreen(
                       )
                   }
                 },
+                backHandlingEnabled = backHandlingEnabled,
               )
           }
         }
@@ -718,7 +726,7 @@ private fun ProfileHeader(
   onInfoEvent: (ProfileHeaderInfoEvent) -> Unit,
   interactionLocked: Boolean,
 ) {
-  val darkTheme = isSystemInDarkTheme()
+  val darkTheme = MaterialTheme.colorScheme.background.luminance() < .5f
   val context = LocalContext.current
   val backdropLayer = rememberGraphicsLayer()
   var backdropBounds by remember { mutableStateOf(Rect.Zero) }
@@ -1113,7 +1121,7 @@ private fun ProfileVideoGrid(
     LazyVerticalGrid(
     columns = GridCells.Fixed(3),
     state = state,
-    contentPadding = PaddingValues(bottom = 112.dp),
+    contentPadding = PaddingValues(bottom = NavigationCardBottomClearance),
     horizontalArrangement = Arrangement.spacedBy(12.dp),
     verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -1166,113 +1174,6 @@ private fun ProfileVideoCard(
         onBoundsChanged(it)
       },
     )
-  }
-}
-
-@Composable
-private fun ProfileExtraGrid(
-  cards: List<SpaceContentCard>,
-  loading: Boolean,
-  error: String?,
-  emptyMessage: String,
-  searchQuery: String,
-  profile: SpaceProfile?,
-  onVideoClick: (FeedItem, Rect) -> Unit,
-  onVideoLongClick: (FeedItem) -> Unit,
-  hiddenCoverItemId: String?,
-  onVideoBoundsChanged: (FeedItem, Rect) -> Unit,
-  onScrollStarted: () -> Unit,
-) {
-  if (loading) {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-      CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 2.dp)
-    }
-    return
-  }
-  if (cards.isEmpty()) {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-      Text(error ?: emptyMessage, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-    return
-  }
-  val state = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
-  val imageLoadPolicy = rememberGridFeedImageLoadPolicy(state)
-  LaunchedEffect(searchQuery) { state.scrollToItem(0) }
-  LaunchedEffect(state.isScrollInProgress) {
-    if (state.isScrollInProgress) onScrollStarted()
-  }
-  CompositionLocalProvider(LocalFeedImageLoadPolicy provides imageLoadPolicy) {
-    LazyVerticalGrid(
-    columns = GridCells.Fixed(3),
-    state = state,
-    contentPadding = PaddingValues(bottom = 112.dp),
-    horizontalArrangement = Arrangement.spacedBy(12.dp),
-    verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-    itemsIndexed(cards, key = { _, card -> card.id }) { index, card ->
-      var coverBounds by remember(card.id) { mutableStateOf(Rect.Zero) }
-      val video =
-        FeedItem(
-          id = card.bvid,
-          title = card.title,
-          videoUrl = "https://www.bilibili.com/video/${card.bvid}",
-          coverUrl = card.coverUrl,
-          uploader = profile?.name,
-          playCount = null,
-          duration = null,
-          uploaderFace = profile?.face,
-          uploaderMid = profile?.mid ?: 0,
-          description = card.subtitle,
-        )
-      VideoCardReveal(index = index, batchKey = cards.firstOrNull()?.id, itemKey = card.id) {
-        PressableVideoCard(
-          enabled = card.bvid.isNotBlank(),
-          onClick = { onVideoClick(video, coverBounds) },
-          onLongClick = { onVideoLongClick(video) },
-          shape = RoundedCornerShape(18.dp),
-        ) {
-          VideoCardGradient(coverUrl = card.coverUrl, loadKey = card.id) {
-            Column(Modifier.padding(10.dp)) {
-              if (card.coverUrl.isNotBlank())
-                CoverImage(
-                  coverUrl = card.coverUrl,
-                  contentDescription = card.title,
-                  modifier =
-                    Modifier.fillMaxWidth()
-                      .height(130.dp)
-                      .onGloballyPositioned {
-                        coverBounds = it.boundsInRoot()
-                        onVideoBoundsChanged(video, coverBounds)
-                      }
-                      .graphicsLayer {
-                        this.alpha = if (video.id != hiddenCoverItemId) 1f else 0f
-                      }
-                      .clip(RoundedCornerShape(14.dp)),
-                  shape = RoundedCornerShape(14.dp),
-                  enforceAspectRatio = false,
-                  loadKey = card.id,
-                )
-              Text(
-                card.title,
-                modifier = Modifier.padding(top = 8.dp),
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                fontWeight = FontWeight.SemiBold,
-              )
-              if (card.subtitle.isNotBlank())
-                Text(
-                  card.subtitle,
-                  maxLines = 3,
-                  overflow = TextOverflow.Ellipsis,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant,
-                  style = MaterialTheme.typography.bodySmall,
-                )
-            }
-          }
-        }
-      }
-    }
-    }
   }
 }
 
@@ -1352,7 +1253,7 @@ private fun ProfileBangumiGrid(
     LazyVerticalGrid(
       columns = GridCells.Fixed(5),
       state = state,
-      contentPadding = PaddingValues(bottom = 112.dp),
+      contentPadding = PaddingValues(bottom = NavigationCardBottomClearance),
       horizontalArrangement = Arrangement.spacedBy(12.dp),
       verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {

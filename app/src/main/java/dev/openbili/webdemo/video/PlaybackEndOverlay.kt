@@ -82,6 +82,7 @@ internal fun AutoNextOverlay(
   nextTitle: String,
   seconds: Int,
   triggered: Boolean,
+  autoPlayEnabled: Boolean,
   handoffProgress: () -> Float,
   revealAlpha: () -> Float,
   isFullscreen: Boolean,
@@ -131,7 +132,11 @@ internal fun AutoNextOverlay(
       verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
       Text(
-        if (triggered) "正在播放下一集…" else "$seconds 秒后播放下一集",
+        when {
+          triggered -> "正在播放下一集…"
+          autoPlayEnabled -> "$seconds 秒后播放下一集"
+          else -> "下一集已准备好"
+        },
         color = Color.White,
         style = MaterialTheme.typography.titleLarge,
         fontWeight = FontWeight.Bold,

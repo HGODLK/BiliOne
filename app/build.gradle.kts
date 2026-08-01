@@ -40,8 +40,8 @@ android {
     applicationId = "io.github.shuyunr.bilione"
     minSdk = 24
     targetSdk = 37
-    versionCode = 1
-    versionName = "0.1.0-preview.1"
+    versionCode = 2
+    versionName = "0.2.0"
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     vectorDrawables.useSupportLibrary = true
     buildConfigField(
@@ -71,6 +71,15 @@ android {
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       signingConfig = signingConfigs.getByName("release")
     }
+    // A local performance build: release optimizations with a distinct install identity.
+    // Keep the production release package and signing configuration untouched.
+    create("debugRelease") {
+      initWith(getByName("release"))
+      applicationIdSuffix = ".debugrelease"
+      versionNameSuffix = "-debugrelease"
+      signingConfig = signingConfigs.getByName("debug")
+      matchingFallbacks += listOf("release", "debug")
+    }
   }
 
   compileOptions {
@@ -92,6 +101,7 @@ dependencies {
   implementation("androidx.lifecycle:lifecycle-runtime-compose:2.11.0")
   implementation("androidx.compose.material3:material3:1.4.0")
   implementation("androidx.compose.material:material-icons-core:1.7.8")
+  implementation("androidx.compose.material:material-icons-extended:1.7.8")
   implementation("androidx.compose.animation:animation:1.11.4")
   implementation("androidx.compose.foundation:foundation:1.11.4")
   implementation("androidx.compose.ui:ui:1.11.4")

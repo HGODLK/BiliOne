@@ -76,6 +76,7 @@ class BangumiPreviewPlayerViewModel(application: Application) : AndroidViewModel
   private var activeItemId: String? = null
   private var activeManifestFile: File? = null
   private var muted = true
+  private var pagePlaybackAllowed = false
 
   var player: ExoPlayer? = null
     private set
@@ -105,6 +106,7 @@ class BangumiPreviewPlayerViewModel(application: Application) : AndroidViewModel
   }
 
   fun play(item: FeedItem, muted: Boolean) {
+    pagePlaybackAllowed = true
     setMuted(muted)
     val existing = activeItemId
     val current = player
@@ -120,25 +122,23 @@ class BangumiPreviewPlayerViewModel(application: Application) : AndroidViewModel
     playback.stop()
     playback.clearMediaItems()
     _state.value = BangumiPreviewPlayerState.Loading(item.id)
-    loadJob =
-      viewModelScope.launch {
-        val result =
-          runCatching {
-            val resolved = withContext(Dispatchers.IO) { resolvePreview(item) }
-            withContext(Dispatchers.IO) { resolved to buildMediaSource(resolved, requestGeneration) }
-          }
-        if (requestGeneration != generation || activeItemId != item.id) return@launch
-        result
-          .onSuccess { (_, source) ->
-            if (requestGeneration != generation || activeItemId != item.id) return@onSuccess
-            playback.setMediaSource(source)
-            playback.prepare()
-            playback.playWhenReady = true
-          }
-          .onFailure {
-            _state.value = BangumiPreviewPlayerState.Error(item.id, "预览暂时无法播放")
-          }
+    loadJob = viewModelScope.launch {
+      val result = runCatching {
+        val resolved = withContext(Dispatchers.IO) { resolvePreview(item) }
+        withContext(Dispatchers.IO) { resolved to buildMediaSource(resolved, requestGeneration) }
       }
+      if (requestGeneration != generation || activeItemId != item.id) return@launch
+      result
+        .onSuccess { (_, source) ->
+          if (requestGeneration != generation || activeItemId != item.id) return@onSuccess
+          playback.setMediaSource(source)
+          playback.prepare()
+          playback.playWhenReady = pagePlaybackAllowed
+        }
+        .onFailure {
+          _state.value = BangumiPreviewPlayerState.Error(item.id, "预览暂时无法播放")
+        }
+    }
   }
 
   fun setMuted(value: Boolean) {
@@ -156,11 +156,13 @@ class BangumiPreviewPlayerViewModel(application: Application) : AndroidViewModel
   }
 
   fun pauseForInactivePage() {
+    pagePlaybackAllowed = false
     player?.pause()
   }
 
   /** Releases the decoder before a detail page starts its own global player. */
   fun stopForNavigation() {
+    pagePlaybackAllowed = false
     generation++
     loadJob?.cancel()
     loadJob = null

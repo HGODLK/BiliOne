@@ -101,6 +101,7 @@ import dev.openbili.webdemo.feed.rememberStaggeredFeedImageLoadPolicy
 import dev.openbili.webdemo.article.ArticleCard
 import dev.openbili.webdemo.settings.AppSettings
 import dev.openbili.webdemo.ui.PressableVideoCard
+import dev.openbili.webdemo.ui.NavigationCardBottomClearance
 import dev.openbili.webdemo.ui.AvatarImage
 import dev.openbili.webdemo.ui.PullRefreshContainer
 import dev.openbili.webdemo.ui.VideoCardGradient
@@ -388,7 +389,7 @@ internal fun ProfileDynamicGrid(
         columns = StaggeredGridCells.Fixed(2),
         state = state,
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(bottom = 112.dp),
+        contentPadding = PaddingValues(bottom = NavigationCardBottomClearance),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalItemSpacing = 12.dp,
         ) {
@@ -1309,7 +1310,11 @@ private fun DynamicDetail(
                 top = 18.dp,
                 bottom =
                   with(LocalDensity.current) {
-                    maxOf(112.dp.toPx(), composerHeightPx + 18.dp.toPx()).toDp()
+                    maxOf(
+                        NavigationCardBottomClearance.toPx(),
+                        composerHeightPx + 18.dp.toPx(),
+                      )
+                      .toDp()
                   },
               ),
             verticalArrangement = Arrangement.spacedBy(10.dp),

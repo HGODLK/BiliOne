@@ -1,7 +1,10 @@
 package dev.openbili.webdemo.ui
 
 import androidx.compose.ui.geometry.Rect
+import dev.openbili.webdemo.api.SpaceCollectionType
+import dev.openbili.webdemo.api.SpaceContentCard
 import dev.openbili.webdemo.api.SpaceDynamicItem
+import dev.openbili.webdemo.feed.FeedItem
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -137,5 +140,46 @@ class ProfileDynamicRestoreTest {
     assertEquals("next", state.spaceDynamicOffset)
     assertEquals(true, state.spaceDynamicHasMore)
     assertEquals(dynamic.id, state.selectedDynamicId)
+  }
+
+  @Test
+  fun `profile snapshot restores opened collection detail and paging state`() {
+    val state = AppRootProfileState()
+    val collection =
+      SpaceContentCard(
+        id = "seasons_list:8454680",
+        title = "合集·回家吃饭系列",
+        collectionId = 8454680L,
+        collectionType = SpaceCollectionType.SEASON,
+        collectionTotal = 35,
+      )
+    val video =
+      FeedItem(
+        id = "BV1DETAIL123",
+        title = "合集视频",
+        videoUrl = "https://www.bilibili.com/video/BV1DETAIL123",
+        coverUrl = "https://i0.hdslb.com/detail.jpg",
+        uploader = "作者",
+        playCount = "88",
+        duration = "04:18",
+      )
+    state.profileMid = 42L
+    state.spaceCollections = listOf(collection)
+    state.selectedCollectionId = collection.id
+    state.spaceCollectionVideos = listOf(video)
+    state.spaceCollectionPage = 2
+    state.spaceCollectionHasMore = true
+    state.spaceCollectionTotal = 35
+
+    val snapshot = state.snapshotProfile(42L)
+    state.prepareProfile(7L) {}
+    state.restoreProfile(snapshot)
+
+    assertEquals(listOf(collection), state.spaceCollections)
+    assertEquals(collection.id, state.selectedCollectionId)
+    assertEquals(listOf(video), state.spaceCollectionVideos)
+    assertEquals(2, state.spaceCollectionPage)
+    assertTrue(state.spaceCollectionHasMore)
+    assertEquals(35, state.spaceCollectionTotal)
   }
 }

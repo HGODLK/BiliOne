@@ -41,6 +41,10 @@ object BiliApi {
   @Volatile private var wbiKeys: WbiKeys? = null
   private val danmakuLock = Any()
   private val danmakuCache = LinkedHashMap<DanmakuCacheKey, List<DanmakuItem>>(16, .75f, true)
+  private val danmakuSegmentCache =
+    LinkedHashMap<DanmakuSegmentCacheKey, List<DanmakuItem>>(24, .75f, true)
+  private val danmakuSegmentRequests =
+    ConcurrentHashMap<DanmakuSegmentCacheKey, CompletableFuture<List<DanmakuItem>>>()
   private const val VIDEO_INFO_CACHE_TTL_MS = 2 * 60 * 1000L
   private const val VIDEO_INFO_CACHE_LIMIT = 64
   private val videoInfoCache = ConcurrentHashMap<String, CachedVideoInfo>()
@@ -81,6 +85,149 @@ object BiliApi {
       }
     }
     return FeedResponse(cards)
+  }
+
+  fun getPopularWeeklyPeriods(): List<PopularPeriod> {
+    val json =
+      getPublicJson(
+        "https://api.bilibili.com/x/web-interface/popular/series/list",
+        "每周必看期数",
+      )
+    val list = json.optJSONObject("data")?.optJSONArray("list") ?: return emptyList()
+    return buildList {
+        for (index in 0 until list.length()) {
+          val item = list.optJSONObject(index) ?: continue
+          val number = item.optInt("number")
+          if (number <= 0) continue
+          add(
+            PopularPeriod(
+              id = number,
+              label = "第${number}期",
+              subject = item.optString("subject"),
+            )
+          )
+        }
+      }
+      .sortedByDescending(PopularPeriod::id)
+  }
+
+  fun getPopularWeekly(number: Int): FeedResponse =
+    getStandardPopularList(
+      "https://api.bilibili.com/x/web-interface/popular/series/one?number=$number",
+      "每周必看",
+    )
+
+  fun getPopularPrecious(): FeedResponse =
+    getStandardPopularList(
+      "https://api.bilibili.com/x/web-interface/popular/precious",
+      "入站必刷",
+    )
+
+  fun getPopularRanking(rid: Int): FeedResponse =
+    getStandardPopularList(
+      "https://api.bilibili.com/x/web-interface/ranking/v2?rid=$rid&type=all",
+      "排行榜",
+    )
+
+  fun getPopularMusicPeriods(): List<PopularPeriod> {
+    val json =
+      getPublicJson(
+        "https://api.bilibili.com/x/copyright-music-publicity/toplist/all_period" +
+          "?list_type=1&position_id=8",
+        "全站音乐榜期数",
+      )
+    val years = json.optJSONObject("data")?.optJSONObject("list") ?: return emptyList()
+    return buildList {
+        val keys = years.keys()
+        while (keys.hasNext()) {
+          val entries = years.optJSONArray(keys.next()) ?: continue
+          for (index in 0 until entries.length()) {
+            val item = entries.optJSONObject(index) ?: continue
+            val id = item.optInt("ID")
+            val issue = item.optInt("priod")
+            if (id <= 0 || issue <= 0) continue
+            add(
+              PopularPeriod(
+                id = id,
+                label = "第${issue}期",
+                publishedAt = item.optLong("publish_time"),
+              )
+            )
+          }
+        }
+      }
+      .sortedWith(
+        compareByDescending<PopularPeriod> { it.publishedAt }.thenByDescending { it.id }
+      )
+  }
+
+  fun getPopularMusic(listId: Int): FeedResponse {
+    val json =
+      getPublicJson(
+        "https://api.bilibili.com/x/copyright-music-publicity/toplist/music_list" +
+          "?list_type=1&position_id=8&list_id=$listId",
+        "全站音乐榜",
+      )
+    val list = json.optJSONObject("data")?.optJSONArray("list") ?: return FeedResponse(emptyList())
+    val cards =
+      buildList {
+        for (index in 0 until list.length()) {
+          val item = list.optJSONObject(index) ?: continue
+          val aid = item.optLong("creation_aid")
+          val bvid = item.optString("creation_bvid")
+          if (aid <= 0L || bvid.isBlank()) continue
+          add(
+            FeedCard(
+              aid = aid,
+              bvid = bvid,
+              cid = item.optLong("creation_first_cid"),
+              title = item.optString("creation_title").ifBlank { item.optString("music_title") },
+              coverUrl = item.optString("creation_cover").ifBlank { item.optString("mv_cover") },
+              uploaderName = item.optString("creation_nickname"),
+              uploaderFace = "",
+              uploaderMid = item.optLong("creation_up"),
+              playCount = item.optLong("creation_play"),
+              danmakuCount = 0,
+              durationSeconds = item.optLong("creation_duration"),
+              pubdate = 0,
+              description =
+                item.optString("recommendation").ifBlank {
+                  buildList {
+                      item.optString("music_title").takeIf(String::isNotBlank)?.let(::add)
+                      item.optString("singer").takeIf(String::isNotBlank)?.let(::add)
+                    }
+                    .joinToString(" · ")
+                },
+            )
+          )
+        }
+      }
+    return FeedResponse(cards)
+  }
+
+  private fun getStandardPopularList(url: String, label: String): FeedResponse {
+    val json = getPublicJson(url, label)
+    val list = json.optJSONObject("data")?.optJSONArray("list")
+    val cards = mutableListOf<FeedCard>()
+    if (list != null) {
+      for (index in 0 until list.length()) {
+        runCatching { FeedCard.fromJson(list.getJSONObject(index)) }
+          .onSuccess { cards.add(it) }
+          .onFailure { Log.w(TAG, "$label skip card: ${it.message}") }
+      }
+    }
+    return FeedResponse(cards)
+  }
+
+  private fun getPublicJson(url: String, label: String): JSONObject {
+    val response = BiliHttpClient.get(url)
+    val body = response.body?.string().orEmpty()
+    response.close()
+    val json = JSONObject(body)
+    if (json.optInt("code") != 0) {
+      throw IllegalStateException("$label：${json.optString("message", "加载失败")}")
+    }
+    return json
   }
 
   /**
@@ -625,6 +772,50 @@ object BiliApi {
       loaded
     }
 
+  internal fun getDanmakuSegment(cid: Long, segmentIndex: Int): List<DanmakuItem> {
+    require(cid > 0L) { "Invalid danmaku cid" }
+    require(segmentIndex in 1..MAX_DANMAKU_SEGMENTS) { "Invalid danmaku segment index" }
+    val key = DanmakuSegmentCacheKey(cid, segmentIndex)
+    synchronized(danmakuLock) {
+      danmakuSegmentCache[key]?.let {
+        return it
+      }
+    }
+
+    val request = CompletableFuture<List<DanmakuItem>>()
+    danmakuSegmentRequests.putIfAbsent(key, request)?.let {
+      return it.get()
+    }
+    try {
+      val url =
+        "https://api.bilibili.com/x/v2/dm/web/seg.so" +
+          "?type=1&oid=$cid&segment_index=$segmentIndex"
+      val result = fetchDanmakuProtobuf(url, cid, "segment=$segmentIndex")
+      val loaded =
+        if (result.httpCode in 200..299) {
+          result.items
+        } else if (segmentIndex == 1) {
+          val legacy = fetchDanmakuXml("https://api.bilibili.com/x/v1/dm/list.so?oid=$cid", cid)
+          legacy.items.filter { it.timeMs in 0 until DANMAKU_SEGMENT_SECONDS * 1_000L }
+        } else {
+          emptyList()
+        }
+      synchronized(danmakuLock) {
+        danmakuSegmentCache[key] = loaded
+        while (danmakuSegmentCache.size > MAX_DANMAKU_SEGMENT_CACHE) {
+          danmakuSegmentCache.remove(danmakuSegmentCache.keys.first())
+        }
+      }
+      request.complete(loaded)
+      return loaded
+    } catch (error: Throwable) {
+      request.completeExceptionally(error)
+      throw error
+    } finally {
+      danmakuSegmentRequests.remove(key, request)
+    }
+  }
+
   private fun fetchCurrentDanmaku(cid: Long, durationSeconds: Long): List<DanmakuItem> {
     val segmented = fetchCurrentDanmakuSegments(cid, durationSeconds)
     val primary = fetchDanmakuXml("https://api.bilibili.com/x/v1/dm/list.so?oid=$cid", cid)
@@ -864,6 +1055,8 @@ object BiliApi {
 
   private data class DanmakuCacheKey(val cid: Long, val includeHistory: Boolean)
 
+  private data class DanmakuSegmentCacheKey(val cid: Long, val segmentIndex: Int)
+
   private data class DanmakuIdentity(
     val sourceId: String?,
     val timeMs: Long,
@@ -897,6 +1090,8 @@ object BiliApi {
 
   private fun Long.toSafeMapCapacity(): Int =
     takeIf { it in 1..MAX_DANMAKU_MAP_CAPACITY.toLong() }?.toInt() ?: 16
+
+  private const val MAX_DANMAKU_SEGMENT_CACHE = 48
 
   private fun inflate(bytes: ByteArray): String {
     fun decode(inflater: Inflater) =
@@ -1358,9 +1553,10 @@ object BiliApi {
   private fun requireCsrf(): String =
     BiliHttpClient.cookieValue("bili_jct") ?: throw IllegalStateException("请先登录")
 
-  private fun parseComment(r: JSONObject): CommentItem {
+  internal fun parseComment(r: JSONObject): CommentItem {
     val member = r.optJSONObject("member") ?: JSONObject()
     val content = r.optJSONObject("content") ?: JSONObject()
+    val upAction = r.optJSONObject("up_action")
     return CommentItem(
       rpid = r.getLong("rpid"),
       mid = r.getLong("mid"),
@@ -1378,6 +1574,8 @@ object BiliApi {
       level = member.optJSONObject("level_info")?.optInt("current_level", 0) ?: 0,
       vipActive = member.optJSONObject("vip")?.optInt("vipStatus", 0) == 1,
       vipLabel = member.optJSONObject("vip")?.optJSONObject("label")?.optString("text").orEmpty(),
+      upLiked = upAction?.optBoolean("like", false) == true,
+      upReplied = upAction?.optBoolean("reply", false) == true,
     )
   }
 
@@ -1843,32 +2041,113 @@ object BiliApi {
   }
 
   fun getSpaceCollections(mid: Long): List<SpaceContentCard> {
-    val resp =
-      BiliHttpClient.get(
-        "https://api.bilibili.com/x/polymer/web-space/seasons_series_list?mid=$mid&page_num=1&page_size=30"
-      )
+    val resp = BiliHttpClient.get(spaceCollectionsUrl(mid))
     val json = JSONObject(resp.body?.string().orEmpty())
     resp.close()
     if (json.optInt("code") != 0) throw IllegalStateException(json.optString("message"))
+    return parseSpaceCollections(json)
+  }
+
+  internal fun spaceCollectionsUrl(mid: Long): String {
+    require(mid > 0L) { "用户 UID 无效" }
+    // The endpoint rejects page_size values above 20 with code -400.
+    return "https://api.bilibili.com/x/polymer/web-space/seasons_series_list" +
+      "?mid=$mid&page_num=1&page_size=20"
+  }
+
+  internal fun parseSpaceCollections(json: JSONObject): List<SpaceContentCard> {
     val data = json.optJSONObject("data") ?: return emptyList()
+    // Current web responses nest both lists under items_lists. Keep the old shape as a fallback
+    // so cached/proxied responses from the previous endpoint contract remain readable.
+    val lists = data.optJSONObject("items_lists") ?: data
     return buildList {
       listOf("seasons_list", "series_list").forEach { key ->
-        val array = data.optJSONArray(key) ?: return@forEach
+        val array = lists.optJSONArray(key) ?: return@forEach
         for (i in 0 until array.length()) {
           val row = array.optJSONObject(i) ?: continue
           val meta = row.optJSONObject("meta") ?: row
+          val collectionType =
+            if (key == "seasons_list") SpaceCollectionType.SEASON else SpaceCollectionType.SERIES
+          val collectionId =
+            if (collectionType == SpaceCollectionType.SEASON) meta.optLong("season_id")
+            else meta.optLong("series_id")
           add(
             SpaceContentCard(
-              id = "$key:${meta.optLong("season_id", meta.optLong("series_id", i.toLong()))}",
+              id = "$key:${collectionId.takeIf { it > 0L } ?: i.toLong()}",
               title = meta.optString("name", meta.optString("title", "合集或系列")),
               subtitle = meta.optString("description"),
               coverUrl =
                 dev.openbili.webdemo.UrlPolicy.normalizeImageUrl(meta.optString("cover")).orEmpty(),
+              collectionId = collectionId,
+              collectionType = collectionType,
+              collectionTotal = meta.optInt("total"),
             )
           )
         }
       }
     }
+  }
+
+  fun getSpaceCollectionVideos(
+    mid: Long,
+    collection: SpaceContentCard,
+    page: Int,
+  ): SpaceCollectionVideoResponse {
+    val pageSize = 30
+    val resp = BiliHttpClient.get(spaceCollectionVideosUrl(mid, collection, page, pageSize))
+    val json = JSONObject(resp.body?.string().orEmpty())
+    resp.close()
+    if (json.optInt("code") != 0) throw IllegalStateException(json.optString("message"))
+    return parseSpaceCollectionVideos(json, page, pageSize)
+  }
+
+  internal fun spaceCollectionVideosUrl(
+    mid: Long,
+    collection: SpaceContentCard,
+    page: Int,
+    pageSize: Int = 30,
+  ): String {
+    require(mid > 0L) { "用户 UID 无效" }
+    require(collection.collectionId > 0L) { "合集或系列标识无效" }
+    require(page > 0 && pageSize in 1..30) { "合集或系列页码无效" }
+    return when (collection.collectionType) {
+      SpaceCollectionType.SEASON ->
+        "https://api.bilibili.com/x/polymer/web-space/seasons_archives_list" +
+          "?mid=$mid&season_id=${collection.collectionId}&sort_reverse=false" +
+          "&page_num=$page&page_size=$pageSize"
+      SpaceCollectionType.SERIES ->
+        "https://api.bilibili.com/x/series/archives" +
+          "?mid=$mid&current_mid=0&series_id=${collection.collectionId}" +
+          "&only_normal=true&sort=desc&pn=$page&ps=$pageSize"
+    }
+  }
+
+  internal fun parseSpaceCollectionVideos(
+    json: JSONObject,
+    requestedPage: Int,
+    requestedPageSize: Int,
+  ): SpaceCollectionVideoResponse {
+    val data =
+      json.optJSONObject("data") ?: return SpaceCollectionVideoResponse(emptyList(), false, 0)
+    val array = data.optJSONArray("archives")
+    val cards = buildList {
+      if (array != null) {
+        for (i in 0 until array.length()) {
+          runCatching { FeedCard.fromJson(array.getJSONObject(i)) }
+            .onSuccess { if (it.bvid.isNotBlank() || it.aid > 0L) add(it) }
+        }
+      }
+    }
+    val page = data.optJSONObject("page")
+    val pageNumber = page?.optInt("page_num", page.optInt("num", requestedPage)) ?: requestedPage
+    val pageSize =
+      page?.optInt("page_size", page.optInt("size", requestedPageSize)) ?: requestedPageSize
+    val total = page?.optInt("total", cards.size) ?: cards.size
+    return SpaceCollectionVideoResponse(
+      cards = cards,
+      hasMore = pageNumber * pageSize < total,
+      total = total,
+    )
   }
 
   fun getSpaceBangumi(
@@ -1945,10 +2224,13 @@ object BiliApi {
       .associateBy { it.seasonId }
     val historyBySeason = linkedMapOf<Long, SpaceContentCard>()
     val historyWithoutSeason = linkedMapOf<String, SpaceContentCard>()
-    history.filter { it.seasonType == seasonType }.forEach { card ->
-      if (card.seasonId > 0L) historyBySeason.putIfAbsent(card.seasonId, card)
-      else historyWithoutSeason.putIfAbsent(card.id, card)
-    }
+    history
+      .filter { it.seasonType == seasonType }
+      .sortedByDescending(SpaceContentCard::lastViewedAt)
+      .forEach { card ->
+        if (card.seasonId > 0L) historyBySeason.putIfAbsent(card.seasonId, card)
+        else historyWithoutSeason.putIfAbsent(card.id, card)
+      }
     val merged = buildList {
       historyBySeason.values.forEach { watched ->
         val followedCard = followedBySeason[watched.seasonId]
@@ -1958,20 +2240,27 @@ object BiliApi {
             hasHistory = true,
             historicalOnly = true,
           )
-          else followedCard.copy(
-            subtitle = watched.subtitle.ifBlank { followedCard.subtitle },
-            coverUrl =
-              watched.historyCoverUrl
-                .ifBlank { watched.coverUrl }
-                .ifBlank { followedCard.coverUrl },
-            videoUrl = watched.videoUrl.ifBlank { followedCard.videoUrl },
-            aid = watched.aid.takeIf { it > 0L } ?: followedCard.aid,
-            bvid = watched.bvid.ifBlank { followedCard.bvid },
-            episodeId = watched.episodeId.takeIf { it > 0L } ?: 0L,
-            watchProgress = watched.watchProgress,
-            hasHistory = true,
-            historicalOnly = false,
-          )
+          else {
+            val progress = watched.watchProgress ?: followedCard.watchProgress
+            followedCard.copy(
+              subtitle = watched.subtitle.ifBlank { followedCard.subtitle },
+              coverUrl =
+                watched.historyCoverUrl
+                  .ifBlank { watched.coverUrl }
+                  .ifBlank { followedCard.coverUrl },
+              videoUrl = watched.videoUrl.ifBlank { followedCard.videoUrl },
+              aid = watched.aid.takeIf { it > 0L } ?: followedCard.aid,
+              bvid = watched.bvid.ifBlank { followedCard.bvid },
+              episodeId =
+                watched.episodeId.takeIf { it > 0L }
+                  ?: progress?.episodeId?.takeIf { it > 0L }
+                  ?: 0L,
+              watchProgress = progress,
+              hasHistory = true,
+              historicalOnly = false,
+              lastViewedAt = watched.lastViewedAt,
+            )
+          }
         )
       }
       historyWithoutSeason.values.forEach { add(it.copy(hasHistory = true, historicalOnly = true)) }
@@ -1979,14 +2268,21 @@ object BiliApi {
         if (card.seasonType != seasonType) return@forEach
         val alreadyAdded = card.seasonId > 0L && historyBySeason.containsKey(card.seasonId)
         if (!alreadyAdded) {
+          val progress = card.watchProgress
+          val progressEpisodeId = progress?.episodeId?.takeIf { it > 0L } ?: 0L
           add(
             card.copy(
-              episodeId = 0L,
-              videoUrl = card.seasonId.takeIf { it > 0L }?.let {
-                "https://www.bilibili.com/bangumi/play/ss$it"
-              }.orEmpty(),
-              watchProgress = null,
-              hasHistory = false,
+              episodeId = progressEpisodeId,
+              videoUrl =
+                when {
+                  progressEpisodeId > 0L ->
+                    "https://www.bilibili.com/bangumi/play/ep$progressEpisodeId"
+                  card.seasonId > 0L ->
+                    "https://www.bilibili.com/bangumi/play/ss${card.seasonId}"
+                  else -> ""
+                },
+              watchProgress = progress,
+              hasHistory = progress != null,
               historicalOnly = false,
             )
           )
@@ -2013,6 +2309,7 @@ object BiliApi {
           val latestEpisode = row.optJSONObject("new_ep")
           val episodeId = latestEpisode?.optLong("id") ?: 0L
           val latestLabel = latestEpisode?.optString("index_show").orEmpty()
+          val watchProgress = parseBangumiWatchProgress(row)
           add(
             SpaceContentCard(
               id = "${kind.name.lowercase()}:${seasonId.takeIf { it > 0L } ?: "${page}_$i"}",
@@ -2029,7 +2326,10 @@ object BiliApi {
               seasonId = seasonId,
               episodeId = episodeId,
               kind = kind,
-              watchProgress = parseBangumiWatchProgress(row),
+              watchProgress = watchProgress,
+              watchProgressState =
+                if (watchProgress != null) BangumiWatchProgressState.RESOLVED
+                else BangumiWatchProgressState.UNAVAILABLE,
               seasonType = row.optInt("season_type"),
             )
           )
@@ -2044,9 +2344,14 @@ object BiliApi {
     return SpaceBangumiResponse(cards, hasMore)
   }
 
-  /** Parse inline watch-progress from a follow-list row or a season/user/status response. */
+  /**
+   * Parse inline watch progress when a response actually includes it.
+   *
+   * The public space follow-list normally exposes only an empty display `progress` string and must
+   * not be treated as proof that the signed-in user has never watched the season.
+   */
   internal fun parseBangumiWatchProgress(row: JSONObject): BangumiWatchProgress? {
-    // Inline progress from follow/list: row.user_season.last_ep_id
+    // Some season-shaped responses include row.user_season.last_ep_id.
     val fromUserSeason =
       row.optJSONObject("user_season")?.let { userSeason ->
         val progress = parseBangumiWatchProgressObject(userSeason)
@@ -2997,6 +3302,76 @@ object BiliApi {
     return parseHistoryResponse(json)
   }
 
+  fun getWatchLater(): List<FeedCard> {
+    val response = BiliHttpClient.get("https://api.bilibili.com/x/v2/history/toview/web")
+    val body = response.body?.string().orEmpty()
+    response.close()
+    val json = JSONObject(body)
+    val code = json.optInt("code")
+    if (code != 0) {
+      throw IllegalStateException(json.optString("message", "稍后再看加载失败"))
+    }
+    return parseWatchLaterResponse(json)
+  }
+
+  fun addToWatchLater(aid: Long) {
+    require(aid > 0L) { "视频参数无效" }
+    postWatchLaterAction(
+      url = "https://api.bilibili.com/x/v2/history/toview/add",
+      aid = aid,
+      idempotentCode = 90001,
+      fallback = "添加到稍后再看失败",
+    )
+  }
+
+  fun removeFromWatchLater(aid: Long) {
+    require(aid > 0L) { "视频参数无效" }
+    postWatchLaterAction(
+      url = "https://api.bilibili.com/x/v2/history/toview/del",
+      aid = aid,
+      idempotentCode = 90002,
+      fallback = "移出稍后再看失败",
+    )
+  }
+
+  internal fun parseWatchLaterResponse(json: JSONObject): List<FeedCard> {
+    val list = json.optJSONObject("data")?.optJSONArray("list") ?: return emptyList()
+    return buildList {
+      for (index in 0 until list.length()) {
+        val item = list.optJSONObject(index) ?: continue
+        runCatching { FeedCard.fromJson(item) }.getOrNull()?.takeIf { it.aid > 0L }?.let(::add)
+      }
+    }
+  }
+
+  private fun postWatchLaterAction(
+    url: String,
+    aid: Long,
+    idempotentCode: Int,
+    fallback: String,
+  ) {
+    val csrf = requireCsrf()
+    val response =
+      BiliHttpClient.postForm(
+        url = url,
+        fields =
+          mapOf(
+            "aid" to aid.toString(),
+            "csrf" to csrf,
+            "csrf_token" to csrf,
+          ),
+      )
+    val body = response.body?.string().orEmpty()
+    response.close()
+    val json =
+      runCatching { JSONObject(body) }
+        .getOrElse { throw IllegalStateException("稍后再看服务暂时不可用，请稍后重试") }
+    val code = json.optInt("code")
+    if (code != 0 && code != idempotentCode) {
+      throw IllegalStateException(json.optString("message", fallback))
+    }
+  }
+
   /**
    * Reply/@ feeds only return a compact author object, which omits level and VIP state. Resolve
    * that presentation data from the lightweight user-card endpoint instead of rendering Lv0.
@@ -3244,6 +3619,7 @@ object BiliApi {
                 seasonType = seasonType,
                 hasHistory = true,
                 historicalOnly = true,
+                lastViewedAt = item.optLong("view_at"),
               )
             add(
               AccountHistoryItem.Bangumi(
@@ -3476,6 +3852,56 @@ object BiliApi {
     val json = JSONObject(resp.body?.string().orEmpty())
     resp.close()
     if (json.optInt("code") != 0) throw IllegalStateException(json.optString("message", "分组失败"))
+  }
+
+  fun getInteractionUnreadSummary(): InteractionUnreadSummary {
+    val resp =
+      BiliHttpClient.get(
+        "https://api.bilibili.com/x/msgfeed/unread?platform=web&build=0&mobi_app=web"
+      )
+    val json = JSONObject(resp.body?.string().orEmpty())
+    resp.close()
+    if (json.optInt("code") != 0) throw IllegalStateException(json.optString("message"))
+    return parseInteractionUnreadSummary(json)
+  }
+
+  internal fun parseInteractionUnreadSummary(json: JSONObject): InteractionUnreadSummary {
+    val data = json.optJSONObject("data") ?: json
+    return InteractionUnreadSummary(
+      replyCount = data.optInt("reply").coerceAtLeast(0),
+      mentionCount = data.optInt("at").coerceAtLeast(0),
+    )
+  }
+
+  fun getPrivateMessageUnreadCount(): Int {
+    val resp =
+      BiliHttpClient.get(
+        "https://api.vc.bilibili.com/session_svr/v1/session_svr/single_unread?" +
+          "unread_type=0&show_unfollow_list=1&show_dustbin=0&build=0&mobi_app=web"
+      )
+    val json = JSONObject(resp.body?.string().orEmpty())
+    resp.close()
+    if (json.optInt("code") != 0) {
+      throw IllegalStateException(json.optString("message", json.optString("msg")))
+    }
+    return parsePrivateMessageUnreadCount(json)
+  }
+
+  internal fun parsePrivateMessageUnreadCount(json: JSONObject): Int {
+    val data = json.optJSONObject("data") ?: json
+    val visibleUnreadFields =
+      listOf(
+        "follow_unread",
+        "unfollow_unread",
+        "unfollow_push_msg",
+        "biz_msg_follow_unread",
+        "biz_msg_unfollow_unread",
+        "custom_unread",
+      )
+    return visibleUnreadFields
+      .sumOf { field -> data.optLong(field).coerceAtLeast(0L) }
+      .coerceAtMost(Int.MAX_VALUE.toLong())
+      .toInt()
   }
 
   fun getReplyMessages(cursor: MessageCursor = MessageCursor()): AccountMessagePage {

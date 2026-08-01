@@ -2,6 +2,21 @@ package dev.openbili.webdemo.live
 
 const val LIVE_ORIGINAL_QN = 10_000
 
+data class LiveAreaFilter(
+  val parentAreaId: Int,
+  val areaId: Int = 0,
+  val name: String,
+  val iconUrl: String? = null,
+) {
+  val stableId: String
+    get() = "$parentAreaId:$areaId"
+}
+
+data class LiveAreaGroup(
+  val parent: LiveAreaFilter,
+  val children: List<LiveAreaFilter>,
+)
+
 data class LiveSearchRoom(
   val roomId: Long,
   val shortRoomId: Long? = null,
@@ -20,9 +35,39 @@ data class LiveSearchRoom(
     get() = "live:$roomId"
 }
 
+enum class LiveHomeSourceSection {
+  HERO,
+  FOLLOWING,
+  FEED,
+}
+
+data class LiveHomeSourceAnchor(
+  val section: LiveHomeSourceSection,
+  val roomId: Long,
+  val sectionKey: String = "",
+) {
+  val stableId: String
+    get() = "${section.name.lowercase()}:$sectionKey:$roomId"
+
+  companion object {
+    fun hero(roomId: Long) = LiveHomeSourceAnchor(LiveHomeSourceSection.HERO, roomId)
+
+    fun following(roomId: Long) =
+      LiveHomeSourceAnchor(LiveHomeSourceSection.FOLLOWING, roomId)
+
+    fun feed(roomId: Long, areaKey: String) =
+      LiveHomeSourceAnchor(LiveHomeSourceSection.FEED, roomId, areaKey)
+  }
+}
+
 data class LiveSearchResponse(
   val rooms: List<LiveSearchRoom>,
   val hasMore: Boolean,
+)
+
+data class LiveFollowingResponse(
+  val isLoggedIn: Boolean,
+  val rooms: List<LiveSearchRoom>,
 )
 
 data class LiveRoomInfo(
@@ -60,6 +105,7 @@ data class LiveStreamSource(
   val url: String,
   val format: LiveStreamFormat,
   val codec: String,
+  val cdnIndex: Int = 0,
 )
 
 data class LivePlayInfo(
@@ -97,6 +143,7 @@ enum class LiveEmojiKind {
 
 data class LiveEmoji(
   val displayName: String,
+  val inputText: String,
   val sendToken: String,
   val fileId: String?,
   val imageUrl: String,
@@ -194,8 +241,8 @@ data class LiveChatMessage(
 
 /**
  * A display-only live danmaku event. Its clock is deliberately captured when the socket event
- * reaches this client rather than from the server's chat timestamp, which can already be stale
- * by the time it is rendered.
+ * reaches this client rather than from the server's chat timestamp, which can already be stale by
+ * the time it is rendered.
  */
 data class LiveDanmakuEvent(
   val stableId: String,
@@ -273,6 +320,7 @@ data class LiveComposerState(
 
 data class LiveRoomUiState(
   val entryRoomId: Long = 0L,
+  val navigationEntryId: Long = 0L,
   val generation: Long = 0L,
   val roomInfo: LiveRoomInfo? = null,
   val anchorInfo: LiveAnchorInfo? = null,
@@ -294,6 +342,9 @@ data class LiveRoomUiState(
   val activeMedal: FanMedalBadge? = null,
   val interactiveLottery: LiveInteractiveLottery? = null,
   val composer: LiveComposerState = LiveComposerState(),
+  val recommendations: List<LiveSearchRoom> = emptyList(),
+  val recommendationsLoading: Boolean = false,
+  val recommendationsError: String? = null,
   val rankTab: LiveRankTab = LiveRankTab.AUDIENCE,
   val audienceRank: LiveAudienceRankState = LiveAudienceRankState(),
   val guardRank: LiveGuardRankState = LiveGuardRankState(),

@@ -129,6 +129,7 @@ fun BottomCapsule(
   onInteractionEnd: () -> Unit = {},
   dragEnabled: Boolean = true,
 ) {
+  val glassEffectsEnabled = LocalGlassEffectsEnabled.current
   var contentBounds by remember { mutableStateOf(Rect.Zero) }
   var dragPosition by remember { mutableStateOf<Float?>(null) }
   var selectionTravelPx by remember { mutableFloatStateOf(1f) }
@@ -170,7 +171,7 @@ fun BottomCapsule(
           )
         }
     ) {
-      val layer = backdropLayer
+      val layer = backdropLayer.takeIf { glassEffectsEnabled }
       if (layer != null && contentBounds.width > 0f && contentBounds.height > 0f) {
         Canvas(Modifier.matchParentSize().clip(CircleShape).blur(14.dp)) {
           translate(left = -contentBounds.left, top = -contentBounds.top) {
@@ -181,12 +182,14 @@ fun BottomCapsule(
       Box(
         Modifier.matchParentSize()
           .clip(CircleShape)
-          .background(MaterialTheme.colorScheme.surface.copy(alpha = .48f))
+          .background(
+            MaterialTheme.colorScheme.surface.copy(alpha = if (glassEffectsEnabled) .48f else .97f)
+          )
       )
       Box(
-        Modifier.padding(6.dp)
-          .size(width = 426.dp, height = 68.dp)
-          .onSizeChanged { selectionTravelPx = (it.width / 3f).coerceAtLeast(1f) }
+        Modifier.padding(6.dp).size(width = 426.dp, height = 68.dp).onSizeChanged {
+          selectionTravelPx = (it.width / 3f).coerceAtLeast(1f)
+        }
       ) {
         Box(
           Modifier.width(142.dp)

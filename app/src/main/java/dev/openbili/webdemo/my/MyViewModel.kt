@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.openbili.webdemo.api.AccountHistoryItem
@@ -36,11 +37,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 
 enum class MySection(val label: String) {
   FAVORITES("我的收藏"),
   HISTORY("历史记录"),
+  WATCH_LATER("稍后再看"),
   FOLLOWING("我的关注"),
   MESSAGES("我的消息"),
   INTERACTIONS("回复或@我的"),
@@ -50,6 +53,15 @@ enum class MySection(val label: String) {
 private const val PRIVATE_MESSAGE_SYNC_INTERVAL_MS = 800L
 private const val PRIVATE_SESSION_PAGE_SIZE = 18
 private const val PRIVATE_HISTORY_PAGE_SIZE = 15
+private const val ACCOUNT_UNREAD_REFRESH_INTERVAL_MS = 5_000L
+private const val MY_VIEW_MODEL_TAG = "MyViewModel"
+
+internal fun accountUnreadRetryDelayMs(consecutiveFailures: Int): Long =
+  when {
+    consecutiveFailures <= 1 -> 5_000L
+    consecutiveFailures == 2 -> 10_000L
+    else -> 30_000L
+  }
 
 internal fun privateConversationSession(
   userMid: Long,
@@ -221,6 +233,8 @@ data class MyUiState(
   val unfollowedIds: Set<Long> = emptySet(),
   val messages: List<AccountMessage> = emptyList(),
   val selectedMessageId: Long? = null,
+  val privateMessageUnreadCount: Int = 0,
+  val interactionUnreadCount: Int = 0,
   val privateMessageHistory: Map<Long, List<AccountMessage>> = emptyMap(),
   val privateMessagesLoading: Boolean = false,
   val privateHistoryHasMore: Boolean = false,
@@ -238,6 +252,25 @@ data class MyUiState(
   val loading: Boolean = false,
   val error: String? = null,
 )
+
+internal fun MyUiState.hasUnread(section: MySection): Boolean =
+  when (section) {
+    MySection.MESSAGES -> privateMessageUnreadCount > 0
+    MySection.INTERACTIONS -> interactionUnreadCount > 0
+    else -> false
+  }
+
+internal fun resolvedPrivateMessageUnreadCount(
+  section: MySection,
+  privateMessagesLoaded: Boolean,
+  cachedUnreadCount: Int,
+  serverUnreadCount: Int,
+): Int =
+  if (section == MySection.MESSAGES && privateMessagesLoaded) {
+    cachedUnreadCount
+  } else {
+    serverUnreadCount
+  }
 
 internal fun favoriteFoldersAfterAction(
   folders: List<FavoriteFolder>,
@@ -276,6 +309,10 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
   private var privateHistoryJob: Job? = null
   private var privateSessionLoadMoreJob: Job? = null
   private var privateMessageRealtimeJob: Job? = null
+  private var unreadLoadJob: Job? = null
+  private var unreadMonitorJob: Job? = null
+  @Volatile private var unreadMonitoringActive = false
+  private val unreadRequestMutex = kotlinx.coroutines.sync.Mutex()
   private var privateMessagesLoaded = false
   private var privateMessagesCache: List<AccountMessage> = emptyList()
   private var privateMessageHistoryCache: Map<Long, List<AccountMessage>> = emptyMap()
@@ -298,6 +335,8 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
     privateHistoryJob?.cancel()
     privateSessionLoadMoreJob?.cancel()
     privateMessageRealtimeJob?.cancel()
+    unreadLoadJob?.cancel()
+    unreadMonitorJob?.cancel()
     privateMessagesLoaded = false
     privateMessagesCache = emptyList()
     privateMessageHistoryCache = emptyMap()
@@ -309,6 +348,7 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
     this.mid = mid
     if (mid > 0 && loadInitialSection) select(MySection.HISTORY)
     else _state.value = MyUiState()
+    if (mid > 0L && unreadMonitoringActive) startUnreadMonitor()
   }
 
   /** Search debounce and pagination are disposable while the root pager is in motion. */
@@ -359,6 +399,111 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
       startPrivateMessageRealtime(loadGeneration, mid)
     }
   }
+
+  fun refreshUnreadStatus() {
+    val expectedMid = mid
+    if (expectedMid <= 0L) {
+      _state.value =
+        _state.value.copy(privateMessageUnreadCount = 0, interactionUnreadCount = 0)
+      return
+    }
+    unreadLoadJob?.cancel()
+    unreadLoadJob =
+      viewModelScope.launch {
+        requestUnreadStatus(expectedMid)
+      }
+  }
+
+  fun setUnreadMonitoringActive(active: Boolean) {
+    if (unreadMonitoringActive == active) {
+      if (active && unreadMonitorJob?.isActive != true) startUnreadMonitor()
+      return
+    }
+    unreadMonitoringActive = active
+    if (active) {
+      startUnreadMonitor()
+    } else {
+      unreadMonitorJob?.cancel()
+      unreadMonitorJob = null
+      unreadLoadJob?.cancel()
+      unreadLoadJob = null
+    }
+  }
+
+  fun onUnreadNetworkAvailable() {
+    if (unreadMonitoringActive && mid > 0L) refreshUnreadStatus()
+  }
+
+  private fun startUnreadMonitor() {
+    unreadMonitorJob?.cancel()
+    val expectedMid = mid
+    if (!unreadMonitoringActive || expectedMid <= 0L) {
+      unreadMonitorJob = null
+      return
+    }
+    unreadMonitorJob =
+      viewModelScope.launch {
+        var consecutiveFailures = 0
+        while (unreadMonitoringActive && mid == expectedMid) {
+          val succeeded = requestUnreadStatus(expectedMid)
+          consecutiveFailures = if (succeeded) 0 else consecutiveFailures + 1
+          delay(
+            if (succeeded) ACCOUNT_UNREAD_REFRESH_INTERVAL_MS
+            else accountUnreadRetryDelayMs(consecutiveFailures)
+          )
+        }
+      }
+  }
+
+  private suspend fun requestUnreadStatus(expectedMid: Long): Boolean =
+    unreadRequestMutex.withLock {
+      val (privateMessageCount, interactionSummary) =
+        coroutineScope {
+          val privateMessageRequest =
+            async(Dispatchers.IO) {
+              try {
+                BiliApi.getPrivateMessageUnreadCount()
+              } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+              } catch (error: Exception) {
+                Log.w(MY_VIEW_MODEL_TAG, "Unable to refresh private-message unread count", error)
+                null
+              }
+            }
+          val interactionRequest =
+            async(Dispatchers.IO) {
+              try {
+                BiliApi.getInteractionUnreadSummary()
+              } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+              } catch (error: Exception) {
+                Log.w(MY_VIEW_MODEL_TAG, "Unable to refresh interaction unread count", error)
+                null
+              }
+            }
+          privateMessageRequest.await() to interactionRequest.await()
+        }
+      if (privateMessageCount == null && interactionSummary == null) return@withLock false
+      if (mid != expectedMid) return@withLock false
+      val current = _state.value
+      _state.value =
+        current.copy(
+          privateMessageUnreadCount =
+            privateMessageCount?.let { serverUnreadCount ->
+              resolvedPrivateMessageUnreadCount(
+                section = current.section,
+                privateMessagesLoaded = privateMessagesLoaded,
+                cachedUnreadCount = privateMessagesCache.sumOf(AccountMessage::unreadCount),
+                serverUnreadCount = serverUnreadCount,
+              )
+            } ?: current.privateMessageUnreadCount,
+          interactionUnreadCount =
+            interactionSummary?.let { summary ->
+              if (current.section == MySection.INTERACTIONS) 0 else summary.interactionCount
+            } ?: current.interactionUnreadCount,
+        )
+      privateMessageCount != null && interactionSummary != null
+    }
 
   fun select(section: MySection) {
     if (
@@ -426,12 +571,10 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
         loading = false,
         error = null,
       )
-    if (mid <= 0 || section == MySection.SETTINGS) return
+    if (mid <= 0 || section == MySection.SETTINGS || section == MySection.WATCH_LATER) return
     loadJob = viewModelScope.launch {
       _state.value =
-        _state.value.copy(
-          loading = !(section == MySection.MESSAGES && privateMessagesLoaded)
-        )
+        _state.value.copy(loading = !(section == MySection.MESSAGES && privateMessagesLoaded))
       try {
         when (section) {
           MySection.FAVORITES -> {
@@ -578,12 +721,14 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
                 messageAtCursor = page.atCursor,
                 messageReplyHasMore = page.replyHasMore,
                 messageAtHasMore = page.atHasMore,
+                interactionUnreadCount = 0,
                 messageEmotePackages = emotes,
                 loading = false,
               )
             messageEmoteCache = emotes
             enrichInteractionUserStyles(page.items, generation, expectedMid)
           }
+          MySection.WATCH_LATER -> Unit
           MySection.SETTINGS -> Unit
         }
       } catch (error: Exception) {
@@ -597,7 +742,9 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
 
   fun refresh() {
     val section = _state.value.section
-    if (section == MySection.SETTINGS || mid <= 0L) return
+    if (mid <= 0L) return
+    refreshUnreadStatus()
+    if (section == MySection.SETTINGS || section == MySection.WATCH_LATER) return
     commitPendingUnfollows()
     if (section == MySection.FAVORITES && _state.value.selectedFolderId != null) {
       favoriteSearchJob?.cancel()
@@ -820,6 +967,7 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
     _state.value =
       _state.value.copy(
         messages = merged,
+        privateMessageUnreadCount = merged.sumOf(AccountMessage::unreadCount),
         privateMessageHistory = privateMessageHistoryCache,
       )
     return merged
@@ -833,7 +981,11 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
         privateMessagesCache.map { message ->
           if (message.id == sessionId) message.copy(unreadCount = 0) else message
         }
-      _state.value = _state.value.copy(messages = privateMessagesCache)
+      _state.value =
+        _state.value.copy(
+          messages = privateMessagesCache,
+          privateMessageUnreadCount = privateMessagesCache.sumOf(AccountMessage::unreadCount),
+        )
     }
     if (session.sequence <= 0L) return
     viewModelScope.launch {
@@ -852,9 +1004,13 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
               message
             }
           }
-        if (_state.value.section == MySection.MESSAGES) {
-          _state.value = _state.value.copy(messages = privateMessagesCache)
-        }
+        val current = _state.value
+        _state.value =
+          current.copy(
+            messages =
+              if (current.section == MySection.MESSAGES) privateMessagesCache else current.messages,
+            privateMessageUnreadCount = privateMessagesCache.sumOf(AccountMessage::unreadCount),
+          )
       }
     }
   }

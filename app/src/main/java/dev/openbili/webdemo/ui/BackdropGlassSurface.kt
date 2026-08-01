@@ -4,6 +4,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -44,11 +45,15 @@ fun BackdropGlassSurface(
   sampleOriginInRoot: Offset? = null,
   content: @Composable () -> Unit,
 ) {
+  val glassEffectsEnabled = LocalGlassEffectsEnabled.current
+  val resolvedContainerColor =
+    if (glassEffectsEnabled) containerColor else MaterialTheme.colorScheme.surface
   var surfaceBounds by remember { mutableStateOf(Rect.Zero) }
   Surface(
     modifier = modifier.onGloballyPositioned { surfaceBounds = it.boundsInRoot() },
     shape = shape,
     color = Color.Transparent,
+    contentColor = MaterialTheme.colorScheme.onSurface,
     border = border,
     tonalElevation = tonalElevation,
     shadowElevation = shadowElevation,
@@ -57,7 +62,8 @@ fun BackdropGlassSurface(
       val layer = backdropLayer
       val sampleOrigin = sampleOriginInRoot ?: surfaceBounds.topLeft
       if (
-        layer != null &&
+        glassEffectsEnabled &&
+          layer != null &&
           backdropBounds.width > 0f &&
           backdropBounds.height > 0f &&
           (sampleOriginInRoot != null || surfaceBounds.width > 0f)
@@ -71,7 +77,7 @@ fun BackdropGlassSurface(
           }
         }
       }
-      Box(Modifier.matchParentSize().clip(shape).background(containerColor))
+      Box(Modifier.matchParentSize().clip(shape).background(resolvedContainerColor))
       content()
     }
   }

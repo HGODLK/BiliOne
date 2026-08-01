@@ -1,6 +1,8 @@
 package dev.openbili.webdemo.ui
 
 import android.content.Context
+import android.graphics.BitmapFactory
+import android.net.Uri
 import android.widget.Toast
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -222,6 +224,478 @@ internal class AppRootVideoState {
     }
   }
 
+  fun loadMoreComments(
+    item: FeedItem,
+    selectedVideoUrl: () -> String?,
+    scope: CoroutineScope,
+  ) {
+    if (commentsLoading || commentOid == 0L || !commentHasMore) return
+    val expectedUrl = item.videoUrl
+    val expectedOid = commentOid
+    val expectedSort = commentSort
+    val next =
+      if (expectedSort == CommentSort.TIME) {
+        dev.openbili.webdemo.api.commentTimeNextPage(commentPage)
+      } else {
+        commentPage + 1
+      }
+    commentsLoading = true
+    scope.launch {
+      try {
+        val response =
+          withContext(Dispatchers.IO) {
+            BiliApi.getComments(expectedOid, next, expectedSort.apiValue)
+          }
+        if (
+          selectedVideoUrl() != expectedUrl ||
+            commentOid != expectedOid ||
+            commentSort != expectedSort
+        ) {
+          return@launch
+        }
+        val combined = (commentItems + response.items).distinctBy { it.rpid }
+        commentItems =
+          if (expectedSort == CommentSort.TIME) orderCommentsByTime(combined) else combined
+        commentHasMore =
+          if (expectedSort == CommentSort.TIME) {
+            commentTimeHasMore(next, response.totalCount)
+          } else {
+            response.hasMore
+          }
+        commentPage = next
+      } finally {
+        if (selectedVideoUrl() == expectedUrl) commentsLoading = false
+      }
+    }
+  }
+
+  fun refreshComments(
+    item: FeedItem,
+    selectedVideoId: () -> String?,
+    scope: CoroutineScope,
+  ) {
+    if (commentsRefreshing || commentsLoading || commentOid <= 0L) return
+    val expectedItemId = item.id
+    val expectedOid = commentOid
+    val expectedSort = commentSort
+    val targetPage = if (expectedSort == CommentSort.TIME) commentTimeStartPage() else 1
+    commentsRefreshing = true
+    scope.launch {
+      try {
+        val response =
+          withContext(Dispatchers.IO) {
+            BiliApi.getComments(expectedOid, targetPage, expectedSort.apiValue)
+          }
+        if (
+          selectedVideoId() == expectedItemId &&
+            commentOid == expectedOid &&
+            commentSort == expectedSort
+        ) {
+          commentItems =
+            if (expectedSort == CommentSort.TIME) {
+              orderCommentsByTime(response.items)
+            } else {
+              response.items
+            }
+          commentTotalCount = response.totalCount
+          commentHasMore =
+            if (expectedSort == CommentSort.TIME) {
+              commentTimeHasMore(targetPage, response.totalCount)
+            } else {
+              response.hasMore
+            }
+          commentPage = targetPage
+        }
+      } finally {
+        if (selectedVideoId() == expectedItemId) commentsRefreshing = false
+      }
+    }
+  }
+
+  fun postComment(
+    context: Context,
+    message: String,
+    imageUri: Uri?,
+    scope: CoroutineScope,
+  ) {
+    if (commentsLoading || commentOid == 0L) return
+    val expectedOid = commentOid
+    commentsLoading = true
+    scope.launch {
+      try {
+        val added =
+          withContext(Dispatchers.IO) {
+            val uploadedImage = imageUri?.let { uploadCommentImage(context, it) }
+            BiliApi.addComment(expectedOid, message, image = uploadedImage)
+          }
+        if (commentOid == expectedOid) {
+          val updated = (commentItems + added).distinctBy { it.rpid }
+          commentItems =
+            if (commentSort == CommentSort.TIME) orderCommentsByTime(updated)
+            else listOf(added) + commentItems
+          commentTotalCount += 1
+        }
+      } catch (error: Exception) {
+        if (error is kotlinx.coroutines.CancellationException) throw error
+        Toast.makeText(context, error.message ?: "评论发送失败", Toast.LENGTH_SHORT).show()
+      } finally {
+        if (commentOid == expectedOid) commentsLoading = false
+      }
+    }
+  }
+
+  fun postReply(
+    context: Context,
+    root: CommentItem,
+    parent: CommentItem,
+    message: String,
+    imageUri: Uri?,
+    scope: CoroutineScope,
+  ) {
+    if (repliesLoading || commentOid == 0L) return
+    val expectedOid = commentOid
+    repliesLoading = true
+    scope.launch {
+      try {
+        val added =
+          withContext(Dispatchers.IO) {
+            val uploadedImage = imageUri?.let { uploadCommentImage(context, it) }
+            BiliApi.addReply(
+              expectedOid,
+              root.rpid,
+              parent.rpid,
+              message,
+              image = uploadedImage,
+            )
+          }
+        if (commentOid == expectedOid) {
+          if (replyRoot?.rpid == root.rpid) {
+            replyItems = (replyItems + added).distinctBy { it.rpid }
+          }
+          commentItems =
+            commentItems.map {
+              if (it.rpid == root.rpid) it.copy(replyCount = it.replyCount + 1) else it
+            }
+        }
+      } catch (error: Exception) {
+        if (error is kotlinx.coroutines.CancellationException) throw error
+        Toast.makeText(context, error.message ?: "回复发送失败", Toast.LENGTH_SHORT).show()
+      } finally {
+        if (commentOid == expectedOid) repliesLoading = false
+      }
+    }
+  }
+
+  fun toggleCommentLike(comment: CommentItem, scope: CoroutineScope) {
+    val expectedOid = commentOid
+    scope.launch {
+      val target = !comment.liked
+      val success =
+        withContext(Dispatchers.IO) {
+          runCatching { BiliApi.setCommentLike(expectedOid, comment.rpid, target) }.isSuccess
+        }
+      if (success && commentOid == expectedOid) {
+        commentItems =
+          commentItems.map {
+            if (it.rpid == comment.rpid) {
+              it.copy(
+                liked = target,
+                likeCount = (it.likeCount + if (target) 1 else -1).coerceAtLeast(0),
+              )
+            } else {
+              it
+            }
+          }
+        replyItems =
+          replyItems.map {
+            if (it.rpid == comment.rpid) {
+              it.copy(
+                liked = target,
+                likeCount = (it.likeCount + if (target) 1 else -1).coerceAtLeast(0),
+              )
+            } else {
+              it
+            }
+          }
+      }
+    }
+  }
+
+  fun deleteComment(
+    context: Context,
+    comment: CommentItem,
+    scope: CoroutineScope,
+    onCommentsChanged: () -> Unit,
+  ) {
+    val expectedOid = commentOid
+    if (expectedOid <= 0L) return
+    scope.launch {
+      val result =
+        withContext(Dispatchers.IO) {
+          runCatching { BiliApi.deleteComment(expectedOid, comment.rpid) }
+        }
+      result
+        .onSuccess {
+          if (commentOid == expectedOid) {
+            val deletedRoot = commentItems.any { it.rpid == comment.rpid }
+            commentItems = commentItems.filterNot { it.rpid == comment.rpid }
+            if (replyRoot?.rpid == comment.rpid) {
+              replyRoot = null
+              replyItems = emptyList()
+              replyHasMore = false
+            } else if (replyItems.any { it.rpid == comment.rpid }) {
+              replyItems = replyItems.filterNot { it.rpid == comment.rpid }
+              replyRoot =
+                replyRoot?.let { root ->
+                  root.copy(replyCount = (root.replyCount - 1).coerceAtLeast(0))
+                }
+              val rootId = replyRoot?.rpid
+              commentItems =
+                commentItems.map { root ->
+                  if (root.rpid == rootId) {
+                    root.copy(replyCount = (root.replyCount - 1).coerceAtLeast(0))
+                  } else {
+                    root
+                  }
+                }
+            }
+            if (deletedRoot) commentTotalCount = (commentTotalCount - 1).coerceAtLeast(0)
+            onCommentsChanged()
+          }
+          Toast.makeText(context, "评论已删除", Toast.LENGTH_SHORT).show()
+        }
+        .onFailure {
+          Toast.makeText(context, it.message ?: "删除失败", Toast.LENGTH_SHORT).show()
+        }
+    }
+  }
+
+  fun setVideoLike(
+    context: Context,
+    targetLiked: Boolean,
+    scope: CoroutineScope,
+  ) {
+    val expected = videoInfo
+    if (expected == null || videoActionBusy) return
+    val previousEngagement = videoEngagement
+    val previousInfo = expected
+    videoActionBusy = true
+    videoEngagement = previousEngagement.copy(liked = targetLiked)
+    videoInfo =
+      previousInfo.copy(
+        likeCount = (previousInfo.likeCount + if (targetLiked) 1 else -1).coerceAtLeast(0)
+      )
+    scope.launch {
+      val result =
+        withContext(Dispatchers.IO) {
+          runCatching { BiliApi.setVideoLike(expected.aid, targetLiked) }
+        }
+      result
+        .onSuccess {
+          Toast.makeText(
+              context,
+              if (targetLiked) "已点赞" else "已取消点赞",
+              Toast.LENGTH_SHORT,
+            )
+            .show()
+        }
+        .onFailure {
+          if (videoInfo?.aid == expected.aid) {
+            videoEngagement = previousEngagement
+            videoInfo = previousInfo
+          }
+          Toast.makeText(context, it.message ?: "点赞失败", Toast.LENGTH_SHORT).show()
+        }
+      if (videoInfo?.aid == expected.aid) videoActionBusy = false
+    }
+  }
+
+  fun coinVideo(
+    context: Context,
+    count: Int,
+    alsoLike: Boolean,
+    scope: CoroutineScope,
+  ) {
+    val expected = videoInfo
+    val remaining = (2 - videoEngagement.coins).coerceAtLeast(0)
+    if (expected == null || videoActionBusy || count !in 1..remaining) return
+    videoActionBusy = true
+    scope.launch {
+      val result =
+        withContext(Dispatchers.IO) {
+          runCatching { BiliApi.coinVideo(expected.aid, count, alsoLike) }
+        }
+      result
+        .onSuccess {
+          if (videoInfo?.aid == expected.aid) {
+            val wasLiked = videoEngagement.liked
+            videoEngagement =
+              videoEngagement.copy(
+                coins = (videoEngagement.coins + count).coerceAtMost(2),
+                liked = videoEngagement.liked || alsoLike,
+              )
+            videoInfo =
+              videoInfo?.copy(
+                coinCount = expected.coinCount + count,
+                likeCount = expected.likeCount + if (alsoLike && !wasLiked) 1 else 0,
+              )
+          }
+          Toast.makeText(context, "已投 $count 枚硬币", Toast.LENGTH_SHORT).show()
+        }
+        .onFailure {
+          Toast.makeText(context, it.message ?: "投币失败", Toast.LENGTH_SHORT).show()
+        }
+      if (videoInfo?.aid == expected.aid) videoActionBusy = false
+    }
+  }
+
+  fun setFavoriteFolders(
+    context: Context,
+    addIds: List<Long>,
+    removeIds: List<Long>,
+    scope: CoroutineScope,
+  ) {
+    val expected = videoInfo
+    if (expected == null || videoActionBusy) return
+    val previousFolders = favoriteFolders
+    val wasFavorited = previousFolders.any { it.favorited }
+    videoActionBusy = true
+    scope.launch {
+      val result =
+        withContext(Dispatchers.IO) {
+          runCatching { BiliApi.setFavoriteFolders(expected.aid, addIds, removeIds) }
+        }
+      result
+        .onSuccess {
+          if (videoInfo?.aid == expected.aid) {
+            favoriteFolders =
+              previousFolders.map { folder ->
+                when (folder.id) {
+                  in addIds -> folder.copy(favorited = true)
+                  in removeIds -> folder.copy(favorited = false)
+                  else -> folder
+                }
+              }
+            val isFavorited = favoriteFolders.any { it.favorited }
+            videoEngagement = videoEngagement.copy(favorited = isFavorited)
+            if (wasFavorited != isFavorited) {
+              videoInfo =
+                videoInfo?.copy(
+                  favoriteCount =
+                    (expected.favoriteCount + if (isFavorited) 1 else -1).coerceAtLeast(0)
+                )
+            }
+            Toast.makeText(
+                context,
+                if (isFavorited) "收藏成功" else "已取消收藏",
+                Toast.LENGTH_SHORT,
+              )
+              .show()
+          }
+        }
+        .onFailure {
+          Toast.makeText(context, it.message ?: "收藏失败", Toast.LENGTH_SHORT).show()
+        }
+      if (videoInfo?.aid == expected.aid) videoActionBusy = false
+    }
+  }
+
+  fun loadFavoriteFolders(
+    context: Context,
+    accountMid: Long,
+    scope: CoroutineScope,
+  ) {
+    val aid = videoInfo?.aid ?: 0L
+    if (favoriteFoldersLoading || aid <= 0L) return
+    favoriteFoldersLoading = true
+    scope.launch {
+      val result =
+        withContext(Dispatchers.IO) {
+          runCatching { BiliApi.getFavoriteFolders(accountMid, aid) }
+        }
+      result
+        .onSuccess { folders ->
+          if (videoInfo?.aid == aid) {
+            favoriteFolders = folders
+            videoEngagement = videoEngagement.copy(favorited = folders.any { it.favorited })
+          }
+        }
+        .onFailure {
+          Toast.makeText(context, it.message ?: "收藏夹加载失败", Toast.LENGTH_SHORT).show()
+        }
+      if (videoInfo?.aid == aid) favoriteFoldersLoading = false
+    }
+  }
+
+  fun openReplies(comment: CommentItem, scope: CoroutineScope) {
+    if (repliesLoading || commentOid <= 0L) return
+    replyRoot = comment
+    replyItems = emptyList()
+    replyPage = 1
+    replyHasMore = false
+    repliesLoading = true
+    val expectedOid = commentOid
+    scope.launch {
+      try {
+        val response =
+          withContext(Dispatchers.IO) {
+            BiliApi.getCommentReplies(expectedOid, comment.rpid, 1)
+          }
+        if (commentOid == expectedOid && replyRoot?.rpid == comment.rpid) {
+          replyItems = response.items
+          replyHasMore = response.hasMore
+        }
+      } finally {
+        if (replyRoot?.rpid == comment.rpid) repliesLoading = false
+      }
+    }
+  }
+
+  fun loadMoreReplies(scope: CoroutineScope) {
+    val root = replyRoot
+    if (root == null || !replyHasMore || repliesLoading || commentOid <= 0L) return
+    repliesLoading = true
+    val expectedOid = commentOid
+    val next = replyPage + 1
+    scope.launch {
+      try {
+        val response =
+          withContext(Dispatchers.IO) {
+            BiliApi.getCommentReplies(expectedOid, root.rpid, next)
+          }
+        if (commentOid == expectedOid && replyRoot?.rpid == root.rpid) {
+          replyItems = (replyItems + response.items).distinctBy { it.rpid }
+          replyHasMore = response.hasMore
+          replyPage = next
+        }
+      } finally {
+        if (replyRoot?.rpid == root.rpid) repliesLoading = false
+      }
+    }
+  }
+
+  fun refreshReplies(scope: CoroutineScope) {
+    val root = replyRoot
+    if (root == null || repliesLoading || commentOid <= 0L) return
+    repliesLoading = true
+    val expectedOid = commentOid
+    scope.launch {
+      try {
+        val response =
+          withContext(Dispatchers.IO) {
+            BiliApi.getCommentReplies(expectedOid, root.rpid, 1)
+          }
+        if (commentOid == expectedOid && replyRoot?.rpid == root.rpid) {
+          replyItems = response.items
+          replyHasMore = response.hasMore
+          replyPage = 1
+        }
+      } finally {
+        if (replyRoot?.rpid == root.rpid) repliesLoading = false
+      }
+    }
+  }
+
   fun restoreEntry(entry: VideoPageEntry, playerSession: AppRootPlayerSessionState) {
     videoRecommendations = entry.recommendations
     videoInfo = entry.info
@@ -343,4 +817,23 @@ internal class AppRootVideoState {
       }
     }
   }
+}
+
+private fun uploadCommentImage(context: Context, uri: Uri): BiliApi.PrivateImageUpload {
+  val bytes =
+    context.contentResolver.openInputStream(uri)?.use { input -> input.readBytes() }
+      ?: throw IllegalStateException("无法读取评论图片")
+  val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+  BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+  if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+    throw IllegalStateException("评论图片格式不受支持")
+  }
+  val mimeType = context.contentResolver.getType(uri).orEmpty().ifBlank { "image/jpeg" }
+  return BiliApi.uploadCommentImage(
+    bytes = bytes,
+    fileName = "comment-image.${mimeType.substringAfterLast('/', "jpg")}",
+    mimeType = mimeType,
+    width = bounds.outWidth,
+    height = bounds.outHeight,
+  )
 }

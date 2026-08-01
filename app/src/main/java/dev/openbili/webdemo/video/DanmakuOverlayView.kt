@@ -100,7 +100,6 @@ class DanmakuOverlayView(context: Context) : View(context) {
   private var videoViewport: RectF? = null
   private var smartBlockingEnabled = false
   private var cachedMaskFrameIndex = -1
-  private var lastNonEmptyMaskFrameIndex = -1
   private var cachedMaskViewportLeft = 0f
   private var cachedMaskViewportTop = 0f
   private var cachedMaskViewportWidth = 0f
@@ -121,10 +120,12 @@ class DanmakuOverlayView(context: Context) : View(context) {
   private var opacity = .72f
   private var displayArea = .75f
   private var densityLevel = 3
+  private var blockLevel = 1
   private var fontScale = 1f
   private var speed = 1f
   private var animationRunning = false
   private var frozenPositionMs = 0L
+  private var frozenMaskPositionMs = 0L
   // The player clock can jump several seconds while the decoder/compositor is catching up during
   // startup. Keep a visual clock so an already-visible comment is not discarded before a frame
   // has had a chance to draw it at the left edge.
@@ -157,6 +158,7 @@ class DanmakuOverlayView(context: Context) : View(context) {
     opacity: Float,
     displayArea: Float,
     densityLevel: Int,
+    blockLevel: Int,
     fontScale: Float,
     speed: Float,
     positionEpoch: Long,
@@ -170,6 +172,8 @@ class DanmakuOverlayView(context: Context) : View(context) {
     val displayAreaChanged = this.displayArea != nextDisplayArea
     val nextDensityLevel = densityLevel.coerceIn(MIN_DENSITY_LEVEL, MAX_DENSITY_LEVEL)
     val densityLevelChanged = this.densityLevel != nextDensityLevel
+    val nextBlockLevel = blockLevel.coerceIn(1, 5)
+    val blockLevelChanged = this.blockLevel != nextBlockLevel
     val nextFontScale = fontScale.coerceIn(.7f, 1.5f)
     val fontScaleChanged = this.fontScale != nextFontScale
     val itemsChanged = items !== sourceItemsRef
@@ -180,37 +184,50 @@ class DanmakuOverlayView(context: Context) : View(context) {
     this.opacity = nextOpacity
     this.displayArea = nextDisplayArea
     this.densityLevel = nextDensityLevel
+    this.blockLevel = nextBlockLevel
     this.fontScale = nextFontScale
     maskTimeline = mask
     smartBlockingEnabled = smartBlocking
     this.highDynamicRange = highDynamicRange
     if (itemsChanged) {
       sourceItemsRef = items
-      sourceItems = items.sortedBy(DanmakuItem::timeMs)
+      sourceItems = filterDanmakuByBlockLevel(items, nextBlockLevel).sortedBy(DanmakuItem::timeMs)
+      requestImages(sourceItems)
+    } else if (blockLevelChanged) {
+      sourceItems = filterDanmakuByBlockLevel(items, nextBlockLevel).sortedBy(DanmakuItem::timeMs)
       requestImages(sourceItems)
     }
-    if (itemsChanged || fontScaleChanged) {
+    if (fontScaleChanged) {
       measurements.clear()
-      inlineSegmentCache.clear()
+      clearRenderCache()
     }
-    val scheduleChanged =
-      speedChanged || displayAreaChanged || densityLevelChanged || fontScaleChanged || itemsChanged
+    if (itemsChanged || blockLevelChanged) {
+      trimItemCaches()
+    }
+    val scheduleGeometryChanged =
+      speedChanged ||
+        displayAreaChanged ||
+        densityLevelChanged ||
+        blockLevelChanged ||
+        fontScaleChanged
+    val scheduleChanged = scheduleGeometryChanged || itemsChanged
+    if (opacityChanged) clearRenderCache()
     if (scheduleChanged) {
       rebuildSchedule()
-    } else if (opacityChanged) {
-      clearRenderCache()
     }
     if (maskChanged || smartBlockingChanged) clearMaskClipCache()
     if (highDynamicRangeChanged) clearRenderCache()
     positionProvider = currentPositionProvider
     val rawPositionMs = currentPositionProvider().coerceAtLeast(0L)
-    if (scheduleChanged || visualClockEpoch != positionEpoch || !visualClockInitialized) {
+    val clockEpochChanged = visualClockEpoch != positionEpoch
+    if (scheduleGeometryChanged || clockEpochChanged || !visualClockInitialized) {
       resetVisualClock(rawPositionMs, positionEpoch)
     }
     if (paused) {
       // Preserve a deliberately smoothed on-screen position while the player is paused. Explicit
       // seeks carry a new epoch above and therefore intentionally reset to their target instead.
       frozenPositionMs = if (visualClockInitialized) visualPositionMs else rawPositionMs
+      frozenMaskPositionMs = rawPositionMs
     }
     displayEnabled = enabled && scheduled.isNotEmpty()
     playbackPaused = paused
@@ -273,7 +290,12 @@ class DanmakuOverlayView(context: Context) : View(context) {
   override fun onDraw(canvas: Canvas) {
     super.onDraw(canvas)
     if (!displayEnabled || width <= 0 || height <= 0) return
-    val positionMs = if (playbackPaused) frozenPositionMs else resolveVisualPosition()
+    bitmapTextCache.beginFrame()
+    val rawPositionMs = positionProvider().coerceAtLeast(0L)
+    val positionMs = if (playbackPaused) frozenPositionMs else resolveVisualPosition(rawPositionMs)
+    // Text may intentionally smooth a coarse player-clock jump, but the subject mask must stay on
+    // the real playback clock so it never trails the independently composed video SurfaceView.
+    val maskPositionMs = if (playbackPaused) frozenMaskPositionMs else rawPositionMs
     val scrollingMotionDurationMs = scrollingMotionDurationMs()
     val scrollingVisibleDurationMs = scrollingVisibleDurationMs()
     // The overlay covers the complete player, while smart blocking is mapped only to Media3's
@@ -281,7 +303,11 @@ class DanmakuOverlayView(context: Context) : View(context) {
     val viewport = RectF(0f, 0f, width.toFloat(), height.toFloat())
     val saveCount = canvas.save()
     canvas.clipRect(viewport)
-    applySmartMaskClip(canvas, positionMs, videoViewport ?: viewport)
+    applySmartMaskClip(
+      canvas = canvas,
+      maskPositionMs = maskPositionMs,
+      viewport = videoViewport ?: viewport,
+    )
     val first = prepared.lowerBound(positionMs - scrollingVisibleDurationMs)
     val last = prepared.upperBound(positionMs)
     var lastTextSize = Float.NaN
@@ -442,69 +468,69 @@ class DanmakuOverlayView(context: Context) : View(context) {
     postInvalidateOnAnimation()
   }
 
-  private fun applySmartMaskClip(canvas: Canvas, positionMs: Long, viewport: RectF) {
+  private fun applySmartMaskClip(
+    canvas: Canvas,
+    maskPositionMs: Long,
+    viewport: RectF,
+  ) {
     if (!smartBlockingEnabled) return
     val timeline = maskTimeline ?: return
-    val frameIndex = timeline.frameIndexAt(positionMs)
+    val frameIndex = timeline.renderFrameIndexAt(maskPositionMs)
     if (frameIndex < 0) return
-    if (
+    val cacheMiss =
       frameIndex != cachedMaskFrameIndex ||
         viewport.left != cachedMaskViewportLeft ||
         viewport.top != cachedMaskViewportTop ||
         viewport.width() != cachedMaskViewportWidth ||
         viewport.height() != cachedMaskViewportHeight
-    ) {
-      val protectedContours = timeline.protectedContoursAt(frameIndex)
-      val sameViewport =
+    if (cacheMiss) {
+      val allowedContours = timeline.allowedContoursAt(frameIndex)
+      val evenOddFill = timeline.usesEvenOddFillAt(frameIndex)
+      val viewportMatchesCachedPath =
         viewport.left == cachedMaskViewportLeft &&
           viewport.top == cachedMaskViewportTop &&
           viewport.width() == cachedMaskViewportWidth &&
           viewport.height() == cachedMaskViewportHeight
-      cachedProtectedMaskPath =
-        if (protectedContours.isEmpty()) {
-          // Some upstream masks contain an isolated empty sample between two valid subject
-          // contours. Holding the preceding contour for at most two samples avoids a one-frame
-          // unmask/remask flash without leaving a stale subject cutout across a real empty span.
-          cachedProtectedMaskPath.takeIf {
-            sameViewport && frameIndex - lastNonEmptyMaskFrameIndex in 1..2
-          }
+      val previousProtectedMaskPath = cachedProtectedMaskPath.takeIf { viewportMatchesCachedPath }
+      var differenceSucceeded = true
+      val nextProtectedMaskPath =
+        if (allowedContours.isEmpty()) {
+          null
         } else {
-          val sourcePath =
+          val allowedPath =
             Path().apply {
-              fillType =
-                if (timeline.usesEvenOddFillAt(frameIndex)) Path.FillType.EVEN_ODD
-                else Path.FillType.WINDING
+              fillType = if (evenOddFill) Path.FillType.EVEN_ODD else Path.FillType.WINDING
               var index = 0
-              while (index + 1 < protectedContours.size) {
-                if (protectedContours[index].isNaN() || protectedContours[index + 1].isNaN()) {
+              while (index + 1 < allowedContours.size) {
+                if (allowedContours[index].isNaN() || allowedContours[index + 1].isNaN()) {
                   index += 2
                   continue
                 }
                 val start = index
                 while (
-                  index + 1 < protectedContours.size &&
-                    !protectedContours[index].isNaN() &&
-                    !protectedContours[index + 1].isNaN()
+                  index + 1 < allowedContours.size &&
+                    !allowedContours[index].isNaN() &&
+                    !allowedContours[index + 1].isNaN()
                 ) {
                   index += 2
                 }
-                appendDirectContour(protectedContours, start, index, viewport)
+                appendDirectContour(allowedContours, start, index, viewport)
               }
             }
-          val resolvedPath =
-            if (timeline.isInverseFillAt(frameIndex)) {
-              // Inverse SVG masks describe the allowed background. Limit their inverse region to
-              // the actual video frame, otherwise clipOutPath would also erase portrait sidebars.
-              Path().apply {
-                addRect(viewport, Path.Direction.CW)
-                op(sourcePath, Path.Op.DIFFERENCE)
-              }
-            } else {
-              sourcePath
+          // SVG paths always describe the allowed background. Restrict the difference to the
+          // actual video frame so portrait sidebars remain available for danmaku.
+          Path()
+            .apply {
+              addRect(viewport, Path.Direction.CW)
+              differenceSucceeded = op(allowedPath, Path.Op.DIFFERENCE)
             }
-          lastNonEmptyMaskFrameIndex = frameIndex
-          resolvedPath
+            .takeIf { differenceSucceeded }
         }
+      // Skia can reject a few self-intersecting SVG paths. Never pass the pre-operation
+      // video rectangle to clipOutPath: retain the previous valid silhouette for this one mask
+      // sample (or leave it unclipped on the first sample) and retry on the next timestamp.
+      cachedProtectedMaskPath =
+        if (differenceSucceeded) nextProtectedMaskPath else previousProtectedMaskPath
       cachedMaskFrameIndex = frameIndex
       cachedMaskViewportLeft = viewport.left
       cachedMaskViewportTop = viewport.top
@@ -540,7 +566,6 @@ class DanmakuOverlayView(context: Context) : View(context) {
 
   private fun clearMaskClipCache() {
     cachedMaskFrameIndex = -1
-    lastNonEmptyMaskFrameIndex = -1
     cachedMaskViewportLeft = 0f
     cachedMaskViewportTop = 0f
     cachedMaskViewportWidth = 0f
@@ -712,19 +737,20 @@ class DanmakuOverlayView(context: Context) : View(context) {
   }
 
   private fun rebuildPreparedDanmaku() {
-    clearRenderCache()
-    prepared = scheduled.mapIndexed { index, scheduledItem ->
+    val occurrences = HashMap<DanmakuItem, Int>()
+    val hasImageItems = sourceItems.any { !it.imageUrl.isNullOrBlank() }
+    prepared = scheduled.map { scheduledItem ->
       val item = scheduledItem.item
       val measurement = measurementFor(item)
+      val occurrence = occurrences[item] ?: 0
+      occurrences[item] = occurrence + 1
       PreparedDanmaku(
-        cacheKey = index,
+        cacheKey = RenderCacheKey(item, occurrence),
         item = item,
         lane = scheduledItem.lane,
         textSize = measurement.textSize,
         textWidth = measurement.textWidth,
-        laneHeight =
-          if (sourceItems.any { !it.imageUrl.isNullOrBlank() }) scheduledLaneHeight
-          else measurement.laneHeight,
+        laneHeight = if (hasImageItems) scheduledLaneHeight else measurement.laneHeight,
         ascent = measurement.ascent,
         descent = measurement.descent,
         endMs =
@@ -733,6 +759,16 @@ class DanmakuOverlayView(context: Context) : View(context) {
             else scrollingVisibleDurationMs(),
         color = measurement.color,
       )
+    }
+  }
+
+  private fun trimItemCaches() {
+    val retained = sourceItems.toHashSet()
+    if (measurements.size > retained.size + ITEM_CACHE_TRIM_SLACK) {
+      measurements.keys.retainAll(retained)
+    }
+    if (inlineSegmentCache.size > retained.size + ITEM_CACHE_TRIM_SLACK) {
+      inlineSegmentCache.keys.retainAll(retained)
     }
   }
 
@@ -793,8 +829,7 @@ class DanmakuOverlayView(context: Context) : View(context) {
    * catch up over following VSyncs. This protects startup and decoder-recovery jank without
    * changing normal playback, quality switches, or explicit seek behavior.
    */
-  private fun resolveVisualPosition(): Long {
-    val rawPositionMs = positionProvider().coerceAtLeast(0L)
+  private fun resolveVisualPosition(rawPositionMs: Long): Long {
     if (!visualClockInitialized) {
       resetVisualClock(rawPositionMs, visualClockEpoch)
       return rawPositionMs
@@ -983,8 +1018,13 @@ class DanmakuOverlayView(context: Context) : View(context) {
 
   /** Keeps every SDR label on one bounded rendering path for its complete on-screen lifetime. */
   private inner class BitmapTextCache {
-    private val bitmaps = LinkedHashMap<Int, Bitmap>(256, .75f, true)
+    private val bitmaps = LinkedHashMap<RenderCacheKey, Bitmap>(256, .75f, true)
     private var allocationBytes = 0
+    private var remainingBuildsThisFrame = 0
+
+    fun beginFrame() {
+      remainingBuildsThisFrame = MAX_BITMAP_BUILDS_PER_FRAME
+    }
 
     fun draw(
       canvas: Canvas,
@@ -1004,6 +1044,7 @@ class DanmakuOverlayView(context: Context) : View(context) {
       bitmaps[value.cacheKey]?.let {
         return it
       }
+      if (remainingBuildsThisFrame <= 0) return null
       val paddingX = textCachePaddingX()
       val paddingY = textCachePaddingY()
       val bitmapWidth = ceil(value.textWidth + paddingX * 2f).toInt().coerceAtLeast(1)
@@ -1016,6 +1057,7 @@ class DanmakuOverlayView(context: Context) : View(context) {
       }
       val requiredBytes = bitmapWidth.toLong() * bitmapHeight * Int.SIZE_BYTES
       if (requiredBytes > BITMAP_TEXT_CACHE_BYTES) return null
+      remainingBuildsThisFrame -= 1
       while (allocationBytes + requiredBytes > BITMAP_TEXT_CACHE_BYTES && bitmaps.isNotEmpty()) {
         val eldestKey = bitmaps.entries.first().key
         allocationBytes -= bitmaps.remove(eldestKey)?.allocationByteCount ?: 0
@@ -1078,8 +1120,10 @@ class DanmakuOverlayView(context: Context) : View(context) {
     val color: Int,
   )
 
+  private data class RenderCacheKey(val item: DanmakuItem, val occurrence: Int)
+
   private data class PreparedDanmaku(
-    val cacheKey: Int,
+    val cacheKey: RenderCacheKey,
     val item: DanmakuItem,
     val lane: Int,
     val textSize: Float,
@@ -1103,6 +1147,8 @@ class DanmakuOverlayView(context: Context) : View(context) {
     const val FIXED_DURATION_MS = 4_000L
     const val BITMAP_TEXT_CACHE_BYTES = 24 * 1024 * 1024L
     const val MAX_CACHED_TEXT_BITMAP_DIMENSION = 2_048
+    const val MAX_BITMAP_BUILDS_PER_FRAME = 2
+    const val ITEM_CACHE_TRIM_SLACK = 96
     const val IMAGE_CACHE_BYTES = 16 * 1024 * 1024L
     const val LIVE_EMOJI_SIZE_DP = 36f
     const val LIVE_LARGE_EMOJI_SIZE_DP = 54f

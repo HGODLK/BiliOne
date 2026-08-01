@@ -64,6 +64,13 @@ data class FeedCard(
 
 data class FeedResponse(val cards: List<FeedCard>)
 
+data class PopularPeriod(
+  val id: Int,
+  val label: String,
+  val publishedAt: Long = 0,
+  val subject: String = "",
+)
+
 // ── Video info ───────────────────────────────────────────────────────────────
 
 data class VideoInfo(
@@ -219,9 +226,8 @@ internal data class DanmakuMaskResource(
 class DanmakuMaskTimeline
 internal constructor(
   private val frameTimesMs: IntArray,
-  /** Normalized closed contours packed as x/y pairs and separated by NaN/NaN. */
-  private val protectedContours: List<FloatArray>,
-  private val inverseFills: BooleanArray,
+  /** Normalized allowed-background contours packed as x/y pairs and separated by NaN/NaN. */
+  private val allowedContours: List<FloatArray>,
   private val evenOddFills: BooleanArray,
 ) {
   val isEmpty: Boolean
@@ -239,16 +245,42 @@ internal constructor(
     return low - 1
   }
 
-  internal fun protectedContoursAt(index: Int): FloatArray =
-    protectedContours.getOrElse(index) { EMPTY_CONTOURS }
+  /**
+   * Resolves the mask frame used for drawing.
+   *
+   * A short empty sample between two valid silhouettes is normally a one-frame upstream detection
+   * dropout. Reuse the preceding silhouette only for that bounded gap. A leading, trailing, or
+   * sustained empty span remains empty so scenes without a protected subject are not over-masked.
+   */
+  internal fun renderFrameIndexAt(positionMs: Long): Int {
+    val frameIndex = frameIndexAt(positionMs)
+    if (frameIndex < 0 || allowedContoursAt(frameIndex).isNotEmpty()) return frameIndex
 
-  internal fun isInverseFillAt(index: Int): Boolean = inverseFills.getOrElse(index) { false }
+    var previousNonEmpty = frameIndex - 1
+    while (previousNonEmpty >= 0 && allowedContoursAt(previousNonEmpty).isEmpty()) {
+      previousNonEmpty--
+    }
+    if (previousNonEmpty < 0) return frameIndex
+
+    var nextNonEmpty = frameIndex + 1
+    while (nextNonEmpty < frameTimesMs.size && allowedContoursAt(nextNonEmpty).isEmpty()) {
+      nextNonEmpty++
+    }
+    if (nextNonEmpty >= frameTimesMs.size) return frameIndex
+
+    val emptySpanMs = frameTimesMs[nextNonEmpty].toLong() - frameTimesMs[frameIndex]
+    return if (emptySpanMs in 0..MAX_TRANSIENT_EMPTY_MASK_MS) previousNonEmpty else frameIndex
+  }
+
+  internal fun allowedContoursAt(index: Int): FloatArray =
+    allowedContours.getOrElse(index) { EMPTY_CONTOURS }
 
   internal fun usesEvenOddFillAt(index: Int): Boolean = evenOddFills.getOrElse(index) { false }
 
   internal fun isProtectedAt(positionMs: Long, normalizedX: Float, normalizedY: Float): Boolean {
     val frameIndex = frameIndexAt(positionMs)
-    val contours = protectedContoursAt(frameIndex)
+    val contours = allowedContoursAt(frameIndex)
+    if (contours.isEmpty()) return false
     var crossings = 0
     var winding = 0
     var index = 0
@@ -287,10 +319,11 @@ internal constructor(
       }
     }
     val covered = if (usesEvenOddFillAt(frameIndex)) crossings % 2 != 0 else winding != 0
-    return if (isInverseFillAt(frameIndex)) !covered else covered
+    return !covered
   }
 
   private companion object {
+    const val MAX_TRANSIENT_EMPTY_MASK_MS = 80L
     val EMPTY_CONTOURS = FloatArray(0)
   }
 }
@@ -325,6 +358,8 @@ data class CommentItem(
   val level: Int = 0,
   val vipActive: Boolean = false,
   val vipLabel: String = "",
+  val upLiked: Boolean = false,
+  val upReplied: Boolean = false,
 )
 
 data class CommentResponse(
@@ -409,10 +444,15 @@ data class SpaceContentCard(
   val episodeId: Long = 0L,
   val kind: SpaceContentKind = SpaceContentKind.COLLECTION,
   val watchProgress: BangumiWatchProgress? = null,
+  val watchProgressState: BangumiWatchProgressState = BangumiWatchProgressState.UNAVAILABLE,
   val seasonType: Int = 0,
   val hasHistory: Boolean = false,
   val historicalOnly: Boolean = false,
   val historyCoverUrl: String = "",
+  val lastViewedAt: Long = 0L,
+  val collectionId: Long = 0L,
+  val collectionType: SpaceCollectionType = SpaceCollectionType.SEASON,
+  val collectionTotal: Int = 0,
 )
 
 enum class SpaceContentKind {
@@ -420,6 +460,17 @@ enum class SpaceContentKind {
   BANGUMI,
   DRAMA,
 }
+
+enum class SpaceCollectionType {
+  SEASON,
+  SERIES,
+}
+
+data class SpaceCollectionVideoResponse(
+  val cards: List<FeedCard>,
+  val hasMore: Boolean,
+  val total: Int,
+)
 
 data class SpaceBangumiResponse(
   val cards: List<SpaceContentCard>,
@@ -712,6 +763,14 @@ enum class MessageTargetKind {
   VIDEO,
   ARTICLE,
   UNKNOWN,
+}
+
+data class InteractionUnreadSummary(
+  val replyCount: Int = 0,
+  val mentionCount: Int = 0,
+) {
+  val interactionCount: Int
+    get() = replyCount + mentionCount
 }
 
 data class AccountMessage(

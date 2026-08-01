@@ -13,7 +13,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.Placeholder
@@ -60,15 +59,19 @@ fun BiliRichText(
         .sortedByDescending { it.name.length }
     }
   val mentionColor = MaterialTheme.colorScheme.primary
+  val webLinkColor = MaterialTheme.colorScheme.primary
   val webLinks =
     remember(text) {
-      richTextWebUrlPattern.findAll(text).mapNotNull { match ->
-        val value = match.value.trimEnd { it in richTextTrailingUrlPunctuation }
-        value.takeIf(String::isNotBlank)?.let { match.range.first to it }
-      }.toMap()
+      richTextWebUrlPattern
+        .findAll(text)
+        .mapNotNull { match ->
+          val value = match.value.trimEnd { it in richTextTrailingUrlPunctuation }
+          value.takeIf(String::isNotBlank)?.let { match.range.first to it }
+        }
+        .toMap()
     }
   val annotated =
-    remember(text, usedEmotes, usedMentions, mentionColor, webLinks) {
+    remember(text, usedEmotes, usedMentions, mentionColor, webLinkColor, webLinks) {
       buildAnnotatedString {
         var index = 0
         while (index < text.length) {
@@ -81,7 +84,7 @@ fun BiliRichText(
               append("网页链接")
               addStringAnnotation("web", webUrl, start, length)
               addStyle(
-                SpanStyle(color = Color(0xFF1976D2), textDecoration = TextDecoration.Underline),
+                SpanStyle(color = webLinkColor, textDecoration = TextDecoration.Underline),
                 start,
                 length,
               )

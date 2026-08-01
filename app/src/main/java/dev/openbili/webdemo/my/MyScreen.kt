@@ -92,6 +92,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -104,45 +105,50 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.nativeCanvas
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
-import coil3.compose.AsyncImage
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import coil3.BitmapImage
+import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.allowHardware
+import dev.openbili.webdemo.BuildConfig
 import dev.openbili.webdemo.api.AccountMessage
 import dev.openbili.webdemo.api.ArticleItem
+import dev.openbili.webdemo.api.BiliApi
 import dev.openbili.webdemo.api.BiliEmote
 import dev.openbili.webdemo.api.BiliEmotePackage
-import dev.openbili.webdemo.api.BiliApi
-import dev.openbili.webdemo.api.CommentItem
 import dev.openbili.webdemo.api.CommentImage
-import dev.openbili.webdemo.api.FollowingUser
+import dev.openbili.webdemo.api.CommentItem
 import dev.openbili.webdemo.api.FavoriteFolder
+import dev.openbili.webdemo.api.FollowingUser
 import dev.openbili.webdemo.api.MessageTargetKind
 import dev.openbili.webdemo.api.SpaceContentCard
 import dev.openbili.webdemo.api.UserInfo
@@ -150,18 +156,22 @@ import dev.openbili.webdemo.article.ArticleCard
 import dev.openbili.webdemo.feed.CoverImage
 import dev.openbili.webdemo.feed.FeedImageLoadMode
 import dev.openbili.webdemo.feed.FeedItem
-import dev.openbili.webdemo.feed.FeedCardContent
-import dev.openbili.webdemo.feed.FeedCardMetadataMode
 import dev.openbili.webdemo.feed.LoadedFeedImageRegistry
 import dev.openbili.webdemo.feed.LocalFeedImageLoadPolicy
 import dev.openbili.webdemo.feed.rememberGridFeedImageLoadPolicy
 import dev.openbili.webdemo.live.LiveSearchRoom
 import dev.openbili.webdemo.settings.AdvancedAudioPriority
+import dev.openbili.webdemo.settings.AppCacheManager
 import dev.openbili.webdemo.settings.AppSettings
 import dev.openbili.webdemo.settings.DeviceMediaCapabilities
 import dev.openbili.webdemo.settings.PreferredResolutionMode
+import dev.openbili.webdemo.settings.SimAvailability
+import dev.openbili.webdemo.settings.ThemeAccent
+import dev.openbili.webdemo.settings.ThemeMode
 import dev.openbili.webdemo.settings.canSelectPreferredResolution
+import dev.openbili.webdemo.settings.detectSimAvailability
 import dev.openbili.webdemo.ui.PressableVideoCard
+import dev.openbili.webdemo.ui.NavigationCardBottomClearance
 import dev.openbili.webdemo.ui.PullRefreshContainer
 import dev.openbili.webdemo.ui.RootAccountHeader
 import dev.openbili.webdemo.ui.VideoCardGradient
@@ -196,6 +206,7 @@ import kotlin.math.roundToInt
 fun MyScreen(
   user: UserInfo,
   state: MyUiState,
+  watchLaterState: WatchLaterUiState,
   onSection: (MySection) -> Unit,
   onFolder: (Long) -> Unit,
   onVideo: (FeedItem, Rect) -> Unit,
@@ -224,6 +235,7 @@ fun MyScreen(
   onFollowingOrder: (FollowingOrder) -> Unit,
   onLoadMoreFollowings: () -> Unit,
   onRefresh: () -> Unit,
+  onWatchLaterRefresh: () -> Unit,
   onLogin: () -> Unit,
   onAccountClick: (Rect) -> Unit,
   onMessage: (Long) -> Unit,
@@ -239,22 +251,28 @@ fun MyScreen(
   onInteractionProfile: (Long, CommentItem, CommentProfileAnchor) -> Unit,
   onLoadMoreInteractions: () -> Unit,
   onErrorConsumed: () -> Unit,
+  onWatchLaterErrorConsumed: () -> Unit,
   hiddenInteractionCommentAvatarRpid: Long? = null,
   settings: AppSettings,
   onSettingsChange: ((AppSettings) -> AppSettings) -> Unit,
   onLogout: () -> Unit,
 ) {
   var showLogoutDialog by remember { mutableStateOf(false) }
-  LaunchedEffect(state.error) {
-    if (!state.error.isNullOrBlank()) {
+  val visibleError =
+    if (state.section == MySection.WATCH_LATER) watchLaterState.error else state.error
+  val contentLoading =
+    if (state.section == MySection.WATCH_LATER) watchLaterState.loading else state.loading
+  LaunchedEffect(visibleError, state.section) {
+    if (!visibleError.isNullOrBlank()) {
       delay(4_000L)
-      onErrorConsumed()
+      if (state.section == MySection.WATCH_LATER) onWatchLaterErrorConsumed() else onErrorConsumed()
     }
   }
   val immerseBehindBottomCapsule =
     when (state.section) {
       MySection.FAVORITES,
       MySection.HISTORY,
+      MySection.WATCH_LATER,
       MySection.FOLLOWING,
       MySection.INTERACTIONS -> true
       MySection.MESSAGES -> true
@@ -279,8 +297,7 @@ fun MyScreen(
         ) {
           MySection.entries.forEach { section ->
             val selected = state.section == section
-            Text(
-              section.label,
+            Box(
               modifier =
                 Modifier.fillMaxWidth()
                   .clip(RoundedCornerShape(14.dp))
@@ -288,12 +305,25 @@ fun MyScreen(
                     if (selected) MaterialTheme.colorScheme.primaryContainer
                     else MaterialTheme.colorScheme.surface
                   )
-                  .clickable { onSection(section) }
-                  .padding(horizontal = 18.dp, vertical = 15.dp),
-              color =
-                if (selected) MaterialTheme.colorScheme.onPrimaryContainer
-                else MaterialTheme.colorScheme.onSurface,
-            )
+                  .clickable { onSection(section) },
+            ) {
+              Text(
+                section.label,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 15.dp),
+                color =
+                  if (selected) MaterialTheme.colorScheme.onPrimaryContainer
+                  else MaterialTheme.colorScheme.onSurface,
+              )
+              if (user.isLogin && state.hasUnread(section)) {
+                Box(
+                  Modifier.align(Alignment.TopEnd)
+                    .offset(x = (-12).dp, y = 10.dp)
+                    .size(7.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.error)
+                )
+              }
+            }
           }
           if (user.isLogin) {
             Text(
@@ -332,8 +362,9 @@ fun MyScreen(
           )
         } else {
           PullRefreshContainer(
-            refreshing = state.loading,
-            onRefresh = onRefresh,
+            refreshing = contentLoading,
+            onRefresh =
+              if (state.section == MySection.WATCH_LATER) onWatchLaterRefresh else onRefresh,
             enabled = state.section != MySection.SETTINGS && state.section != MySection.MESSAGES,
             modifier = Modifier.fillMaxSize(),
           ) {
@@ -372,6 +403,13 @@ fun MyScreen(
                     onLoadMore = onLoadMoreHistory,
                     hiddenCoverItemId = hiddenCoverItemId,
                     hiddenArticleItemId = hiddenArticleItemId,
+                  )
+                MySection.WATCH_LATER ->
+                  WatchLaterPanel(
+                    state = watchLaterState,
+                    onVideo = onVideo,
+                    onVideoLongClick = onVideoLongClick,
+                    hiddenCoverItemId = hiddenCoverItemId,
                   )
                 MySection.FOLLOWING ->
                   FollowingPanel(
@@ -419,25 +457,26 @@ fun MyScreen(
             }
           }
         }
-        if (state.loading)
+        if (contentLoading)
           CircularProgressIndicator(
             Modifier.size(28.dp).align(Alignment.Center),
             strokeWidth = 2.dp,
           )
-        if (state.section != MySection.MESSAGES) state.error?.let { message ->
-          Surface(
-            modifier = Modifier.align(Alignment.TopCenter).padding(top = 12.dp),
-            shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.errorContainer,
-            shadowElevation = 5.dp,
-          ) {
-            Text(
-              message,
-              color = MaterialTheme.colorScheme.onErrorContainer,
-              modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-            )
+        if (state.section != MySection.MESSAGES)
+          visibleError?.let { message ->
+            Surface(
+              modifier = Modifier.align(Alignment.TopCenter).padding(top = 12.dp),
+              shape = RoundedCornerShape(16.dp),
+              color = MaterialTheme.colorScheme.errorContainer,
+              shadowElevation = 5.dp,
+            ) {
+              Text(
+                message,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+              )
+            }
           }
-        }
       }
     }
   }
@@ -528,7 +567,7 @@ private fun FollowingPanel(
         columns = GridCells.Fixed(2),
         state = gridState,
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(bottom = 112.dp),
+        contentPadding = PaddingValues(bottom = NavigationCardBottomClearance),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
       ) {
@@ -731,6 +770,12 @@ private fun FollowingUserCard(
   }
 }
 
+private data class SettingsOption<T>(
+  val value: T,
+  val title: String,
+  val description: String,
+)
+
 @Composable
 private fun SettingsPane(
   settings: AppSettings,
@@ -738,28 +783,122 @@ private fun SettingsPane(
   onChange: ((AppSettings) -> AppSettings) -> Unit,
 ) {
   val context = LocalContext.current
+  val lifecycleOwner = LocalLifecycleOwner.current
+  val scope = rememberCoroutineScope()
   val mediaCapabilities =
     remember(context.applicationContext) {
       DeviceMediaCapabilities.detect(context.applicationContext)
     }
+  var cacheSizeBytes by remember { mutableStateOf<Long?>(null) }
+  var clearingCache by remember { mutableStateOf(false) }
+  var showResetDialog by remember { mutableStateOf(false) }
+  var simAvailability by remember(context.applicationContext) {
+    mutableStateOf(detectSimAvailability(context))
+  }
+
+  LaunchedEffect(Unit) {
+    cacheSizeBytes = withContext(Dispatchers.IO) { AppCacheManager.sizeBytes(context) }
+  }
+  DisposableEffect(lifecycleOwner, context.applicationContext) {
+    val observer = LifecycleEventObserver { _, event ->
+      if (event == Lifecycle.Event.ON_RESUME) {
+        simAvailability = detectSimAvailability(context)
+      }
+    }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+  }
+
+  if (showResetDialog) {
+    AlertDialog(
+      onDismissRequest = { showResetDialog = false },
+      title = { Text("恢复默认设置？") },
+      text = { Text("主题、播放、手势和弹幕选项都会恢复默认值，缓存与登录状态不会清除。") },
+      confirmButton = {
+        TextButton(
+          onClick = {
+            showResetDialog = false
+            onChange { AppSettings() }
+          }
+        ) {
+          Text("恢复")
+        }
+      },
+      dismissButton = {
+        TextButton(onClick = { showResetDialog = false }) { Text("取消") }
+      },
+    )
+  }
+
+  fun selectResolution(mode: PreferredResolutionMode, cellular: Boolean) {
+    if (canSelectPreferredResolution(mode, vipActive)) {
+      onChange { value ->
+        if (cellular) value.copy(cellularPreferredResolutionMode = mode)
+        else value.copy(preferredResolutionMode = mode)
+      }
+    } else {
+      Toast.makeText(context, "只有大会员可以选择~", Toast.LENGTH_SHORT).show()
+    }
+  }
+
   LazyColumn(
     modifier = Modifier.fillMaxSize(),
-    contentPadding = PaddingValues(bottom = 112.dp),
+    contentPadding = PaddingValues(bottom = NavigationCardBottomClearance),
     verticalArrangement = Arrangement.spacedBy(18.dp),
   ) {
-    item { SettingsTitle("播放") }
+    item { SettingsTitle("播放与网络") }
     item {
-      PreferredResolutionSetting(settings.preferredResolutionMode) { mode ->
-        if (canSelectPreferredResolution(mode, vipActive)) {
-          onChange { value -> value.copy(preferredResolutionMode = mode) }
-        } else {
-          Toast.makeText(context, "只有大会员可以选择~", Toast.LENGTH_SHORT).show()
-        }
+      PreferredResolutionSetting(
+        title = "Wi-Fi 优先分辨率",
+        selected = settings.preferredResolutionMode,
+        onSelected = { selectResolution(it, false) },
+      )
+    }
+    if (simAvailability != SimAvailability.ABSENT) {
+      item {
+        PreferredResolutionSetting(
+          title = "移动网络优先分辨率",
+          selected = settings.cellularPreferredResolutionMode,
+          onSelected = { selectResolution(it, true) },
+        )
       }
     }
     item {
       SettingsSwitch("播放时阻止休眠", "仅在视频播放期间保持屏幕常亮", settings.keepScreenOn) {
         onChange { value -> value.copy(keepScreenOn = it) }
+      }
+    }
+    item {
+      SettingsSwitch(
+        "自动播放下一集",
+        "视频结束后按设定倒计时继续播放，也可以手动立即播放",
+        settings.autoPlayNext,
+      ) {
+        onChange { value -> value.copy(autoPlayNext = it) }
+      }
+    }
+    if (settings.autoPlayNext) {
+      item {
+        SettingsSlider(
+          title = "连播倒计时",
+          valueText = "${settings.autoNextCountdownSeconds} 秒",
+          value = settings.autoNextCountdownSeconds.toFloat(),
+          range = 3f..10f,
+          steps = 6,
+        ) { next ->
+          onChange { it.copy(autoNextCountdownSeconds = next.roundToInt()) }
+        }
+      }
+    }
+    item {
+      SettingsSlider(
+        title = "播放器控件隐藏时间",
+        valueText = "${settings.controlsTimeoutSeconds} 秒",
+        value = settings.controlsTimeoutSeconds.toFloat(),
+        range = 2f..5f,
+        steps = 2,
+      ) { next ->
+        onChange { it.copy(controlsTimeoutSeconds = next.roundToInt()) }
       }
     }
     item {
@@ -782,7 +921,7 @@ private fun SettingsPane(
       item {
         SettingsSwitch(
           "解锁杜比视界",
-          "当前设备不支持，不保证能正常播放",
+          "当前设备未报告支持，仅建议用于兼容性测试",
           settings.unlockDolbyVision,
         ) {
           onChange { value -> value.copy(unlockDolbyVision = it) }
@@ -793,13 +932,14 @@ private fun SettingsPane(
       item {
         SettingsSwitch(
           "解锁杜比全景声",
-          "当前设备不支持，不保证能正常播放",
+          "当前设备未报告支持，仅建议用于兼容性测试",
           settings.unlockDolbyAtmos,
         ) {
           onChange { value -> value.copy(unlockDolbyAtmos = it) }
         }
       }
     }
+
     item { SettingsTitle("播放器手势") }
     item {
       SettingsSwitch("左侧滑动调节亮度", "只调整当前播放窗口", settings.brightnessGesture) {
@@ -818,28 +958,77 @@ private fun SettingsPane(
     }
     item {
       SettingsSwitch(
-        "双指播放器手势",
-        "张开进入全屏、捏合退出；双指双击左右侧快退或快进 5 秒",
+        "双指捏合切换全屏",
+        "张开进入全屏，捏合退出全屏",
         settings.twoFingerFullscreenGesture,
       ) {
         onChange { value -> value.copy(twoFingerFullscreenGesture = it) }
       }
     }
+    item {
+      SettingsSwitch(
+        "双指双击快进/快退",
+        "双指双击播放器左侧快退 5 秒，右侧快进 5 秒",
+        settings.twoFingerSeekGesture,
+      ) {
+        onChange { value -> value.copy(twoFingerSeekGesture = it) }
+      }
+    }
+
     item { SettingsTitle("外观") }
     item {
-      SettingsSwitch("深色模式", "关闭时跟随系统，开启后始终使用深色主题", settings.forceDarkMode) {
-        onChange { value -> value.copy(forceDarkMode = it) }
+      SettingsRadioGroup(
+        title = "主题",
+        selected = settings.themeMode,
+        options =
+          ThemeMode.entries.map { mode ->
+            SettingsOption(mode, mode.title, mode.description)
+          },
+      ) { mode ->
+        onChange { it.copy(themeMode = mode) }
+      }
+    }
+    item {
+      SettingsRadioGroup(
+        title = "主题色",
+        selected = settings.themeAccent,
+        options =
+          ThemeAccent.entries.map { accent ->
+            SettingsOption(accent, accent.title, accent.description)
+          },
+      ) { accent ->
+        onChange { it.copy(themeAccent = accent) }
+      }
+    }
+    item {
+      SettingsSwitch(
+        "减少动态效果",
+        "缩短或关闭页面切换、共享元素和播放器动效",
+        settings.reduceMotion,
+      ) {
+        onChange { value -> value.copy(reduceMotion = it) }
+      }
+    }
+    item {
+      SettingsSwitch(
+        "实时毛玻璃",
+        "关闭后改用不透明主题表面，降低合成与模糊开销",
+        settings.glassEffects,
+      ) {
+        onChange { value -> value.copy(glassEffects = it) }
       }
     }
     item {
       SettingsSlider(
-        title = "播放器控件隐藏时间",
-        valueText = "${settings.controlsTimeoutSeconds} 秒",
-        value = settings.controlsTimeoutSeconds.toFloat(),
-        range = 2f..5f,
-        steps = 2,
+        title = "全屏视频背景亮度",
+        valueText =
+          if (settings.fullscreenBackgroundBrightness <= .005f) "完全黑"
+          else "${(settings.fullscreenBackgroundBrightness * 100).roundToInt()}%",
+        value = settings.fullscreenBackgroundBrightness,
+        range = 0f..1f,
+        steps = 9,
       ) { next ->
-        onChange { it.copy(controlsTimeoutSeconds = next.toInt()) }
+        onChange { it.copy(fullscreenBackgroundBrightness = next) }
       }
     }
     item { SettingsTitle("评论与弹幕") }
@@ -853,55 +1042,227 @@ private fun SettingsPane(
         onChange { value -> value.copy(showCommentEmotes = it) }
       }
     }
-  }
-}
-
-@Composable
-private fun PreferredResolutionSetting(
-  selected: PreferredResolutionMode,
-  onSelected: (PreferredResolutionMode) -> Unit,
-) {
-  Column(
-    Modifier.fillMaxWidth()
-      .clip(RoundedCornerShape(18.dp))
-      .background(MaterialTheme.colorScheme.surface)
-      .padding(vertical = 8.dp)
-  ) {
-    Text(
-      "优先分辨率",
-      modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp),
-      style = MaterialTheme.typography.titleSmall,
-    )
-    PreferredResolutionMode.entries.forEach { mode ->
-      Row(
-        Modifier.fillMaxWidth()
-          .clickable { onSelected(mode) }
-          .padding(start = 10.dp, end = 18.dp, top = 7.dp, bottom = 7.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    item {
+      SettingsSwitch(
+        "默认开启弹幕",
+        "进入新视频时自动显示弹幕，播放中仍可临时关闭",
+        settings.defaultShowDanmaku,
       ) {
-        RadioButton(selected = selected == mode, onClick = { onSelected(mode) })
-        Column(Modifier.weight(1f)) {
-          Text(
-            mode.title,
-            style = MaterialTheme.typography.titleSmall,
-            color =
-              if (selected == mode) MaterialTheme.colorScheme.primary
-              else MaterialTheme.colorScheme.onSurface,
-          )
-          Text(
-            mode.description,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
+        onChange { value -> value.copy(defaultShowDanmaku = it) }
+      }
+    }
+    item {
+      SettingsSwitch(
+        "弹幕智能屏蔽",
+        "优先隐藏重复、低质量和高密度弹幕",
+        settings.danmakuSmartBlocking,
+      ) {
+        onChange { value -> value.copy(danmakuSmartBlocking = it) }
+      }
+    }
+    item {
+      SettingsSlider(
+        title = "弹幕显示区域",
+        valueText = "${(settings.danmakuDisplayArea * 100).roundToInt()}%",
+        value = settings.danmakuDisplayArea,
+        range = .25f..1f,
+        steps = 2,
+      ) { next ->
+        onChange { it.copy(danmakuDisplayArea = next) }
+      }
+    }
+    item {
+      SettingsSlider(
+        title = "同屏弹幕密度",
+        valueText = "${settings.danmakuDensity} 级",
+        value = settings.danmakuDensity.toFloat(),
+        range = 1f..5f,
+        steps = 3,
+      ) { next ->
+        onChange { it.copy(danmakuDensity = next.roundToInt()) }
+      }
+    }
+    item {
+      SettingsSlider(
+        title = "弹幕屏蔽等级",
+        valueText = "${settings.danmakuBlockLevel} 级",
+        value = settings.danmakuBlockLevel.toFloat(),
+        range = 1f..5f,
+        steps = 3,
+      ) { next ->
+        onChange { it.copy(danmakuBlockLevel = next.roundToInt()) }
+      }
+    }
+    item {
+      SettingsSlider(
+        title = "弹幕不透明度",
+        valueText = "${(settings.danmakuOpacity * 100).roundToInt()}%",
+        value = settings.danmakuOpacity,
+        range = .2f..1f,
+        steps = 7,
+      ) { next ->
+        onChange { it.copy(danmakuOpacity = next) }
+      }
+    }
+    item {
+      SettingsSlider(
+        title = "弹幕字号",
+        valueText = "${(settings.danmakuFontScale * 100).roundToInt()}%",
+        value = settings.danmakuFontScale,
+        range = .7f..1.5f,
+        steps = 7,
+      ) { next ->
+        onChange { it.copy(danmakuFontScale = next) }
+      }
+    }
+    item {
+      SettingsSlider(
+        title = "弹幕速度",
+        valueText = String.format(java.util.Locale.US, "%.1f×", settings.danmakuSpeed),
+        value = settings.danmakuSpeed,
+        range = .6f..1.8f,
+        steps = 5,
+      ) { next ->
+        onChange { it.copy(danmakuSpeed = next) }
+      }
+    }
+
+    item { SettingsTitle("存储与关于") }
+    item {
+      SettingsAction(
+        title = "播放与图片缓存",
+        subtitle =
+          when {
+            clearingCache -> "正在清理可重新生成的缓存…"
+            cacheSizeBytes == null -> "正在计算占用空间…"
+            else -> "当前占用 ${AppCacheManager.formatSize(cacheSizeBytes!!)}"
+          },
+        action = if (clearingCache) "清理中" else "清理",
+        enabled = !clearingCache,
+      ) {
+        clearingCache = true
+        scope.launch {
+          withContext(Dispatchers.IO) { AppCacheManager.clear(context) }
+          cacheSizeBytes = withContext(Dispatchers.IO) { AppCacheManager.sizeBytes(context) }
+          clearingCache = false
+          Toast.makeText(context, "缓存已清理", Toast.LENGTH_SHORT).show()
         }
+      }
+    }
+    item {
+      BiliOneAboutCard()
+    }
+    item {
+      SettingsAction(
+        title = "恢复默认设置",
+        subtitle = "保留登录状态和缓存，仅重置本页选项",
+        action = "恢复",
+      ) {
+        showResetDialog = true
       }
     }
   }
 }
 
 @Composable
+private fun PreferredResolutionSetting(
+  title: String,
+  selected: PreferredResolutionMode,
+  onSelected: (PreferredResolutionMode) -> Unit,
+) {
+  Surface(
+    modifier = Modifier.fillMaxWidth(),
+    shape = RoundedCornerShape(18.dp),
+    color = MaterialTheme.colorScheme.surface,
+    contentColor = MaterialTheme.colorScheme.onSurface,
+  ) {
+    Column(Modifier.padding(vertical = 8.dp)) {
+      Text(
+        title,
+        modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp),
+        style = MaterialTheme.typography.titleSmall,
+      )
+      PreferredResolutionMode.entries.forEach { mode ->
+        SettingsRadioRow(
+          selected = selected == mode,
+          title = mode.title,
+          description = mode.description,
+          onClick = { onSelected(mode) },
+        )
+      }
+    }
+  }
+}
+
+@Composable
+private fun <T> SettingsRadioGroup(
+  title: String,
+  selected: T,
+  options: List<SettingsOption<T>>,
+  onSelected: (T) -> Unit,
+) {
+  Surface(
+    modifier = Modifier.fillMaxWidth(),
+    shape = RoundedCornerShape(18.dp),
+    color = MaterialTheme.colorScheme.surface,
+    contentColor = MaterialTheme.colorScheme.onSurface,
+  ) {
+    Column(Modifier.padding(vertical = 8.dp)) {
+      Text(
+        title,
+        modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp),
+        style = MaterialTheme.typography.titleSmall,
+      )
+      options.forEach { option ->
+        SettingsRadioRow(
+          selected = selected == option.value,
+          title = option.title,
+          description = option.description,
+          onClick = { onSelected(option.value) },
+        )
+      }
+    }
+  }
+}
+
+@Composable
+private fun SettingsRadioRow(
+  selected: Boolean,
+  title: String,
+  description: String,
+  onClick: () -> Unit,
+) {
+  Row(
+    Modifier.fillMaxWidth()
+      .clickable(onClick = onClick)
+      .padding(start = 10.dp, end = 18.dp, top = 7.dp, bottom = 7.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    RadioButton(selected = selected, onClick = onClick)
+    Column(Modifier.weight(1f)) {
+      Text(
+        title,
+        style = MaterialTheme.typography.titleSmall,
+        color =
+          if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+      )
+      Text(
+        description,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+    }
+  }
+}
+
+@Composable
 private fun SettingsTitle(text: String) {
-  Text(text, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 6.dp))
+  Text(
+    text,
+    style = MaterialTheme.typography.titleLarge,
+    color = MaterialTheme.colorScheme.onBackground,
+    modifier = Modifier.padding(top = 6.dp),
+  )
 }
 
 @Composable
@@ -911,22 +1272,26 @@ private fun SettingsSwitch(
   checked: Boolean,
   onChecked: (Boolean) -> Unit,
 ) {
-  Row(
-    Modifier.fillMaxWidth()
-      .clip(RoundedCornerShape(18.dp))
-      .background(MaterialTheme.colorScheme.surface)
-      .padding(horizontal = 18.dp, vertical = 14.dp),
-    verticalAlignment = Alignment.CenterVertically,
+  Surface(
+    modifier = Modifier.fillMaxWidth().clickable { onChecked(!checked) },
+    shape = RoundedCornerShape(18.dp),
+    color = MaterialTheme.colorScheme.surface,
+    contentColor = MaterialTheme.colorScheme.onSurface,
   ) {
-    Column(Modifier.weight(1f)) {
-      Text(title, style = MaterialTheme.typography.titleSmall)
-      Text(
-        subtitle,
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-      )
+    Row(
+      modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Column(Modifier.weight(1f)) {
+        Text(title, style = MaterialTheme.typography.titleSmall)
+        Text(
+          subtitle,
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
+      Switch(checked = checked, onCheckedChange = onChecked)
     }
-    Switch(checked = checked, onCheckedChange = onChecked)
   }
 }
 
@@ -939,17 +1304,174 @@ private fun SettingsSlider(
   steps: Int,
   onChange: (Float) -> Unit,
 ) {
-  Column(
-    Modifier.fillMaxWidth()
-      .clip(RoundedCornerShape(18.dp))
-      .background(MaterialTheme.colorScheme.surface)
-      .padding(horizontal = 18.dp, vertical = 12.dp)
+  Surface(
+    modifier = Modifier.fillMaxWidth(),
+    shape = RoundedCornerShape(18.dp),
+    color = MaterialTheme.colorScheme.surface,
+    contentColor = MaterialTheme.colorScheme.onSurface,
   ) {
-    Row(Modifier.fillMaxWidth()) {
-      Text(title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
-      Text(valueText, color = MaterialTheme.colorScheme.primary)
+    Column(Modifier.padding(horizontal = 18.dp, vertical = 12.dp)) {
+      Row(Modifier.fillMaxWidth()) {
+        Text(title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+        Text(valueText, color = MaterialTheme.colorScheme.primary)
+      }
+      Slider(value = value, onValueChange = onChange, valueRange = range, steps = steps)
     }
-    Slider(value = value, onValueChange = onChange, valueRange = range, steps = steps)
+  }
+}
+
+@Composable
+private fun SettingsAction(
+  title: String,
+  subtitle: String,
+  action: String,
+  enabled: Boolean = true,
+  onClick: () -> Unit,
+) {
+  Surface(
+    modifier = Modifier.fillMaxWidth(),
+    shape = RoundedCornerShape(18.dp),
+    color = MaterialTheme.colorScheme.surface,
+    contentColor = MaterialTheme.colorScheme.onSurface,
+  ) {
+    Row(
+      modifier = Modifier.padding(start = 18.dp, end = 10.dp, top = 12.dp, bottom = 12.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Column(Modifier.weight(1f)) {
+        Text(title, style = MaterialTheme.typography.titleSmall)
+        Text(
+          subtitle,
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
+      TextButton(onClick = onClick, enabled = enabled) { Text(action) }
+    }
+  }
+}
+
+@Composable
+private fun BiliOneAboutCard() {
+  Surface(
+    modifier = Modifier.fillMaxWidth(),
+    shape = RoundedCornerShape(18.dp),
+    color = MaterialTheme.colorScheme.surface,
+    contentColor = MaterialTheme.colorScheme.onSurface,
+  ) {
+    Row(
+      modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+      AsyncImage(
+        model = "https://i1.hdslb.com/bfs/face/c0903076fb89022aef21a99503bd7e79a6774edf.jpg",
+        contentDescription = null,
+        modifier =
+          Modifier.size(52.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.primaryContainer),
+        contentScale = ContentScale.Crop,
+      )
+      Column(Modifier.weight(1f)) {
+        Text("关于 BiliOne", style = MaterialTheme.typography.titleSmall)
+        Text(
+          "开发者 · ShuyunR",
+          style = MaterialTheme.typography.bodyMedium,
+          color = MaterialTheme.colorScheme.primary,
+        )
+        Text(
+          "版本 ${BuildConfig.VERSION_NAME} · 缓存清理不会影响登录和设置",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
+    }
+  }
+}
+
+@Composable
+private fun WatchLaterPanel(
+  state: WatchLaterUiState,
+  onVideo: (FeedItem, Rect) -> Unit,
+  onVideoLongClick: (FeedItem) -> Unit,
+  hiddenCoverItemId: String?,
+) {
+  val gridState = rememberLazyGridState()
+  val imageLoadPolicy = rememberGridFeedImageLoadPolicy(gridState)
+  CompositionLocalProvider(LocalFeedImageLoadPolicy provides imageLoadPolicy) {
+    LazyVerticalGrid(
+      columns = GridCells.Fixed(3),
+      state = gridState,
+      modifier = Modifier.fillMaxSize(),
+      contentPadding =
+        PaddingValues(end = 136.dp, bottom = NavigationCardBottomClearance),
+      horizontalArrangement = Arrangement.spacedBy(12.dp),
+      verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+      item(
+        key = "watch_later_title",
+        span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) },
+      ) {
+        Row(
+          modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Text(
+            "稍后再看",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+          )
+          Spacer(Modifier.weight(1f))
+          if (state.loaded) {
+            Text(
+              "${state.items.size} 个视频",
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              style = MaterialTheme.typography.bodyMedium,
+            )
+          }
+        }
+      }
+      if (state.items.isEmpty() && !state.loading) {
+        item(
+          key = "watch_later_empty",
+          span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) },
+        ) {
+          Box(
+            Modifier.fillMaxWidth().padding(vertical = 56.dp),
+            contentAlignment = Alignment.Center,
+          ) {
+            Text(
+              if (state.error.isNullOrBlank()) "稍后再看的视频会出现在这里" else "稍后再看加载失败",
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+        }
+      }
+      itemsIndexed(
+        items = state.items,
+        key = { _, item -> item.id },
+      ) { index, item ->
+        var coverBounds by remember(item.id) { mutableStateOf(Rect.Zero) }
+        VideoCardReveal(
+          index = index,
+          batchKey = state.items.firstOrNull()?.id,
+          itemKey = "watch-later-${item.id}",
+        ) {
+          PressableVideoCard(
+            onClick = { onVideo(item, coverBounds) },
+            onLongClick = { onVideoLongClick(item) },
+          ) {
+            MyVideoCardContent(
+              item = item,
+              loadKey = "watch-later-${item.id}",
+              coverVisible = item.id != hiddenCoverItemId,
+              onCoverBoundsChanged = { coverBounds = it },
+            )
+          }
+        }
+      }
+    }
   }
 }
 
@@ -1091,7 +1613,8 @@ private fun HistoryPanel(
           columns = GridCells.Fixed(3),
           state = gridState,
           modifier = Modifier.fillMaxSize(),
-          contentPadding = PaddingValues(end = 136.dp, bottom = 112.dp),
+          contentPadding =
+            PaddingValues(end = 136.dp, bottom = NavigationCardBottomClearance),
           horizontalArrangement = Arrangement.spacedBy(12.dp),
           verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -1199,19 +1722,13 @@ private fun HistoryPanel(
                         onClick = { onLive(room, coverBounds) },
                         onLongClick = {},
                       ) {
-                        FeedCardContent(
+                        MyVideoCardContent(
                           item = card,
-                          metadataMode = FeedCardMetadataMode.LIVE,
-                          profileClickEnabled = false,
-                          onProfileBoundsClick = { _, _ -> },
+                          loadKey = history.stableId,
                           coverVisible = room.stableId != hiddenCoverItemId,
                           onCoverBoundsChanged = { coverBounds = it },
-                          liveStatusText = if (room.liveStatus == 1) "直播中" else "未开播",
-                          liveSecondaryText =
-                            listOfNotNull(room.parentAreaName, room.areaName)
-                              .distinct()
-                              .joinToString(" · "),
-                          liveTrailingText = formatHistoryWatchTime(history.viewAt),
+                          historyLabel = formatHistoryWatchTime(history.viewAt),
+                          mediaBadge = if (room.liveStatus == 1) "直播中" else "未开播",
                         )
                       }
                     }
@@ -1721,8 +2238,12 @@ private fun VideoPanel(
                     },
                   ),
                 shape = RoundedCornerShape(18.dp),
-                color = if (folder.isPublic) Color(0xFFECE3FF) else Color(0xFFE4E6EA),
-                contentColor = Color(0xFF3E4050),
+                color =
+                  if (folder.isPublic) MaterialTheme.colorScheme.primaryContainer
+                  else MaterialTheme.colorScheme.surfaceContainer,
+                contentColor =
+                  if (folder.isPublic) MaterialTheme.colorScheme.onPrimaryContainer
+                  else MaterialTheme.colorScheme.onSurface,
                 border =
                   if (state.selectedFolderId == folder.id)
                     BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
@@ -1766,7 +2287,7 @@ private fun VideoPanel(
         columns = GridCells.Fixed(3),
         state = gridState,
         modifier = Modifier.weight(1f),
-        contentPadding = PaddingValues(bottom = 112.dp),
+        contentPadding = PaddingValues(bottom = NavigationCardBottomClearance),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -2305,7 +2826,13 @@ private fun NativeMessagePane(
         modifier = Modifier.width(310.dp)
           .fillMaxHeight()
           .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .45f)),
-        contentPadding = PaddingValues(start = 8.dp, top = 8.dp, end = 8.dp, bottom = 112.dp),
+        contentPadding =
+          PaddingValues(
+            start = 8.dp,
+            top = 8.dp,
+            end = 8.dp,
+            bottom = NavigationCardBottomClearance,
+          ),
         verticalArrangement = Arrangement.spacedBy(6.dp),
       ) {
         items(state.messages, key = { it.id }) { message ->
@@ -2785,7 +3312,7 @@ private fun InteractionMessagePane(
   LazyColumn(
     state = listState,
     modifier = Modifier.fillMaxSize().imePadding(),
-    contentPadding = PaddingValues(bottom = 112.dp),
+    contentPadding = PaddingValues(bottom = NavigationCardBottomClearance),
     verticalArrangement = Arrangement.spacedBy(0.dp),
   ) {
     items(state.messages, key = { it.id }) { message ->

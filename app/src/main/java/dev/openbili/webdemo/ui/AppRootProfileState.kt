@@ -9,8 +9,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Rect
 import dev.openbili.webdemo.api.BiliApi
 import dev.openbili.webdemo.api.FollowingGroup
-import dev.openbili.webdemo.api.SpaceProfile
+import dev.openbili.webdemo.api.SpaceContentCard
 import dev.openbili.webdemo.api.SpaceDynamicItem
+import dev.openbili.webdemo.api.SpaceProfile
 import dev.openbili.webdemo.feed.FeedItem
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -46,7 +47,18 @@ internal class AppRootProfileState {
   var spaceDynamicLoading by mutableStateOf(false)
   var spaceDynamicError by mutableStateOf<String?>(null)
   var selectedDynamicId by mutableStateOf<String?>(null)
+  var spaceCollections by mutableStateOf<List<SpaceContentCard>>(emptyList())
+  var spaceCollectionsLoading by mutableStateOf(false)
+  var spaceCollectionsError by mutableStateOf<String?>(null)
+  var selectedCollectionId by mutableStateOf<String?>(null)
+  var spaceCollectionVideos by mutableStateOf<List<FeedItem>>(emptyList())
+  var spaceCollectionPage by mutableStateOf(0)
+  var spaceCollectionHasMore by mutableStateOf(false)
+  var spaceCollectionLoading by mutableStateOf(false)
+  var spaceCollectionError by mutableStateOf<String?>(null)
+  var spaceCollectionTotal by mutableStateOf(0)
   private var spaceDynamicGeneration = 0L
+  private var spaceCollectionGeneration = 0L
   private val dynamicLikeBusy = mutableSetOf<String>()
   private val dynamicManageBusy = mutableSetOf<String>()
 
@@ -129,6 +141,108 @@ internal class AppRootProfileState {
         spaceDynamicLoading = false
       }
     }
+  }
+
+  fun loadSpaceCollections(mid: Long, refresh: Boolean, scope: CoroutineScope) {
+    if (profileMid != mid || spaceCollectionsLoading) return
+    if (!refresh && spaceCollections.isNotEmpty()) return
+    val generation = ++spaceCollectionGeneration
+    spaceCollectionsLoading = true
+    spaceCollectionsError = null
+    scope.launch {
+      val result = withContext(Dispatchers.IO) { runCatching { BiliApi.getSpaceCollections(mid) } }
+      if (profileMid == mid && generation == spaceCollectionGeneration) {
+        result
+          .onSuccess { collections ->
+            spaceCollections = collections
+            if (
+              selectedCollectionId != null && collections.none { it.id == selectedCollectionId }
+            ) {
+              clearSelectedSpaceCollection()
+            }
+          }
+          .onFailure { spaceCollectionsError = it.message ?: "合集和系列加载失败" }
+        spaceCollectionsLoading = false
+      }
+    }
+  }
+
+  fun selectSpaceCollection(
+    mid: Long,
+    collection: SpaceContentCard,
+    scope: CoroutineScope,
+  ) {
+    if (profileMid != mid || collection.collectionId <= 0L) return
+    if (selectedCollectionId != collection.id) {
+      spaceCollectionGeneration++
+      selectedCollectionId = collection.id
+      spaceCollectionVideos = emptyList()
+      spaceCollectionPage = 0
+      spaceCollectionHasMore = true
+      spaceCollectionLoading = false
+      spaceCollectionError = null
+      spaceCollectionTotal = collection.collectionTotal
+    }
+    if (spaceCollectionVideos.isEmpty() && !spaceCollectionLoading) {
+      loadSpaceCollectionPage(mid, collection, page = 1, scope = scope)
+    }
+  }
+
+  fun loadSpaceCollectionPage(
+    mid: Long,
+    collection: SpaceContentCard,
+    page: Int,
+    scope: CoroutineScope,
+  ) {
+    if (
+      profileMid != mid ||
+        selectedCollectionId != collection.id ||
+        spaceCollectionLoading ||
+        page <= 0 ||
+        (page > 1 && !spaceCollectionHasMore)
+    ) {
+      return
+    }
+    val generation = ++spaceCollectionGeneration
+    spaceCollectionLoading = true
+    spaceCollectionError = null
+    scope.launch {
+      val result =
+        withContext(Dispatchers.IO) {
+          runCatching { BiliApi.getSpaceCollectionVideos(mid, collection, page) }
+        }
+      if (
+        profileMid == mid &&
+          selectedCollectionId == collection.id &&
+          generation == spaceCollectionGeneration
+      ) {
+        result
+          .onSuccess { response ->
+            val loaded =
+              response.cards.map(::feedItemFromCard).map { video ->
+                video.copy(
+                  uploader = video.uploader.orEmpty().ifBlank { spaceProfile?.name.orEmpty() },
+                  uploaderFace =
+                    video.uploaderFace.orEmpty().ifBlank { spaceProfile?.face.orEmpty() },
+                  uploaderMid = video.uploaderMid.takeIf { it > 0L } ?: mid,
+                )
+              }
+            spaceCollectionVideos =
+              if (page == 1) loaded else (spaceCollectionVideos + loaded).distinctBy { it.id }
+            spaceCollectionPage = page
+            spaceCollectionHasMore = response.hasMore
+            spaceCollectionTotal = response.total
+          }
+          .onFailure { spaceCollectionError = it.message ?: "合集和系列视频加载失败" }
+        spaceCollectionLoading = false
+      }
+    }
+  }
+
+  fun clearSelectedSpaceCollection() {
+    spaceCollectionGeneration++
+    selectedCollectionId = null
+    spaceCollectionLoading = false
   }
 
   fun toggleDynamicLike(
@@ -264,6 +378,15 @@ internal class AppRootProfileState {
     spaceDynamicLoading = false
     spaceDynamicError = null
     selectedDynamicId = null
+    spaceCollections = emptyList()
+    spaceCollectionsLoading = false
+    spaceCollectionsError = null
+    clearSelectedSpaceCollection()
+    spaceCollectionVideos = emptyList()
+    spaceCollectionPage = 0
+    spaceCollectionHasMore = false
+    spaceCollectionError = null
+    spaceCollectionTotal = 0
     dynamicLikeBusy.clear()
     dynamicManageBusy.clear()
     spaceDynamicGeneration++
@@ -307,6 +430,14 @@ internal class AppRootProfileState {
       selectedDynamicId = selectedDynamicId,
       commentReturnTransition = commentProfileReturnTransition,
       avatarReturnTransition = avatarProfileReturnTransition,
+      collections = spaceCollections,
+      collectionsError = spaceCollectionsError,
+      selectedCollectionId = selectedCollectionId,
+      collectionVideos = spaceCollectionVideos,
+      collectionPage = spaceCollectionPage,
+      collectionHasMore = spaceCollectionHasMore,
+      collectionError = spaceCollectionError,
+      collectionTotal = spaceCollectionTotal,
     )
 
   fun restoreProfile(entry: ProfilePageEntry) {
@@ -327,7 +458,18 @@ internal class AppRootProfileState {
     spaceDynamicError = entry.dynamicError
     spaceDynamicLoading = false
     selectedDynamicId = entry.selectedDynamicId
+    spaceCollections = entry.collections
+    spaceCollectionsLoading = false
+    spaceCollectionsError = entry.collectionsError
+    selectedCollectionId = entry.selectedCollectionId
+    spaceCollectionVideos = entry.collectionVideos
+    spaceCollectionPage = entry.collectionPage
+    spaceCollectionHasMore = entry.collectionHasMore
+    spaceCollectionLoading = false
+    spaceCollectionError = entry.collectionError
+    spaceCollectionTotal = entry.collectionTotal
     spaceDynamicGeneration++
+    spaceCollectionGeneration++
   }
 
   fun restoreProfileReturnTransitions(entry: ProfilePageEntry) {

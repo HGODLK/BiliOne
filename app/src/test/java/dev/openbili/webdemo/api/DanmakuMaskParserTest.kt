@@ -25,11 +25,51 @@ class DanmakuMaskParserTest {
     val timeline = DanmakuMaskParser.parseBytes(webmask(svg))
 
     assertTrue(
-      timeline.protectedContoursAt(0).contentToString(),
+      timeline.allowedContoursAt(0).contentToString(),
       timeline.isProtectedAt(0L, .5f, .5f),
     )
     assertFalse(timeline.isProtectedAt(0L, .1f, .1f))
     assertFalse(timeline.isProtectedAt(-1L, .5f, .5f))
+  }
+
+  @Test
+  fun keepsAllowedBackgroundDirectionWhenCloseUpSubjectCoversMostOfFrame() {
+    val svg =
+      """
+      <svg viewBox="0 0 160 90" xmlns="http://www.w3.org/2000/svg">
+        <path d="M0 0 H20 V90 H0 Z"/>
+        <path d="M140 0 H160 V90 H140 Z"/>
+      </svg>
+      """
+        .trimIndent()
+    val timeline = DanmakuMaskParser.parseBytes(webmask(svg))
+
+    assertTrue(timeline.isProtectedAt(0L, .5f, .5f))
+    assertFalse(timeline.isProtectedAt(0L, .05f, .5f))
+    assertFalse(timeline.isProtectedAt(0L, .95f, .5f))
+  }
+
+  @Test
+  fun treatsFullViewportPathAsEntirelyAllowedBackground() {
+    val svg =
+      """
+      <svg viewBox="0 0 160 90" xmlns="http://www.w3.org/2000/svg">
+        <path d="M0 0 H160 V90 H0 Z"/>
+      </svg>
+      """
+        .trimIndent()
+    val timeline = DanmakuMaskParser.parseBytes(webmask(svg))
+
+    assertFalse(timeline.isProtectedAt(0L, .5f, .5f))
+    assertFalse(timeline.isProtectedAt(0L, .05f, .05f))
+  }
+
+  @Test
+  fun treatsPathlessFrameAsNoProtectedSubject() {
+    val svg = """<svg viewBox="0 0 160 90" xmlns="http://www.w3.org/2000/svg"></svg>"""
+    val timeline = DanmakuMaskParser.parseBytes(webmask(svg))
+
+    assertFalse(timeline.isProtectedAt(0L, .5f, .5f))
   }
 
   @Test
@@ -97,6 +137,40 @@ class DanmakuMaskParserTest {
     assertEquals(0, timeline.frameIndexAt(16L))
     assertEquals(1, timeline.frameIndexAt(17L))
     assertEquals(2, timeline.frameIndexAt(34L))
+  }
+
+  @Test
+  fun skipsMalformedSampleWithoutDroppingThePreviousMask() {
+    val validStart =
+      "<svg viewBox=\"0 0 160 90\"><path d=\"M0 0 H160 V90 H96 V18 H64 V90 H0 Z\"/></svg>"
+    val malformed = "<svg><path d=\"not-a-path\"/></svg>"
+    val validEnd =
+      "<svg viewBox=\"0 0 160 90\"><path d=\"M0 0 H160 V90 H112 V18 H80 V90 H0 Z\"/></svg>"
+
+    val timeline =
+      DanmakuMaskParser.parseBytes(webmask(0 to validStart, 33 to malformed, 66 to validEnd))
+
+    assertEquals(0, timeline.renderFrameIndexAt(33L))
+    assertTrue(timeline.isProtectedAt(33L, .5f, .5f))
+    assertEquals(1, timeline.frameIndexAt(66L))
+  }
+
+  @Test
+  fun holdsOnlyShortEmptySampleBetweenValidMasks() {
+    val validStart =
+      "<svg viewBox=\"0 0 160 90\"><path d=\"M0 0 H160 V90 H96 V18 H64 V90 H0 Z\"/></svg>"
+    val empty = "<svg viewBox=\"0 0 160 90\"></svg>"
+    val validEnd =
+      "<svg viewBox=\"0 0 160 90\"><path d=\"M0 0 H160 V90 H112 V18 H80 V90 H0 Z\"/></svg>"
+
+    val shortGap =
+      DanmakuMaskParser.parseBytes(webmask(0 to validStart, 33 to empty, 66 to validEnd))
+    val sustainedGap =
+      DanmakuMaskParser.parseBytes(webmask(0 to validStart, 33 to empty, 200 to validEnd))
+
+    assertEquals(0, shortGap.renderFrameIndexAt(33L))
+    assertEquals(1, sustainedGap.renderFrameIndexAt(33L))
+    assertTrue(sustainedGap.allowedContoursAt(1).isEmpty())
   }
 
   private fun webmask(svg: String): ByteArray = webmask(0 to svg)

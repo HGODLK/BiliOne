@@ -47,6 +47,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.openbili.webdemo.R
@@ -100,12 +101,13 @@ internal fun PlayerGestureLayer(
   val latestFullscreen by rememberUpdatedState(isFullscreen)
   val latestFullscreenChanged by rememberUpdatedState(onFullscreenChanged)
   val latestSeek by rememberUpdatedState(onSeek)
+  val latestIndicator by rememberUpdatedState(onIndicator)
   val latestSeekPreview by rememberUpdatedState(onSeekPreview)
   val latestSeekCancel by rememberUpdatedState(onSeekCancel)
   Box(
     modifier
       .twoFingerPlayerGesture(
-        enabled = enabledFullscreenToggle,
+        enabledFullscreenToggle = enabledFullscreenToggle,
         enabledDoubleTapSeek = enabledTwoFingerSeek,
         edgeInset = 24.dp,
         isFullscreen = { latestFullscreen },
@@ -115,6 +117,14 @@ internal fun PlayerGestureLayer(
             (positionProvider() + deltaMs).coerceIn(0L, durationMs.coerceAtLeast(0L))
           latestSeek(target)
           latestSeekPreview(null)
+          latestIndicator(
+            GestureIndicator(
+              kind =
+                if (deltaMs >= 0L) GestureIndicatorKind.SEEK_FORWARD
+                else GestureIndicatorKind.SEEK_BACKWARD,
+              value = 1f,
+            )
+          )
         },
         onTwoFingerContactChanged = { active ->
           if (active) {
@@ -352,6 +362,25 @@ internal fun GestureIndicatorOverlay(
   indicator: GestureIndicator,
   modifier: Modifier = Modifier,
 ) {
+  if (
+    indicator.kind == GestureIndicatorKind.SEEK_FORWARD ||
+      indicator.kind == GestureIndicatorKind.SEEK_BACKWARD
+  ) {
+    Surface(
+      modifier = modifier,
+      shape = RoundedCornerShape(18.dp),
+      color = Color.Black.copy(alpha = .72f),
+      contentColor = Color.White,
+    ) {
+      Text(
+        text = if (indicator.kind == GestureIndicatorKind.SEEK_FORWARD) "+5s" else "-5s",
+        modifier = Modifier.padding(horizontal = 22.dp, vertical = 12.dp),
+        style = MaterialTheme.typography.titleLarge,
+        fontWeight = FontWeight.SemiBold,
+      )
+    }
+    return
+  }
   Surface(
     modifier = modifier,
     shape = RoundedCornerShape(24.dp),
@@ -393,6 +422,8 @@ internal fun GestureIndicatorOverlay(
 internal enum class GestureIndicatorKind {
   BRIGHTNESS,
   VOLUME,
+  SEEK_BACKWARD,
+  SEEK_FORWARD,
 }
 
 internal data class GestureIndicator(val kind: GestureIndicatorKind, val value: Float)
@@ -471,7 +502,7 @@ internal fun fullscreenTargetForSpan(
 }
 
 internal fun Modifier.twoFingerPlayerGesture(
-  enabled: Boolean,
+  enabledFullscreenToggle: Boolean,
   enabledDoubleTapSeek: Boolean = true,
   edgeInset: Dp,
   isFullscreen: () -> Boolean,
@@ -479,7 +510,10 @@ internal fun Modifier.twoFingerPlayerGesture(
   onSeekBy: (Long) -> Unit,
   onTwoFingerContactChanged: (Boolean) -> Unit,
 ): Modifier =
-  pointerInput(enabled, enabledDoubleTapSeek, edgeInset) {
+  if (!enabledFullscreenToggle && !enabledDoubleTapSeek) {
+    this
+  } else {
+    pointerInput(enabledFullscreenToggle, enabledDoubleTapSeek, edgeInset) {
     var previousTapAt = 0L
     var previousTapCenter = Offset.Unspecified
     awaitEachGesture {
@@ -518,7 +552,7 @@ internal fun Modifier.twoFingerPlayerGesture(
             if (active.any { it.position.x !in safeInsetPx..(size.width - safeInsetPx) }) {
               invalid = true
             }
-            if (enabled && !invalid && !fullscreenTriggered) {
+            if (enabledFullscreenToggle && !invalid && !fullscreenTriggered) {
               val target =
                 fullscreenTargetForSpan(
                   isFullscreen = isFullscreen(),
@@ -540,8 +574,7 @@ internal fun Modifier.twoFingerPlayerGesture(
         if (contactClaimed) onTwoFingerContactChanged(false)
       }
       val wasTap =
-        enabled &&
-          enabledDoubleTapSeek &&
+        enabledDoubleTapSeek &&
           sawTwoPointers &&
           !invalid &&
           !fullscreenTriggered &&
@@ -564,6 +597,7 @@ internal fun Modifier.twoFingerPlayerGesture(
         previousTapCenter = Offset.Unspecified
       }
     }
+  }
   }
 
 private const val PINCH_SPAN_FRACTION = .035f

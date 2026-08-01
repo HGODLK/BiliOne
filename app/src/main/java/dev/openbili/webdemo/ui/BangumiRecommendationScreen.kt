@@ -46,6 +46,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
@@ -54,55 +55,58 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.openbili.webdemo.R
-import dev.openbili.webdemo.bangumi.BangumiExploreViewModel
-import dev.openbili.webdemo.bangumi.BangumiPreviewPlayerState
-import dev.openbili.webdemo.bangumi.BangumiPreviewPlayerViewModel
-import dev.openbili.webdemo.bangumi.BangumiRecommendationUiState
 import dev.openbili.webdemo.api.BangumiEpisode
 import dev.openbili.webdemo.api.BangumiRecommendation
 import dev.openbili.webdemo.api.BangumiSeason
 import dev.openbili.webdemo.api.BangumiSection
 import dev.openbili.webdemo.api.SpaceContentCard
 import dev.openbili.webdemo.api.SpaceContentKind
+import dev.openbili.webdemo.bangumi.BangumiExploreViewModel
+import dev.openbili.webdemo.bangumi.BangumiPreviewPlayerState
+import dev.openbili.webdemo.bangumi.BangumiPreviewPlayerViewModel
+import dev.openbili.webdemo.bangumi.BangumiRecommendationUiState
 import dev.openbili.webdemo.feed.CoverImage
 import dev.openbili.webdemo.feed.FeedItem
 import dev.openbili.webdemo.feed.LoadedFeedImageRegistry
+import java.time.LocalTime
+import java.time.format.DateTimeFormatter
 import kotlin.math.absoluteValue
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
-import java.time.LocalTime
-import java.time.format.DateTimeFormatter
 
 internal data class BangumiPreviewTarget(
   val season: BangumiSeason,
@@ -124,6 +128,12 @@ internal fun bangumiRecommendationIndexForSettledPage(
   settledPage: Int,
   itemCount: Int,
 ): Int = if (itemCount > 0) Math.floorMod(settledPage, itemCount) else 0
+
+internal fun shouldPlayBangumiPreview(
+  active: Boolean,
+  mainPageVisible: Boolean,
+  lifecycleStarted: Boolean,
+): Boolean = active && !mainPageVisible && lifecycleStarted
 
 internal fun shouldCommitBangumiPreview(
   targetAvailable: Boolean,
@@ -317,6 +327,22 @@ internal fun BangumiRecommendationScreen(
   var readyPosterKeys by remember { mutableStateOf(emptySet<String>()) }
   var livePlaceholderItem by remember { mutableStateOf<BangumiRecommendation?>(null) }
   var heroCardTransitionActive by remember { mutableStateOf(false) }
+  val lifecycleOwner = LocalLifecycleOwner.current
+  var lifecycleStarted by
+    remember(lifecycleOwner) {
+      mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
+    }
+  DisposableEffect(lifecycleOwner, previewPlayerViewModel) {
+    val observer = LifecycleEventObserver { _, _ ->
+      lifecycleStarted = lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+      if (!lifecycleStarted) previewPlayerViewModel.pauseForInactivePage()
+    }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose {
+      lifecycleOwner.lifecycle.removeObserver(observer)
+      previewPlayerViewModel.pauseForInactivePage()
+    }
+  }
 
   BackHandler(enabled = active && livePlaceholderItem != null) { livePlaceholderItem = null }
 
@@ -355,7 +381,7 @@ internal fun BangumiRecommendationScreen(
       if (suppressNextFollowingRefresh) {
         suppressNextFollowingRefresh = false
       } else {
-        exploreViewModel.refreshFollowing(force = true)
+        exploreViewModel.refreshFollowing(force = true, silent = true)
       }
     }
   }
@@ -471,8 +497,13 @@ internal fun BangumiRecommendationScreen(
     }
   }
 
-  val previewActive = active && !mainPageVisible && !verticalPageMoving
-  val previewPlaybackActive = active && !mainPageVisible
+  val previewPlaybackActive =
+    shouldPlayBangumiPreview(
+      active = active,
+      mainPageVisible = mainPageVisible,
+      lifecycleStarted = lifecycleStarted,
+    )
+  val previewActive = previewPlaybackActive && !verticalPageMoving
   LaunchedEffect(
     previewActive,
     selectedPreviewTarget?.item?.id,
@@ -755,7 +786,7 @@ internal fun BangumiRecommendationScreen(
           previewPlayerViewModel = previewPlayerViewModel,
           previewPlayerState = previewPlayerState,
           previewCoverBlend = previewCoverBlend,
-          previewCoverVisible = previewCardGestureActive,
+          previewCoverVisible = previewCardGestureActive || !lifecycleStarted,
           onRetry = { onRetryDetail(selectedItem.stableId) },
           onOpenMainEpisode = { card, item, bounds ->
             heroCardTransitionActive = true
@@ -840,7 +871,7 @@ private fun BangumiRecommendationFallbackWithExplore(
       if (suppressNextFollowingRefresh) {
         suppressNextFollowingRefresh = false
       } else {
-        exploreViewModel.refreshFollowing(force = true)
+        exploreViewModel.refreshFollowing(force = true, silent = true)
       }
     }
   }

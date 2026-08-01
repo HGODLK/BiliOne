@@ -28,4 +28,13 @@ internal object PlaybackCache {
           .also { instance = it }
     }
   }
+
+  fun sizeBytes(context: Context): Long = get(context).cacheSpace
+
+  fun clear(context: Context) {
+    synchronized(this) {
+      val cache = get(context)
+      cache.keys.toList().forEach { key -> cache.removeResource(key) }
+    }
+  }
 }

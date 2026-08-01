@@ -9,8 +9,6 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.relocation.BringIntoViewRequester
-import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
@@ -35,7 +33,7 @@ fun PressableVideoCard(
   shape: Shape = VideoShapeTokens.Card,
   content: @Composable () -> Unit,
 ) {
-  val bringIntoViewRequester = remember { BringIntoViewRequester() }
+  val bringIntoViewRequester = rememberNavigationBringIntoViewRequester()
   val scope = rememberCoroutineScope()
   val interactionSource = remember { MutableInteractionSource() }
   val pressed by interactionSource.collectIsPressedAsState()
@@ -49,7 +47,7 @@ fun PressableVideoCard(
     modifier =
       modifier
         .fillMaxWidth()
-        .bringIntoViewRequester(bringIntoViewRequester)
+        .navigationBringIntoViewTarget(bringIntoViewRequester)
         .graphicsLayer {
           scaleX = scale
           scaleY = scale

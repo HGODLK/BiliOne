@@ -255,7 +255,7 @@ fun ArticleVisual(
         .then(if (enforceAspectRatio) Modifier.aspectRatio(16f / 9f) else Modifier)
         .clip(VideoShapeTokens.Player)
         .graphicsLayer { alpha = if (visible) 1f else 0f }
-        .background(Color(0xFFDCEEFF))
+        .background(MaterialTheme.colorScheme.primaryContainer)
   ) {
     if (article.coverUrl.isNotBlank()) {
       val transitionBitmap =
@@ -294,7 +294,7 @@ fun ArticleVisual(
         article.title.take(1).ifBlank { "文" },
         modifier = Modifier.align(Alignment.Center),
         style = MaterialTheme.typography.displayLarge,
-        color = Color(0xFF405A73).copy(alpha = .52f),
+        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = .58f),
         fontWeight = FontWeight.Bold,
       )
     }

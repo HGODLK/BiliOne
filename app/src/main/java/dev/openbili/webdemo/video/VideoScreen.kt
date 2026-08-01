@@ -9,8 +9,11 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.view.View
 import android.view.Window
 import android.view.WindowManager
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -53,8 +56,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.relocation.BringIntoViewRequester
-import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -118,6 +119,7 @@ import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
@@ -127,7 +129,9 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import coil3.compose.AsyncImage
+import dev.openbili.webdemo.BuildConfig
 import dev.openbili.webdemo.PlayerState
+import dev.openbili.webdemo.WebViewConfigurator
 import dev.openbili.webdemo.api.ArticleItem
 import dev.openbili.webdemo.api.BiliEmote
 import dev.openbili.webdemo.api.BiliEmotePackage
@@ -157,6 +161,8 @@ import dev.openbili.webdemo.ui.TransitionPreparationResult
 import dev.openbili.webdemo.ui.TransitionReadySignal
 import dev.openbili.webdemo.ui.VideoCardGradient
 import dev.openbili.webdemo.ui.VideoShapeTokens
+import dev.openbili.webdemo.ui.navigationBringIntoViewTarget
+import dev.openbili.webdemo.ui.rememberNavigationBringIntoViewRequester
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
@@ -567,8 +573,8 @@ fun VideoScreen(
   val transitionDuration = if (settings.reduceMotion) 100 else 360
   val autoNextKey = nextPlaybackTarget?.key
   var autoNextSeconds by
-    remember(item.id, currentCid, autoNextKey) {
-      mutableIntStateOf(nextPlaybackTarget?.countdownSeconds ?: 5)
+    remember(item.id, currentCid, autoNextKey, settings.autoNextCountdownSeconds) {
+      mutableIntStateOf(settings.autoNextCountdownSeconds)
     }
   var autoNextTriggered by remember(item.id, currentCid, autoNextKey) { mutableStateOf(false) }
   val autoNextHandoff = remember(item.id, currentCid, autoNextKey) { Animatable(0f) }
@@ -607,11 +613,16 @@ fun VideoScreen(
       nextPlaybackTarget.onSelect()
     }
   }
-  LaunchedEffect(playbackEnded, autoNextKey) {
-    autoNextSeconds = nextPlaybackTarget?.countdownSeconds ?: 5
+  LaunchedEffect(
+    playbackEnded,
+    autoNextKey,
+    settings.autoPlayNext,
+    settings.autoNextCountdownSeconds,
+  ) {
+    autoNextSeconds = settings.autoNextCountdownSeconds
     autoNextTriggered = false
     autoNextHandoff.snapTo(0f)
-    if (!playbackEnded || autoNextKey == null) return@LaunchedEffect
+    if (!playbackEnded || autoNextKey == null || !settings.autoPlayNext) return@LaunchedEffect
     while (autoNextSeconds > 0 && !autoNextTriggered) {
       delay(1_000)
       if (!autoNextTriggered) autoNextSeconds -= 1
@@ -712,7 +723,9 @@ fun VideoScreen(
     }
   }
 
-  val fullscreenInsetPx = with(LocalDensity.current) { 8.dp.roundToPx() }
+  // The fullscreen player reaches the actual window edges. Keep the rounded-corner interpolation
+  // below unchanged for this first true-edge fullscreen trial.
+  val fullscreenInsetPx = 0
   val floatingSourceBounds =
     if (fullscreenLayerVisible) frozenEmbeddedPlayerBounds else embeddedPlayerBounds
   if (fullscreenLayerVisible) {
@@ -729,11 +742,7 @@ fun VideoScreen(
       floatingSourceBounds.height > 0f
   ) {
     val progress = fullscreenProgress.value.coerceIn(0f, 1f)
-    val fullscreenCorner = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) 14.dp else 0.dp
-    val animatedShape =
-      RoundedCornerShape(
-        VideoShapeTokens.CornerRadius * (1f - progress) + fullscreenCorner * progress
-      )
+    val animatedShape = RoundedCornerShape(VideoShapeTokens.CornerRadius * (1f - progress))
     Box(
       Modifier.fillMaxSize()
         .floatingPlayerLayout(
@@ -747,6 +756,13 @@ fun VideoScreen(
           clip = true
         }
     ) {
+      val embeddedLetterboxShadeAlpha = if (bangumiPage != null) .74f else .36f
+      val letterboxShadeAlpha =
+        fullscreenVideoBackgroundShadeAlpha(
+          embeddedShadeAlpha = embeddedLetterboxShadeAlpha,
+          fullscreenBrightness = settings.fullscreenBackgroundBrightness,
+          fullscreenProgress = progress,
+        )
       VideoCardGradient(
         coverUrl = item.coverUrl,
         modifier = Modifier.fillMaxSize(),
@@ -756,8 +772,7 @@ fun VideoScreen(
           // Only shade the cover-derived letterbox. The SurfaceView is placed above this layer,
           // so the decoded video keeps its original luminance and HDR output.
           Box(
-            Modifier.matchParentSize()
-              .background(Color.Black.copy(alpha = if (bangumiPage != null) .74f else .36f))
+            Modifier.matchParentSize().background(Color.Black.copy(alpha = letterboxShadeAlpha))
           )
           playerView(Modifier.fillMaxSize(), progress, fullscreenLayerVisible)
         }
@@ -776,12 +791,7 @@ fun VideoScreen(
           )
           .graphicsLayer {
             val progress = fullscreenProgress.value.coerceIn(0f, 1f)
-            val fullscreenCorner =
-              if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) 14.dp else 0.dp
-            shape =
-              RoundedCornerShape(
-                VideoShapeTokens.CornerRadius * (1f - progress) + fullscreenCorner * progress
-              )
+            shape = RoundedCornerShape(VideoShapeTokens.CornerRadius * (1f - progress))
             clip = true
             alpha = progress.coerceIn(0f, 1f)
           }
@@ -793,6 +803,7 @@ fun VideoScreen(
               enabledVolume = settings.volumeGesture,
               enabledSeek = settings.horizontalSeekGesture,
               enabledFullscreenToggle = settings.twoFingerFullscreenGesture,
+              enabledTwoFingerSeek = settings.twoFingerSeekGesture,
               positionProvider = playerPositionProvider,
               durationMs = durationMs,
               onSeek = onSeek,
@@ -881,6 +892,7 @@ fun VideoScreen(
               },
               danmakuDisplayArea = settings.danmakuDisplayArea,
               danmakuDensity = settings.danmakuDensity,
+              danmakuBlockLevel = settings.danmakuBlockLevel,
               danmakuOpacity = settings.danmakuOpacity,
               danmakuFontScale = settings.danmakuFontScale,
               danmakuSpeed = settings.danmakuSpeed,
@@ -890,6 +902,9 @@ fun VideoScreen(
               },
               onDanmakuDensityChange = { value ->
                 onSettingsChange { it.copy(danmakuDensity = value) }
+              },
+              onDanmakuBlockLevelChange = { value ->
+                onSettingsChange { it.copy(danmakuBlockLevel = value) }
               },
               onDanmakuOpacityChange = { value ->
                 onSettingsChange { it.copy(danmakuOpacity = value) }
@@ -928,8 +943,11 @@ fun VideoScreen(
           visible = gestureFeedbackVisible,
           modifier =
             Modifier.align(
-                if (gestureFeedback?.kind == GestureIndicatorKind.BRIGHTNESS) Alignment.CenterStart
-                else Alignment.CenterEnd
+                when (gestureFeedback?.kind) {
+                  GestureIndicatorKind.BRIGHTNESS -> Alignment.CenterStart
+                  GestureIndicatorKind.VOLUME -> Alignment.CenterEnd
+                  else -> Alignment.Center
+                }
               )
               .padding(horizontal = 28.dp)
               .zIndex(4f),
@@ -965,6 +983,7 @@ fun VideoScreen(
               nextTitle = nextPlaybackTarget.title,
               seconds = autoNextSeconds,
               triggered = autoNextTriggered,
+              autoPlayEnabled = settings.autoPlayNext,
               handoffProgress = autoNextHandoffProgress,
               revealAlpha = playbackEndRevealAlpha,
               isFullscreen = true,
@@ -1392,6 +1411,93 @@ internal fun commentImagePanLimit(
   scale: Float,
 ): Float = maxOf(0f, (imageSize * scale - viewportSize) / 2f)
 
+internal fun isLongCommentImage(width: Int, height: Int): Boolean = width > 0 && height >= width * 2
+
+internal fun fullResolutionCommentImageUrl(url: String): String {
+  val host = runCatching { java.net.URI(url).host.orEmpty() }.getOrDefault("")
+  if (host != "hdslb.com" && !host.endsWith(".hdslb.com")) return url
+  val base = url.substringBefore('?').substringBefore('@')
+  val query = url.substringAfter('?', "")
+  return base + if (query.isBlank()) "" else "?$query"
+}
+
+internal fun longCommentImageHtml(imageUrl: String): String {
+  val escapedUrl =
+    buildString(imageUrl.length) {
+      imageUrl.forEach { character ->
+        append(
+          when (character) {
+            '&' -> "&amp;"
+            '"' -> "&quot;"
+            '\'' -> "&#39;"
+            '<' -> "&lt;"
+            '>' -> "&gt;"
+            else -> character
+          }
+        )
+      }
+    }
+  return """
+    <!doctype html>
+    <html>
+      <head>
+        <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+        <style>
+          html, body {
+            width: 100%;
+            margin: 0;
+            padding: 0;
+            overflow-x: hidden;
+            background: transparent;
+          }
+          img {
+            display: block;
+            width: 100%;
+            height: auto;
+            margin: 0;
+            padding: 0;
+          }
+        </style>
+      </head>
+      <body><img src="$escapedUrl"></body>
+    </html>
+  """
+    .trimIndent()
+}
+
+internal data class CommentImagePreviewLayout(
+  val widthPx: Float,
+  val heightPx: Float,
+  val verticallyScrollable: Boolean,
+)
+
+internal fun commentImagePreviewLayout(
+  viewportWidth: Float,
+  viewportHeight: Float,
+  imageWidth: Int,
+  imageHeight: Int,
+  wideViewport: Boolean,
+): CommentImagePreviewLayout {
+  val safeViewportWidth = viewportWidth.coerceAtLeast(1f)
+  val safeViewportHeight = viewportHeight.coerceAtLeast(1f)
+  val ratio = if (imageWidth > 0 && imageHeight > 0) imageWidth.toFloat() / imageHeight else 1.5f
+  if (isLongCommentImage(imageWidth, imageHeight)) {
+    return CommentImagePreviewLayout(
+      widthPx = safeViewportWidth * if (wideViewport) (2f / 5f) else .88f,
+      heightPx = safeViewportHeight * .86f,
+      verticallyScrollable = true,
+    )
+  }
+  val maxTargetWidth = safeViewportWidth * .9f
+  val maxTargetHeight = safeViewportHeight * .86f
+  val targetWidth = minOf(maxTargetWidth, maxTargetHeight * ratio).coerceAtLeast(1f)
+  return CommentImagePreviewLayout(
+    widthPx = targetWidth,
+    heightPx = (targetWidth / ratio).coerceAtMost(maxTargetHeight).coerceAtLeast(1f),
+    verticallyScrollable = false,
+  )
+}
+
 @Composable
 internal fun CommentImagePreviewOverlay(
   session: CommentImagePreviewSession,
@@ -1402,6 +1508,14 @@ internal fun CommentImagePreviewOverlay(
   val context = LocalContext.current
   val density = LocalDensity.current
   val scope = rememberCoroutineScope()
+  val previewImageUrl =
+    remember(session.image) {
+      if (isLongCommentImage(session.image.width, session.image.height)) {
+        fullResolutionCommentImageUrl(session.image.url)
+      } else {
+        session.image.url
+      }
+    }
   var zoomScale by remember(session) { mutableStateOf(1f) }
   var panOffset by remember(session) { mutableStateOf(Offset.Zero) }
   var confirmSave by remember(session) { mutableStateOf(false) }
@@ -1409,7 +1523,7 @@ internal fun CommentImagePreviewOverlay(
   fun saveImage() {
     saving = true
     scope.launch {
-      val result = savePreviewImageToGallery(context, session.image.url)
+      val result = savePreviewImageToGallery(context, previewImageUrl)
       saving = false
       confirmSave = false
       val message =
@@ -1446,10 +1560,16 @@ internal fun CommentImagePreviewOverlay(
       if (session.image.width > 0 && session.image.height > 0)
         session.image.width.toFloat() / session.image.height
       else 1.5f
-    val maxTargetWidth = viewportWidth * .9f
-    val maxTargetHeight = viewportHeight * .86f
-    val targetWidth = minOf(maxTargetWidth, maxTargetHeight * imageRatio).coerceAtLeast(1f)
-    val targetHeight = (targetWidth / imageRatio).coerceAtMost(maxTargetHeight).coerceAtLeast(1f)
+    val previewLayout =
+      commentImagePreviewLayout(
+        viewportWidth = viewportWidth,
+        viewportHeight = viewportHeight,
+        imageWidth = session.image.width,
+        imageHeight = session.image.height,
+        wideViewport = maxWidth >= 600.dp,
+      )
+    val targetWidth = previewLayout.widthPx
+    val targetHeight = previewLayout.heightPx
     val rootLeft = if (rootBounds.left.isFinite()) rootBounds.left else 0f
     val rootTop = if (rootBounds.top.isFinite()) rootBounds.top else 0f
     val source = session.sourceBounds.translate(Offset(-rootLeft, -rootTop))
@@ -1499,6 +1619,44 @@ internal fun CommentImagePreviewOverlay(
       }
     }
 
+    val transformGestureModifier =
+      if (previewLayout.verticallyScrollable) {
+        Modifier
+      } else {
+        Modifier.pointerInput(session, targetWidth, targetHeight) {
+          detectTransformGestures(panZoomLock = true) { centroid, pan, zoom, _ ->
+            if (session.progress.value < .995f) return@detectTransformGestures
+            val previousScale = zoomScale
+            val nextScale = (previousScale * zoom).coerceIn(1f, 5f)
+            val scaleChange = nextScale / previousScale.coerceAtLeast(.001f)
+            val center = Offset(size.width / 2f, size.height / 2f)
+            val centroidCorrection = (centroid - center) * (1f - scaleChange)
+            val candidate = panOffset + pan + centroidCorrection
+            val maxPanX = commentImagePanLimit(targetWidth, viewportWidth, nextScale)
+            val maxPanY = commentImagePanLimit(targetHeight, viewportHeight, nextScale)
+            zoomScale = nextScale
+            panOffset =
+              if (nextScale <= 1.001f) Offset.Zero
+              else
+                Offset(
+                  candidate.x.coerceIn(-maxPanX, maxPanX),
+                  candidate.y.coerceIn(-maxPanY, maxPanY),
+                )
+          }
+        }
+      }
+    val saveGestureModifier =
+      if (previewLayout.verticallyScrollable) {
+        Modifier
+      } else {
+        Modifier.pointerInput(session) {
+          detectTapGestures(
+            onLongPress = {
+              if (session.progress.value >= .995f && !saving) confirmSave = true
+            }
+          )
+        }
+      }
     Box(
       modifier =
         Modifier.size(widthDp, heightDp)
@@ -1515,42 +1673,62 @@ internal fun CommentImagePreviewOverlay(
             translationY = startTranslationY * (1f - progress) + effectivePan.y
             alpha = if (validSource) ((progress - .04f) / .28f).coerceIn(0f, 1f) else progress
           }
-          .pointerInput(session) {
-            detectTapGestures(
-              onLongPress = {
-                if (session.progress.value >= .995f && !saving) confirmSave = true
-              }
-            )
-          }
-          .pointerInput(session, targetWidth, targetHeight) {
-            detectTransformGestures(panZoomLock = true) { centroid, pan, zoom, _ ->
-              if (session.progress.value < .995f) return@detectTransformGestures
-              val previousScale = zoomScale
-              val nextScale = (previousScale * zoom).coerceIn(1f, 5f)
-              val scaleChange = nextScale / previousScale.coerceAtLeast(.001f)
-              val center = Offset(size.width / 2f, size.height / 2f)
-              val centroidCorrection = (centroid - center) * (1f - scaleChange)
-              val candidate = panOffset + pan + centroidCorrection
-              val maxPanX = commentImagePanLimit(targetWidth, viewportWidth, nextScale)
-              val maxPanY = commentImagePanLimit(targetHeight, viewportHeight, nextScale)
-              zoomScale = nextScale
-              panOffset =
-                if (nextScale <= 1.001f) Offset.Zero
-                else
-                  Offset(
-                    candidate.x.coerceIn(-maxPanX, maxPanX),
-                    candidate.y.coerceIn(-maxPanY, maxPanY),
-                  )
-            }
-          }
+          .then(saveGestureModifier)
+          .then(transformGestureModifier)
     ) {
-      AsyncImage(
-        model = session.image.url,
-        contentDescription = "图片预览",
-        modifier = Modifier.fillMaxSize(),
-        contentScale = ContentScale.Fit,
-        onSuccess = { session.preparation.markReady(TransitionReadySignal.IMAGE_READY) },
-      )
+      if (previewLayout.verticallyScrollable) {
+        AndroidView(
+          modifier = Modifier.fillMaxSize(),
+          factory = { webContext ->
+            WebView(webContext).apply {
+              WebViewConfigurator.configure(this, BuildConfig.DEBUG)
+              settings.javaScriptEnabled = false
+              settings.domStorageEnabled = false
+              settings.loadWithOverviewMode = false
+              settings.useWideViewPort = false
+              settings.builtInZoomControls = false
+              settings.displayZoomControls = false
+              isHorizontalScrollBarEnabled = false
+              isVerticalScrollBarEnabled = true
+              overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+              setBackgroundColor(android.graphics.Color.TRANSPARENT)
+              isLongClickable = true
+              setOnLongClickListener {
+                if (session.progress.value >= .995f && !saving) confirmSave = true
+                true
+              }
+              webViewClient =
+                object : WebViewClient() {
+                  override fun onPageFinished(view: WebView, url: String) {
+                    session.preparation.markReady(TransitionReadySignal.IMAGE_READY)
+                  }
+                }
+              loadDataWithBaseURL(
+                "https://www.bilibili.com/",
+                longCommentImageHtml(previewImageUrl),
+                "text/html",
+                "UTF-8",
+                null,
+              )
+            }
+          },
+          onRelease = { webView ->
+            webView.setOnLongClickListener(null)
+            webView.stopLoading()
+            webView.webViewClient = WebViewClient()
+            webView.removeAllViews()
+            webView.destroy()
+          },
+        )
+      } else {
+        AsyncImage(
+          model = previewImageUrl,
+          contentDescription = "图片预览",
+          modifier = Modifier.fillMaxSize(),
+          contentScale = ContentScale.Fit,
+          onSuccess = { session.preparation.markReady(TransitionReadySignal.IMAGE_READY) },
+        )
+      }
     }
     if (confirmSave) {
       AlertDialog(
@@ -1627,6 +1805,18 @@ private suspend fun animateWindowBrightness(
     setWindowBrightness(window, from + (to - from) * progress)
     if (frame < frameCount) delay(frameDelayMs)
   }
+}
+
+internal fun fullscreenVideoBackgroundShadeAlpha(
+  embeddedShadeAlpha: Float,
+  fullscreenBrightness: Float,
+  fullscreenProgress: Float,
+): Float {
+  val baseShade = embeddedShadeAlpha.coerceIn(0f, 1f)
+  val brightness = fullscreenBrightness.coerceIn(0f, 1f)
+  val progress = fullscreenProgress.coerceIn(0f, 1f)
+  val fullscreenShade = 1f - brightness * (1f - baseShade)
+  return baseShade + (fullscreenShade - baseShade) * progress
 }
 
 private fun resolveWindowBrightness(context: Context, rawBrightness: Float): Float =
@@ -2459,7 +2649,7 @@ internal fun RecommendationCard(
   compactHeight: Dp = 68.dp,
 ) {
   var coverBounds by remember { mutableStateOf(Rect.Zero) }
-  val bringIntoViewRequester = remember { BringIntoViewRequester() }
+  val bringIntoViewRequester = rememberNavigationBringIntoViewRequester()
   val scope = rememberCoroutineScope()
   val interactionSource = remember { MutableInteractionSource() }
   val pressed by interactionSource.collectIsPressedAsState()
@@ -2475,7 +2665,7 @@ internal fun RecommendationCard(
     modifier =
       Modifier.width(cardWidth)
         .then(if (compactHorizontal) Modifier.height(compactHeight) else Modifier)
-        .bringIntoViewRequester(bringIntoViewRequester)
+        .navigationBringIntoViewTarget(bringIntoViewRequester)
         .graphicsLayer {
           scaleX = scale
           scaleY = scale

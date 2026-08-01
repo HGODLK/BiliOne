@@ -35,8 +35,6 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.relocation.BringIntoViewRequester
-import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -68,6 +66,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.key
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
@@ -108,13 +107,16 @@ import dev.openbili.webdemo.api.BangumiExploreSectionKind
 import dev.openbili.webdemo.api.BangumiExplorePage
 import dev.openbili.webdemo.api.BangumiCoverVariant
 import dev.openbili.webdemo.api.BangumiWatchProgress
+import dev.openbili.webdemo.api.BangumiWatchProgressState
 import dev.openbili.webdemo.api.SpaceContentCard
 import dev.openbili.webdemo.api.bangumiCoverUrl
 import dev.openbili.webdemo.api.bangumiOriginalImageUrl
 import dev.openbili.webdemo.bangumi.BangumiExploreUiState
+import dev.openbili.webdemo.bangumi.BangumiFollowingUiState
 import dev.openbili.webdemo.feed.CoverImage
 import dev.openbili.webdemo.video.formatCompactCount
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.floor
 import kotlin.math.roundToInt
@@ -134,7 +136,7 @@ internal fun BangumiExploreScreen(
   hiddenItemId: String?,
   onSelectCategory: (BangumiExploreCategory) -> Unit,
   onRefresh: (BangumiExploreCategory) -> Unit,
-  onLoadMoreFollowing: () -> Unit,
+  onLoadMoreFollowing: (BangumiExploreCategory) -> Unit,
   onExplorePull: (Float) -> Unit,
   onExplorePullRelease: (Float) -> Unit,
   onOpenLandscape: (BangumiExploreItem, Rect) -> Unit,
@@ -191,7 +193,7 @@ internal fun BangumiExploreScreen(
           onRefresh = { onRefresh(category) },
           onExplorePull = onExplorePull,
           onExplorePullRelease = onExplorePullRelease,
-          onLoadMoreFollowing = onLoadMoreFollowing,
+          onLoadMoreFollowing = { onLoadMoreFollowing(category) },
           onOpenLandscape = onOpenLandscape,
           onOpenPoster = onOpenPoster,
         )
@@ -430,19 +432,24 @@ private fun BangumiExploreCategoryContent(
     else ->
       if (category == BangumiExploreCategory.ANIME || category == BangumiExploreCategory.GUOCHUANG) {
         // 国创 is追更型 like anime: it reuses the anime hero + following + ranking + recommendation
-        // layout. Its following rail has a real data path (seasonType=4), so the full page works.
-        AnimeExploreContent(
-          category = category,
-          page = page,
-          state = state,
-          hiddenItemId = hiddenItemId,
-          foregroundActive = foregroundActive,
-          onExplorePull = onExplorePull,
-          onExplorePullRelease = onExplorePullRelease,
-          onLoadMoreFollowing = onLoadMoreFollowing,
-          onOpenLandscape = onOpenLandscape,
-          onOpenPoster = onOpenPoster,
-        )
+        // layout, but owns a distinct state tree. A new session key resets all local scroll and
+        // animation state on entry instead of retaining the previously selected subpage.
+        val following = state.following(category)
+        key(category, following.sessionId) {
+          AnimeExploreContent(
+            category = category,
+            page = page,
+            following = following,
+            accountMid = state.accountMid,
+            hiddenItemId = hiddenItemId,
+            foregroundActive = foregroundActive,
+            onExplorePull = onExplorePull,
+            onExplorePullRelease = onExplorePullRelease,
+            onLoadMoreFollowing = onLoadMoreFollowing,
+            onOpenLandscape = onOpenLandscape,
+            onOpenPoster = onOpenPoster,
+          )
+        }
       } else {
         ExploreCategoryGridContent(
           category = category,
@@ -495,7 +502,8 @@ internal fun animeExploreContentGroups(page: BangumiExplorePage): AnimeExploreCo
 private fun AnimeExploreContent(
   category: BangumiExploreCategory = BangumiExploreCategory.ANIME,
   page: BangumiExplorePage,
-  state: BangumiExploreUiState,
+  following: BangumiFollowingUiState,
+  accountMid: Long,
   hiddenItemId: String?,
   foregroundActive: Boolean,
   onExplorePull: (Float) -> Unit,
@@ -595,7 +603,8 @@ private fun AnimeExploreContent(
         item(key = "anime-header", span = { GridItemSpan(maxLineSpan) }) {
           AnimeExploreHeader(
             items = groups.hot,
-            state = state,
+            following = following,
+            accountMid = accountMid,
             hiddenItemId = hiddenItemId,
             foregroundActive = foregroundActive,
             onOpen = onOpenLandscape,
@@ -606,7 +615,8 @@ private fun AnimeExploreContent(
       } else {
         item(key = "anime-following", span = { GridItemSpan(maxLineSpan) }) {
           AnimeFollowingSection(
-            state = state,
+            state = following,
+            accountMid = accountMid,
             hiddenItemId = hiddenItemId,
             onLoadMore = onLoadMoreFollowing,
             onOpen = onOpenLandscape,
@@ -692,7 +702,8 @@ private fun AnimeRecommendationBoundary(
 private fun AnimeExploreHeader(
   items: List<BangumiExploreItem>,
   pagerState: androidx.compose.foundation.pager.PagerState,
-  state: BangumiExploreUiState,
+  following: BangumiFollowingUiState,
+  accountMid: Long,
   hiddenItemId: String?,
   foregroundActive: Boolean,
   onOpen: (BangumiExploreItem, Rect) -> Unit,
@@ -707,7 +718,8 @@ private fun AnimeExploreHeader(
       onOpen = onOpen,
     )
     AnimeFollowingSection(
-      state = state,
+      state = following,
+      accountMid = accountMid,
       hiddenItemId = hiddenItemId,
       onLoadMore = onLoadMoreFollowing,
       onOpen = onOpen,
@@ -731,7 +743,7 @@ private fun AnimeHotHeroContent(
   var openRequestTick by remember { mutableStateOf(0) }
   var opening by remember { mutableStateOf(false) }
   val heroInfoAlpha = remember { Animatable(1f) }
-  val bringIntoViewRequester = remember { BringIntoViewRequester() }
+  val bringIntoViewRequester = rememberNavigationBringIntoViewRequester()
   val scope = rememberCoroutineScope()
 
   fun requestOpen() {
@@ -773,7 +785,7 @@ private fun AnimeHotHeroContent(
   Box(
     Modifier.fillMaxWidth()
       .height(410.dp)
-      .bringIntoViewRequester(bringIntoViewRequester)
+      .navigationBringIntoViewTarget(bringIntoViewRequester)
       .clip(RoundedCornerShape(24.dp))
       .clickable { requestOpen() },
   ) {
@@ -1040,7 +1052,8 @@ private fun AnimeHotStackCard(
 
 @Composable
 private fun AnimeFollowingSection(
-  state: BangumiExploreUiState,
+  state: BangumiFollowingUiState,
+  accountMid: Long,
   hiddenItemId: String?,
   onLoadMore: () -> Unit,
   onOpen: (BangumiExploreItem, Rect) -> Unit,
@@ -1048,27 +1061,51 @@ private fun AnimeFollowingSection(
 ) {
   val listState = rememberLazyListState()
   val latestLoadMore by rememberUpdatedState(onLoadMore)
+  var displayedFollowing by remember { mutableStateOf(state.cards) }
+  var enteringFollowingKeys by remember { mutableStateOf<Set<String>>(emptySet()) }
+  var entryAnimationGeneration by remember { mutableIntStateOf(0) }
+  LaunchedEffect(state.cards, listState.isScrollInProgress) {
+    if (!listState.isScrollInProgress && state.cards != displayedFollowing) {
+      val previousKeys = displayedFollowing.mapTo(mutableSetOf(), ::followingCardKey)
+      enteringFollowingKeys =
+        state.cards
+          .map(::followingCardKey)
+          .filterNot(previousKeys::contains)
+          .toSet()
+      displayedFollowing = state.cards
+      entryAnimationGeneration += 1
+    }
+  }
+  LaunchedEffect(entryAnimationGeneration) {
+    if (entryAnimationGeneration <= 0) return@LaunchedEffect
+    val generation = entryAnimationGeneration
+    delay(520)
+    if (entryAnimationGeneration == generation) enteringFollowingKeys = emptySet()
+  }
   val showingPlaceholders =
     shouldShowFollowingPlaceholders(
-      following = state.following,
-      loading = state.followingLoading,
-      refreshing = state.followingRefreshing,
+      following = displayedFollowing,
+      loading = state.loading,
+      refreshing = state.refreshing,
     )
   LaunchedEffect(
-    state.following.size,
-    state.followingHasMore,
-    state.followingLoadingMore,
+    state.cards.size,
+    state.hasMore,
+    state.loadingMore,
   ) {
     if (
-      state.followingHasMore &&
-        !state.followingLoadingMore &&
-        (listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1) >= state.following.lastIndex - 2
+      state.hasMore &&
+        !state.loadingMore &&
+        (listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1) >=
+          displayedFollowing.lastIndex - 2
     ) {
       latestLoadMore()
     }
     snapshotFlow {
       val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-      state.followingHasMore && !state.followingLoadingMore && lastVisible >= state.following.lastIndex - 2
+      state.hasMore &&
+        !state.loadingMore &&
+        lastVisible >= displayedFollowing.lastIndex - 2
     }.collect { nearEnd -> if (nearEnd) latestLoadMore() }
   }
   when {
@@ -1081,29 +1118,44 @@ private fun AnimeFollowingSection(
           }
         }
       }
-    state.following.isNotEmpty() ->
+    displayedFollowing.isNotEmpty() ->
       Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
         ExploreSectionHeading("正在追")
         LazyRow(state = listState, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-          items(state.following, key = ::followingCardKey) { card ->
+          items(displayedFollowing, key = ::followingCardKey) { card ->
+            val cardKey = followingCardKey(card)
+            val entering = cardKey in enteringFollowingKeys
+            val entryProgress = remember(cardKey) { Animatable(if (entering) 0f else 1f) }
+            LaunchedEffect(entering, entryAnimationGeneration) {
+              if (entering) {
+                entryProgress.snapTo(0f)
+                entryProgress.animateTo(1f, tween(300))
+              } else if (entryProgress.value < 1f) {
+                entryProgress.snapTo(1f)
+              }
+            }
             AnimeFollowingCard(
               card = card,
               hidden = "bangumi-explore-${card.id}" == hiddenItemId,
               onOpen = onOpen,
               modifier =
                 Modifier
-                  .zIndex(if (card.seasonId == state.reorderingSeasonId) 1f else 0f)
-                  .animateItem(),
+                  .zIndex(if (entering || card.seasonId == state.reorderingSeasonId) 1f else 0f)
+                  .animateItem()
+                  .graphicsLayer {
+                    alpha = entryProgress.value
+                    translationX = -FOLLOWING_CARD_WIDTH.toPx() * (1f - entryProgress.value)
+                  },
             )
           }
-          if (state.followingLoadingMore) {
+          if (state.loadingMore) {
             item(key = "following-loading-more") {
               AnimeFollowingPlaceholderCard()
             }
           }
         }
       }
-    state.accountMid <= 0L ->
+    accountMid <= 0L ->
       Surface(
         modifier = modifier,
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .52f),
@@ -1177,7 +1229,7 @@ private fun AnimeFollowingCard(
   onOpen: (BangumiExploreItem, Rect) -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  val bringIntoViewRequester = remember { BringIntoViewRequester() }
+  val bringIntoViewRequester = rememberNavigationBringIntoViewRequester()
   val scope = rememberCoroutineScope()
   val item =
     remember(card) {
@@ -1198,7 +1250,14 @@ private fun AnimeFollowingCard(
     }
   var bounds by remember(card.id) { mutableStateOf(Rect.Zero) }
   val progress = card.watchProgress
-  val subtitleText = buildSubtitle(progress, card.hasHistory, card.historicalOnly)
+  val subtitleText =
+    buildFollowingSubtitle(
+      progress = progress,
+      progressState = card.watchProgressState,
+      hasHistory = card.hasHistory,
+      historicalOnly = card.historicalOnly,
+      fallback = card.subtitle,
+    )
   val progressPercent = progress?.percent?.coerceIn(0, 100)
   VideoCardGradient(
     coverUrl = card.coverUrl,
@@ -1207,7 +1266,7 @@ private fun AnimeFollowingCard(
       modifier
         .width(FOLLOWING_CARD_WIDTH)
         .height(FOLLOWING_CARD_HEIGHT)
-        .bringIntoViewRequester(bringIntoViewRequester)
+        .navigationBringIntoViewTarget(bringIntoViewRequester)
         .clip(VideoShapeTokens.Card)
         .clickable(enabled = card.videoUrl.isNotBlank()) {
           scope.launch {
@@ -1278,14 +1337,20 @@ private fun AnimeFollowingCard(
   }
 }
 
-/** Build the subtitle text for a following card, incorporating server watch progress when available. */
-private fun buildSubtitle(
+/** Build the subtitle without mistaking an unavailable progress response for no viewing record. */
+internal fun buildFollowingSubtitle(
   progress: BangumiWatchProgress?,
+  progressState: BangumiWatchProgressState,
   hasHistory: Boolean,
   historicalOnly: Boolean,
+  fallback: String = "",
 ): String {
   if (progress == null || progress.episodeId <= 0L) {
-    return if (historicalOnly || hasHistory) "历史观看" else "尚未观看"
+    return when {
+      historicalOnly || hasHistory -> "历史观看"
+      progressState == BangumiWatchProgressState.NO_RECORD -> "尚未观看"
+      else -> fallback.ifBlank { "追番中" }
+    }
   }
   val episodeIndex = progress.episodeIndex.ifBlank { "第${progress.episodeId}话" }
   val prefix =
@@ -1303,7 +1368,7 @@ private fun AnimeRankingPoster(
   onOpen: (BangumiExploreItem, Rect) -> Unit,
 ) {
   var bounds by remember(item.stableId) { mutableStateOf(Rect.Zero) }
-  val bringIntoViewRequester = remember { BringIntoViewRequester() }
+  val bringIntoViewRequester = rememberNavigationBringIntoViewRequester()
   val scope = rememberCoroutineScope()
   var opening by remember(item.stableId) { mutableStateOf(false) }
   val chromeAlpha = remember(item.stableId) { Animatable(1f) }
@@ -1316,7 +1381,7 @@ private fun AnimeRankingPoster(
   Box(
     Modifier.fillMaxWidth()
       .aspectRatio(3f / 4f)
-      .bringIntoViewRequester(bringIntoViewRequester)
+      .navigationBringIntoViewTarget(bringIntoViewRequester)
       .clip(RoundedCornerShape(16.dp))
       .clickable(enabled = !opening && !hidden) {
         opening = true
@@ -1401,7 +1466,7 @@ private fun AnimeRecommendationPoster(
   onOpen: (BangumiExploreItem, Rect) -> Unit,
 ) {
   var bounds by remember(item.stableId) { mutableStateOf(Rect.Zero) }
-  val bringIntoViewRequester = remember { BringIntoViewRequester() }
+  val bringIntoViewRequester = rememberNavigationBringIntoViewRequester()
   val scope = rememberCoroutineScope()
   var opening by remember(item.stableId) { mutableStateOf(false) }
   val chromeAlpha = remember(item.stableId) { Animatable(1f) }
@@ -1414,7 +1479,7 @@ private fun AnimeRecommendationPoster(
   Box(
     Modifier.fillMaxWidth()
       .aspectRatio(3f / 4f)
-      .bringIntoViewRequester(bringIntoViewRequester)
+      .navigationBringIntoViewTarget(bringIntoViewRequester)
       .clip(RoundedCornerShape(16.dp))
       .clickable(enabled = !opening && !hidden) {
         opening = true
@@ -1721,7 +1786,7 @@ private fun ExploreFocusBanner(
   onOpen: (BangumiExploreItem, Rect) -> Unit,
 ) {
   var cardBounds by remember(item.stableId) { mutableStateOf(Rect.Zero) }
-  val bringIntoViewRequester = remember { BringIntoViewRequester() }
+  val bringIntoViewRequester = rememberNavigationBringIntoViewRequester()
   val scope = rememberCoroutineScope()
   var opening by remember(item.stableId) { mutableStateOf(false) }
   val chromeAlpha = remember(item.stableId) { Animatable(1f) }
@@ -1748,7 +1813,7 @@ private fun ExploreFocusBanner(
     Box(
       Modifier.fillMaxWidth()
         .height(bannerHeight)
-        .bringIntoViewRequester(bringIntoViewRequester)
+        .navigationBringIntoViewTarget(bringIntoViewRequester)
         .clip(RoundedCornerShape(24.dp))
         .clickable(
           interactionSource = interactionSource,
@@ -1889,11 +1954,11 @@ private fun ExploreLandscapeCard(
   onOpen: (BangumiExploreItem, Rect) -> Unit,
 ) {
   var bounds by remember(item.stableId) { mutableStateOf(Rect.Zero) }
-  val bringIntoViewRequester = remember { BringIntoViewRequester() }
+  val bringIntoViewRequester = rememberNavigationBringIntoViewRequester()
   val scope = rememberCoroutineScope()
   Column(
     Modifier.fillMaxWidth()
-      .bringIntoViewRequester(bringIntoViewRequester)
+      .navigationBringIntoViewTarget(bringIntoViewRequester)
       .clip(VideoShapeTokens.Player)
       .clickable {
         scope.launch {

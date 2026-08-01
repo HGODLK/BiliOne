@@ -326,6 +326,9 @@ fun VideoInfoTile(
   onlineViewerText: String?,
   description: String,
   onDismiss: () -> Unit,
+  onAddToWatchLater: (() -> Unit)? = null,
+  watchLaterAdded: Boolean = false,
+  watchLaterBusy: Boolean = false,
   onNotInterested: (() -> Unit)? = null,
   onNotInterestedUploader: (() -> Unit)? = null,
 ) {
@@ -411,16 +414,30 @@ fun VideoInfoTile(
               )
             }
           }
-          if (onNotInterested != null && onNotInterestedUploader != null) {
+          if (
+            onAddToWatchLater != null || onNotInterested != null || onNotInterestedUploader != null
+          ) {
             Row(
               modifier = Modifier.fillMaxWidth(),
               horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End),
             ) {
-              OutlinedButton(onClick = { dismissThen(onNotInterested) }) {
-                Text("内容不感兴趣")
+              if (onAddToWatchLater != null) {
+                OutlinedButton(
+                  enabled = !watchLaterAdded && !watchLaterBusy,
+                  onClick = { dismissThen(onAddToWatchLater) },
+                ) {
+                  Text(if (watchLaterAdded) "已在稍后再看" else "添加到稍后再看")
+                }
               }
-              OutlinedButton(onClick = { dismissThen(onNotInterestedUploader) }) {
-                Text("不想看此 UP 主")
+              if (onNotInterested != null) {
+                OutlinedButton(onClick = { dismissThen(onNotInterested) }) {
+                  Text("内容不感兴趣")
+                }
+              }
+              if (onNotInterestedUploader != null) {
+                OutlinedButton(onClick = { dismissThen(onNotInterestedUploader) }) {
+                  Text("不想看此 UP 主")
+                }
               }
             }
           }

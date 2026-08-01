@@ -1,7 +1,7 @@
 package dev.openbili.webdemo.live
 
 import android.app.Activity
-import android.os.Build
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
@@ -69,47 +69,48 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.zIndex
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.zIndex
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.C
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import coil3.compose.AsyncImage
-import dev.openbili.webdemo.api.DanmakuItem
-import dev.openbili.webdemo.api.DanmakuInlineEmote
 import dev.openbili.webdemo.api.BiliEmote
+import dev.openbili.webdemo.api.DanmakuInlineEmote
+import dev.openbili.webdemo.api.DanmakuItem
 import dev.openbili.webdemo.api.UserInfo
+import dev.openbili.webdemo.feed.FeedItem
 import dev.openbili.webdemo.settings.AppSettings
 import dev.openbili.webdemo.ui.VideoShapeTokens
 import dev.openbili.webdemo.video.AdaptiveVideoPanes
@@ -118,14 +119,16 @@ import dev.openbili.webdemo.video.CommentEmoteMarkerRegistry
 import dev.openbili.webdemo.video.CommentTextEditor
 import dev.openbili.webdemo.video.DanmakuControlIcon
 import dev.openbili.webdemo.video.DanmakuOverlayView
+import dev.openbili.webdemo.video.FullscreenControlIcon
 import dev.openbili.webdemo.video.GestureIndicator
 import dev.openbili.webdemo.video.GestureIndicatorOverlay
-import dev.openbili.webdemo.video.FullscreenControlIcon
-import dev.openbili.webdemo.video.PlayerGestureLayer
 import dev.openbili.webdemo.video.PlaybackHeader
 import dev.openbili.webdemo.video.PlaybackHeaderUiModel
+import dev.openbili.webdemo.video.PlayerGestureLayer
+import dev.openbili.webdemo.video.RecommendationCard
 import dev.openbili.webdemo.video.floatingPlayerLayout
 import dev.openbili.webdemo.video.formatCompactCount
+import dev.openbili.webdemo.video.videoPageLayoutForPane
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -133,16 +136,21 @@ import kotlinx.coroutines.launch
 @Composable
 fun LiveRoomScreen(
   entry: LiveSearchRoom,
+  navigationEntryId: Long = 0L,
   account: UserInfo,
   player: ExoPlayer?,
   playerView: @Composable (Modifier, Float, Boolean) -> Unit,
   onPlaySource: (Long, LiveStreamSource) -> Unit,
   onStopPlayback: (Long) -> Unit,
   onSeekLiveEdge: () -> Unit,
+  onFullscreenTransitionChanged: (Boolean) -> Unit = {},
   onBack: () -> Unit,
   onHome: () -> Unit,
   onLogin: () -> Unit,
   onAnchorProfile: (Long, String?, String?, Rect) -> Unit,
+  onRecommendedRoom: (LiveSearchRoom, Rect) -> Unit,
+  onRecommendedRoomBoundsChanged: (LiveSearchRoom, Rect) -> Unit,
+  hiddenRecommendationCoverItemId: String? = null,
   settings: AppSettings,
   onSettingsChange: ((AppSettings) -> AppSettings) -> Unit,
   onPlayerBoundsChanged: (Rect) -> Unit = {},
@@ -150,6 +158,7 @@ fun LiveRoomScreen(
   viewModel: LiveRoomViewModel = viewModel(),
 ) {
   val state by viewModel.state.collectAsStateWithLifecycle()
+  val context = LocalContext.current
   val lifecycleOwner = LocalLifecycleOwner.current
   val view = LocalView.current
   val activity = view.context as? Activity
@@ -161,12 +170,18 @@ fun LiveRoomScreen(
   var embeddedPlayerBounds by remember(entry.roomId) { mutableStateOf(Rect.Zero) }
   var frozenEmbeddedPlayerBounds by remember(entry.roomId) { mutableStateOf(Rect.Zero) }
   var showInfo by remember(entry.roomId) { mutableStateOf(false) }
-  var showDanmaku by remember(entry.roomId) { mutableStateOf(true) }
+  val showDanmaku = settings.liveShowDanmaku
+  var secondaryTab by rememberSaveable(entry.roomId) { mutableStateOf(LiveSecondaryTab.CHAT) }
+  var showDanmakuBlockWords by remember(entry.roomId) { mutableStateOf(false) }
+  var danmakuBlockWords by remember(entry.roomId) { mutableStateOf<List<String>>(emptyList()) }
+  val danmakuBlockRoomId = state.roomInfo?.roomId?.takeIf { it > 0L } ?: entry.roomId
   val danmakuStartedAtElapsedMs =
     remember(entry.roomId) { android.os.SystemClock.elapsedRealtime() }
   val liveDanmaku =
-    remember(state.liveDanmaku, danmakuStartedAtElapsedMs) {
-      state.liveDanmaku.map { event ->
+    remember(state.liveDanmaku, danmakuStartedAtElapsedMs, danmakuBlockWords) {
+      state.liveDanmaku
+        .filterNot { event -> isLiveDanmakuBlocked(event.content, danmakuBlockWords) }
+        .map { event ->
           val content = event.content
           DanmakuItem(
             timeMs = (event.enterAtElapsedMs - danmakuStartedAtElapsedMs).coerceAtLeast(0L),
@@ -191,14 +206,69 @@ fun LiveRoomScreen(
           )
         }
     }
+  var firstVideoFrameRendered by remember(entry.roomId, state.generation) { mutableStateOf(false) }
+  var playbackRunning by
+    remember(entry.roomId, state.generation) { mutableStateOf(player?.isPlaying == true) }
+  var danmakuRenderStartPositionMs by
+    remember(entry.roomId, state.generation) { mutableStateOf<Long?>(null) }
+  val renderedLiveDanmaku =
+    remember(liveDanmaku, danmakuRenderStartPositionMs) {
+      liveDanmakuAfterPlaybackStart(liveDanmaku, danmakuRenderStartPositionMs)
+    }
 
-  LaunchedEffect(entry.roomId) {
-    viewModel.open(entry)
+  DisposableEffect(player, entry.roomId, state.generation, danmakuStartedAtElapsedMs) {
+    firstVideoFrameRendered = false
+    playbackRunning = player?.isPlaying == true
+    danmakuRenderStartPositionMs = null
+
+    fun startDanmakuWhenReady() {
+      if (firstVideoFrameRendered && playbackRunning && danmakuRenderStartPositionMs == null) {
+        danmakuRenderStartPositionMs =
+          (android.os.SystemClock.elapsedRealtime() - danmakuStartedAtElapsedMs).coerceAtLeast(0L)
+      }
+    }
+
+    val listener =
+      object : Player.Listener {
+        override fun onRenderedFirstFrame() {
+          firstVideoFrameRendered = true
+          startDanmakuWhenReady()
+        }
+
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+          playbackRunning = isPlaying
+          startDanmakuWhenReady()
+        }
+      }
+    player?.addListener(listener)
+    onDispose { player?.removeListener(listener) }
+  }
+
+  LaunchedEffect(danmakuBlockRoomId) {
+    danmakuBlockWords = LiveDanmakuBlockWordsStore.read(context, danmakuBlockRoomId)
+  }
+
+  LaunchedEffect(entry.roomId, navigationEntryId) {
+    if (
+      state.entryRoomId != entry.roomId ||
+        state.navigationEntryId != navigationEntryId ||
+        state.roomInfo == null
+    ) {
+      viewModel.open(entry, navigationEntryId)
+    }
     viewModel.setForeground(active)
+  }
+  LaunchedEffect(secondaryTab) {
+    if (secondaryTab == LiveSecondaryTab.RANK) viewModel.ensureRankLoaded()
   }
   LaunchedEffect(active) {
     viewModel.setForeground(active)
     if (!active) player?.pause()
+  }
+  DisposableEffect(view, active, settings.keepScreenOn) {
+    val previousKeepScreenOn = view.keepScreenOn
+    view.keepScreenOn = active && settings.keepScreenOn
+    onDispose { view.keepScreenOn = previousKeepScreenOn }
   }
   LaunchedEffect(account) { viewModel.updateAccount(account) }
   val source = state.playback?.sources?.getOrNull(state.activeSourceIndex)
@@ -234,17 +304,20 @@ fun LiveRoomScreen(
     frozenEmbeddedPlayerBounds = source
     fullscreenLayerVisible = true
     fullscreenTransitionBusy = true
+    onFullscreenTransitionChanged(true)
     fullscreenScope.launch {
       fullscreenProgress.animateTo(
         1f,
         tween(if (settings.reduceMotion) 100 else 360, easing = FastOutSlowInEasing),
       )
       fullscreenTransitionBusy = false
+      onFullscreenTransitionChanged(false)
     }
   }
   fun exitFullscreenAnimated() {
     if (fullscreenTransitionBusy || !fullscreenLayerVisible) return
     fullscreenTransitionBusy = true
+    onFullscreenTransitionChanged(true)
     fullscreenScope.launch {
       fullscreenProgress.animateTo(
         0f,
@@ -252,7 +325,11 @@ fun LiveRoomScreen(
       )
       fullscreenLayerVisible = false
       fullscreenTransitionBusy = false
+      onFullscreenTransitionChanged(false)
     }
+  }
+  DisposableEffect(navigationEntryId) {
+    onDispose { onFullscreenTransitionChanged(false) }
   }
   BackHandler {
     if (fullscreenLayerVisible) exitFullscreenAnimated() else onBack()
@@ -329,9 +406,15 @@ fun LiveRoomScreen(
               playerView = playerView,
               showPlayer = !fullscreenLayerVisible,
               showDanmaku = showDanmaku,
-              onShowDanmaku = { showDanmaku = it },
-              danmaku = liveDanmaku,
+              onShowDanmaku = { enabled ->
+                onSettingsChange { it.copy(liveShowDanmaku = enabled) }
+              },
+              danmakuBlockWordCount = danmakuBlockWords.size,
+              onOpenDanmakuBlockWords = { showDanmakuBlockWords = true },
+              danmaku = renderedLiveDanmaku,
               danmakuStartedAtElapsedMs = danmakuStartedAtElapsedMs,
+              danmakuRenderingEnabled = danmakuRenderStartPositionMs != null,
+              danmakuTransitionSuppressed = fullscreenTransitionBusy,
               settings = settings,
               onSettingsChange = onSettingsChange,
               onPlayerBoundsChanged = { bounds ->
@@ -343,18 +426,21 @@ fun LiveRoomScreen(
               onRetryPlayback = {
                 viewModel.loadPlayback(state.playback?.currentQn ?: 10_000)
               },
-              onAdvanceSource = viewModel::advancePlaybackSource,
+              onPlaybackError = viewModel::onPlaybackError,
+              onPlaybackReady = viewModel::onPlaybackReady,
               onSeekLiveEdge = onSeekLiveEdge,
-              onRankTab = viewModel::selectRankTab,
-              onAudienceRank = viewModel::selectAudienceRank,
-              onGuardType = viewModel::selectGuardType,
-              onLoadMoreGuards = viewModel::loadMoreGuards,
+              onRecommendedRoom = onRecommendedRoom,
+              onRecommendedRoomBoundsChanged = onRecommendedRoomBoundsChanged,
+              hiddenRecommendationCoverItemId = hiddenRecommendationCoverItemId,
+              onRetryRecommendations = viewModel::retryRecommendations,
             )
           },
           secondary = {
-            LiveMessagePane(
+            LiveSecondaryPane(
               state = state,
               account = account,
+              selectedTab = secondaryTab,
+              onSelectedTabChange = { secondaryTab = it },
               onText = viewModel::setComposerText,
               onSend = viewModel::sendText,
               onToggleEmoji = viewModel::toggleEmojiPanel,
@@ -362,6 +448,10 @@ fun LiveRoomScreen(
               onEmoji = viewModel::sendEmoji,
               onJoinLottery = viewModel::joinInteractiveLottery,
               onLogin = onLogin,
+              onRankTab = viewModel::selectRankTab,
+              onAudienceRank = viewModel::selectAudienceRank,
+              onGuardType = viewModel::selectGuardType,
+              onLoadMoreGuards = viewModel::loadMoreGuards,
             )
           },
         )
@@ -375,49 +465,45 @@ fun LiveRoomScreen(
             .background(Color.Black)
         )
         val progress = fullscreenProgress.value.coerceIn(0f, 1f)
-        val fullscreenInsetPx = with(LocalDensity.current) { 8.dp.roundToPx() }
-        val fullscreenCorner = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) 14.dp else 0.dp
-        Box(
-          Modifier.fillMaxSize()
-            .clipToBounds()
-            .zIndex(100f)
-        ) {
-          LivePlayerCard(
-            state = state,
-            player = player,
-            playerView = playerView,
-            showDanmaku = showDanmaku,
-            onShowDanmaku = { showDanmaku = it },
-            danmaku = liveDanmaku,
-            danmakuStartedAtElapsedMs = danmakuStartedAtElapsedMs,
-            settings = settings,
-            onSettingsChange = onSettingsChange,
-            fullscreen = true,
-            fullscreenProgress = progress,
-            onToggleFullscreen = ::exitFullscreenAnimated,
-            onQuality = viewModel::loadPlayback,
-            onRetryPlayback = {
-              viewModel.loadPlayback(state.playback?.currentQn ?: 10_000)
-            },
-            onAdvanceSource = viewModel::advancePlaybackSource,
-            onSeekLiveEdge = onSeekLiveEdge,
-            modifier =
-              Modifier.fillMaxSize()
-                .floatingPlayerLayout(
-                  progress = progress,
-                  sourceBounds = frozenEmbeddedPlayerBounds,
-                  targetInsetPx = fullscreenInsetPx,
-                )
-                .graphicsLayer {
-                  shape =
-                    RoundedCornerShape(
-                      VideoShapeTokens.CornerRadius * (1f - progress) +
-                        fullscreenCorner * progress
-                    )
-                  clip = true
-                },
-          )
-        }
+        LivePlayerCard(
+          state = state,
+          player = player,
+          playerView = playerView,
+          showDanmaku = showDanmaku,
+          onShowDanmaku = { enabled ->
+            onSettingsChange { it.copy(liveShowDanmaku = enabled) }
+          },
+          danmakuBlockWordCount = danmakuBlockWords.size,
+          onOpenDanmakuBlockWords = { showDanmakuBlockWords = true },
+          danmaku = renderedLiveDanmaku,
+          danmakuStartedAtElapsedMs = danmakuStartedAtElapsedMs,
+          danmakuRenderingEnabled = danmakuRenderStartPositionMs != null,
+          danmakuTransitionSuppressed = fullscreenTransitionBusy,
+          settings = settings,
+          onSettingsChange = onSettingsChange,
+          fullscreen = true,
+          fullscreenProgress = progress,
+          onToggleFullscreen = ::exitFullscreenAnimated,
+          onQuality = viewModel::loadPlayback,
+          onRetryPlayback = {
+            viewModel.loadPlayback(state.playback?.currentQn ?: 10_000)
+          },
+          onPlaybackError = viewModel::onPlaybackError,
+          onPlaybackReady = viewModel::onPlaybackReady,
+          onSeekLiveEdge = onSeekLiveEdge,
+          modifier =
+            Modifier.fillMaxSize()
+              .floatingPlayerLayout(
+                progress = progress,
+                sourceBounds = frozenEmbeddedPlayerBounds,
+                targetInsetPx = 0,
+              )
+              .zIndex(90f)
+              .graphicsLayer {
+                shape = RoundedCornerShape(VideoShapeTokens.CornerRadius * (1f - progress))
+                clip = true
+              },
+        )
       }
     }
   }
@@ -426,6 +512,24 @@ fun LiveRoomScreen(
     LiveRoomInfoDialog(
       state = state,
       onDismiss = { showInfo = false },
+    )
+  }
+  if (showDanmakuBlockWords) {
+    LiveDanmakuBlockWordsDialog(
+      roomId = danmakuBlockRoomId,
+      currentWords = danmakuBlockWords,
+      onDismiss = { showDanmakuBlockWords = false },
+      onSave = { words ->
+        danmakuBlockWords = words
+        LiveDanmakuBlockWordsStore.write(context, danmakuBlockRoomId, words)
+        showDanmakuBlockWords = false
+        Toast.makeText(
+            context,
+            if (words.isEmpty()) "已清空当前直播间的弹幕屏蔽词" else "已为当前直播间保存 ${words.size} 个弹幕屏蔽词",
+            Toast.LENGTH_SHORT,
+          )
+          .show()
+      },
     )
   }
 }
@@ -438,25 +542,29 @@ private fun LivePrimaryPane(
   showPlayer: Boolean,
   showDanmaku: Boolean,
   onShowDanmaku: (Boolean) -> Unit,
+  danmakuBlockWordCount: Int,
+  onOpenDanmakuBlockWords: () -> Unit,
   danmaku: List<DanmakuItem>,
   danmakuStartedAtElapsedMs: Long,
+  danmakuRenderingEnabled: Boolean,
+  danmakuTransitionSuppressed: Boolean,
   settings: AppSettings,
   onSettingsChange: ((AppSettings) -> AppSettings) -> Unit,
   onPlayerBoundsChanged: (Rect) -> Unit,
   onToggleFullscreen: () -> Unit,
   onQuality: (Int) -> Unit,
   onRetryPlayback: () -> Unit,
-  onAdvanceSource: () -> Unit,
+  onPlaybackError: (Int, PlaybackException) -> Unit,
+  onPlaybackReady: (Int) -> Unit,
   onSeekLiveEdge: () -> Unit,
-  onRankTab: (LiveRankTab) -> Unit,
-  onAudienceRank: (String, String) -> Unit,
-  onGuardType: (Int) -> Unit,
-  onLoadMoreGuards: () -> Unit,
+  onRecommendedRoom: (LiveSearchRoom, Rect) -> Unit,
+  onRecommendedRoomBoundsChanged: (LiveSearchRoom, Rect) -> Unit,
+  hiddenRecommendationCoverItemId: String?,
+  onRetryRecommendations: () -> Unit,
 ) {
   BoxWithConstraints(Modifier.fillMaxSize()) {
-    val lowerHeight = (maxHeight * .32f).coerceIn(154.dp, 230.dp)
-    val playerHeight =
-      (maxWidth * 9f / 16f).coerceAtMost((maxHeight - lowerHeight - 8.dp).coerceAtLeast(112.dp))
+    val pageLayout = videoPageLayoutForPane(maxWidth.value, maxHeight.value)
+    val playerHeight = pageLayout.playerHeight.coerceAtLeast(96.dp)
     Column(Modifier.fillMaxSize()) {
       Box(
         modifier = Modifier.fillMaxWidth().height(playerHeight),
@@ -469,8 +577,12 @@ private fun LivePrimaryPane(
             playerView = playerView,
             showDanmaku = showDanmaku,
             onShowDanmaku = onShowDanmaku,
+            danmakuBlockWordCount = danmakuBlockWordCount,
+            onOpenDanmakuBlockWords = onOpenDanmakuBlockWords,
             danmaku = danmaku,
             danmakuStartedAtElapsedMs = danmakuStartedAtElapsedMs,
+            danmakuRenderingEnabled = danmakuRenderingEnabled,
+            danmakuTransitionSuppressed = danmakuTransitionSuppressed,
             settings = settings,
             onSettingsChange = onSettingsChange,
             onPlayerBoundsChanged = onPlayerBoundsChanged,
@@ -479,7 +591,8 @@ private fun LivePrimaryPane(
             onToggleFullscreen = onToggleFullscreen,
             onQuality = onQuality,
             onRetryPlayback = onRetryPlayback,
-            onAdvanceSource = onAdvanceSource,
+            onPlaybackError = onPlaybackError,
+            onPlaybackReady = onPlaybackReady,
             onSeekLiveEdge = onSeekLiveEdge,
             modifier = Modifier.fillMaxHeight().aspectRatio(16f / 9f),
           )
@@ -493,12 +606,15 @@ private fun LivePrimaryPane(
         }
       }
       Spacer(Modifier.height(8.dp))
-      LiveRankSection(
+      LiveRecommendationSection(
         state = state,
-        onRankTab = onRankTab,
-        onAudienceRank = onAudienceRank,
-        onGuardType = onGuardType,
-        onLoadMoreGuards = onLoadMoreGuards,
+        onRoom = onRecommendedRoom,
+        onRoomBoundsChanged = onRecommendedRoomBoundsChanged,
+        hiddenCoverItemId = hiddenRecommendationCoverItemId,
+        onRetry = onRetryRecommendations,
+        cardWidth = pageLayout.recommendationCardWidth,
+        compactHorizontal = pageLayout.compactHorizontalRecommendations,
+        compactHeight = pageLayout.compactRecommendationCardHeight,
         modifier = Modifier.fillMaxWidth().weight(1f),
       )
     }
@@ -512,8 +628,12 @@ private fun LivePlayerCard(
   playerView: @Composable (Modifier, Float, Boolean) -> Unit,
   showDanmaku: Boolean,
   onShowDanmaku: (Boolean) -> Unit,
+  danmakuBlockWordCount: Int,
+  onOpenDanmakuBlockWords: () -> Unit,
   danmaku: List<DanmakuItem>,
   danmakuStartedAtElapsedMs: Long,
+  danmakuRenderingEnabled: Boolean,
+  danmakuTransitionSuppressed: Boolean,
   settings: AppSettings,
   onSettingsChange: ((AppSettings) -> AppSettings) -> Unit,
   fullscreen: Boolean,
@@ -521,14 +641,14 @@ private fun LivePlayerCard(
   onToggleFullscreen: () -> Unit,
   onQuality: (Int) -> Unit,
   onRetryPlayback: () -> Unit,
-  onAdvanceSource: () -> Unit,
+  onPlaybackError: (Int, PlaybackException) -> Unit,
+  onPlaybackReady: (Int) -> Unit,
   onSeekLiveEdge: () -> Unit,
   onPlayerBoundsChanged: (Rect) -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   var isPlaying by remember(player) { mutableStateOf(player?.isPlaying == true) }
   var buffering by remember(player) { mutableStateOf(player.isLiveBuffering()) }
-  var playerError by remember(state.entryRoomId) { mutableStateOf<String?>(null) }
   var qualityMenu by remember { mutableStateOf(false) }
   var danmakuMenu by remember { mutableStateOf(false) }
   var liveOffsetMs by remember { mutableLongStateOf(C.TIME_UNSET) }
@@ -537,7 +657,8 @@ private fun LivePlayerCard(
   var gestureFeedbackVisible by remember { mutableStateOf(false) }
   var gestureFeedbackVersion by remember { mutableLongStateOf(0L) }
 
-  DisposableEffect(player, state.generation) {
+  val sourceIndex = state.activeSourceIndex
+  DisposableEffect(player, state.generation, sourceIndex) {
     isPlaying = player?.isPlaying == true
     buffering = player.isLiveBuffering()
     val listener =
@@ -548,12 +669,11 @@ private fun LivePlayerCard(
 
         override fun onPlaybackStateChanged(playbackState: Int) {
           buffering = playbackState == Player.STATE_BUFFERING || playbackState == Player.STATE_IDLE
-          if (playbackState == Player.STATE_READY) playerError = null
+          if (playbackState == Player.STATE_READY) onPlaybackReady(sourceIndex)
         }
 
         override fun onPlayerError(error: PlaybackException) {
-          playerError = "当前线路播放失败，正在切换"
-          onAdvanceSource()
+          onPlaybackError(sourceIndex, error)
         }
       }
     player?.addListener(listener)
@@ -633,16 +753,14 @@ private fun LivePlayerCard(
         enabledTwoFingerSeek = false,
         modifier = Modifier.fillMaxSize().zIndex(1.5f),
       )
-      if (
-        (state.playbackLoading || buffering) && state.playbackError == null && playerError == null
-      ) {
+      if ((state.playbackLoading || buffering) && state.playbackError == null) {
         CircularProgressIndicator(
           modifier = Modifier.align(Alignment.Center).size(34.dp),
           strokeWidth = 3.dp,
           color = Color.White,
         )
       }
-      val visibleError = state.playbackError ?: playerError
+      val visibleError = state.playbackError
       if (visibleError != null || state.roomInfo?.liveStatus == 0) {
         Column(
           modifier =
@@ -669,12 +787,14 @@ private fun LivePlayerCard(
         LiveDanmakuLayer(
           items = danmaku,
           startedAtElapsedMs = danmakuStartedAtElapsedMs,
+          enabled = danmakuRenderingEnabled,
           paused = !isPlaying,
+          transitionSuppressed = danmakuTransitionSuppressed,
           fullscreen = fullscreen,
-          opacity = settings.danmakuOpacity,
-          displayArea = settings.danmakuDisplayArea,
-          fontScale = settings.danmakuFontScale,
-          speed = settings.danmakuSpeed,
+          opacity = settings.liveDanmakuOpacity,
+          displayArea = settings.liveDanmakuDisplayArea,
+          fontScale = settings.liveDanmakuFontScale,
+          speed = settings.liveDanmakuSpeed,
           positionEpoch = state.generation,
           modifier = Modifier.fillMaxSize(),
         )
@@ -797,54 +917,71 @@ private fun LivePlayerCard(
                 trailingIcon = { Checkbox(checked = showDanmaku, onCheckedChange = null) },
                 onClick = { onShowDanmaku(!showDanmaku) },
               )
+              DropdownMenuItem(
+                text = {
+                  Column {
+                    Text("弹幕屏蔽词")
+                    Text(
+                      if (danmakuBlockWordCount == 0) "仅当前直播间 · 尚未设置"
+                      else "仅当前直播间 · 已设置 $danmakuBlockWordCount 个",
+                      style = MaterialTheme.typography.labelSmall,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                  }
+                },
+                onClick = {
+                  danmakuMenu = false
+                  onOpenDanmakuBlockWords()
+                },
+              )
               Column(
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(2.dp),
               ) {
                 Text(
-                  "显示区域  ${(settings.danmakuDisplayArea * 100).toInt()}%",
+                  "显示区域  ${(settings.liveDanmakuDisplayArea * 100).toInt()}%",
                   style = MaterialTheme.typography.labelMedium,
                 )
                 Slider(
-                  value = settings.danmakuDisplayArea,
+                  value = settings.liveDanmakuDisplayArea,
                   onValueChange = { value ->
-                    onSettingsChange { it.copy(danmakuDisplayArea = value) }
+                    onSettingsChange { it.copy(liveDanmakuDisplayArea = value) }
                   },
                   valueRange = .25f..1f,
                   steps = 2,
                 )
                 Text(
-                  "不透明度  ${(settings.danmakuOpacity * 100).toInt()}%",
+                  "不透明度  ${(settings.liveDanmakuOpacity * 100).toInt()}%",
                   style = MaterialTheme.typography.labelMedium,
                 )
                 Slider(
-                  value = settings.danmakuOpacity,
+                  value = settings.liveDanmakuOpacity,
                   onValueChange = { value ->
-                    onSettingsChange { it.copy(danmakuOpacity = value) }
+                    onSettingsChange { it.copy(liveDanmakuOpacity = value) }
                   },
                   valueRange = .2f..1f,
                   steps = 7,
                 )
                 Text(
-                  "弹幕字号  ${(settings.danmakuFontScale * 100).toInt()}%",
+                  "弹幕字号  ${(settings.liveDanmakuFontScale * 100).toInt()}%",
                   style = MaterialTheme.typography.labelMedium,
                 )
                 Slider(
-                  value = settings.danmakuFontScale,
+                  value = settings.liveDanmakuFontScale,
                   onValueChange = { value ->
-                    onSettingsChange { it.copy(danmakuFontScale = value) }
+                    onSettingsChange { it.copy(liveDanmakuFontScale = value) }
                   },
                   valueRange = .7f..1.5f,
                   steps = 7,
                 )
                 Text(
-                  "滚动速度  ${"%.1f".format(settings.danmakuSpeed)}×",
+                  "滚动速度  ${"%.1f".format(settings.liveDanmakuSpeed)}×",
                   style = MaterialTheme.typography.labelMedium,
                 )
                 Slider(
-                  value = settings.danmakuSpeed,
+                  value = settings.liveDanmakuSpeed,
                   onValueChange = { value ->
-                    onSettingsChange { it.copy(danmakuSpeed = value) }
+                    onSettingsChange { it.copy(liveDanmakuSpeed = value) }
                   },
                   valueRange = .6f..1.8f,
                   steps = 5,
@@ -877,7 +1014,9 @@ private fun LivePlayerCard(
 private fun LiveDanmakuLayer(
   items: List<DanmakuItem>,
   startedAtElapsedMs: Long,
+  enabled: Boolean,
   paused: Boolean,
+  transitionSuppressed: Boolean,
   fullscreen: Boolean,
   opacity: Float,
   displayArea: Float,
@@ -893,7 +1032,7 @@ private fun LiveDanmakuLayer(
       overlay.update(
         items = items,
         mask = null,
-        enabled = true,
+        enabled = enabled,
         smartBlocking = false,
         paused = paused,
         fullscreen = fullscreen,
@@ -901,6 +1040,7 @@ private fun LiveDanmakuLayer(
         opacity = opacity,
         displayArea = displayArea,
         densityLevel = LIVE_DANMAKU_DENSITY,
+        blockLevel = 1,
         fontScale = fontScale,
         speed = speed,
         positionEpoch = positionEpoch,
@@ -908,8 +1048,85 @@ private fun LiveDanmakuLayer(
           (android.os.SystemClock.elapsedRealtime() - startedAtElapsedMs).coerceAtLeast(0L)
         },
       )
+      overlay.setTransitionSuppressed(transitionSuppressed)
     },
   )
+}
+
+private enum class LiveSecondaryTab(val title: String) {
+  CHAT("聊天"),
+  RANK("榜单"),
+}
+
+@Composable
+private fun LiveRecommendationSection(
+  state: LiveRoomUiState,
+  onRoom: (LiveSearchRoom, Rect) -> Unit,
+  onRoomBoundsChanged: (LiveSearchRoom, Rect) -> Unit,
+  hiddenCoverItemId: String?,
+  onRetry: () -> Unit,
+  cardWidth: androidx.compose.ui.unit.Dp,
+  compactHorizontal: Boolean,
+  compactHeight: androidx.compose.ui.unit.Dp,
+  modifier: Modifier = Modifier,
+) {
+  Column(
+    modifier = modifier,
+    verticalArrangement = Arrangement.spacedBy(4.dp),
+  ) {
+    Text(
+      "推荐直播",
+      modifier = Modifier.padding(horizontal = 12.dp),
+      style = MaterialTheme.typography.titleMedium,
+      fontWeight = FontWeight.Bold,
+    )
+    Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+      when {
+        state.recommendationsLoading && state.recommendations.isEmpty() ->
+          CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+        state.recommendationsError != null && state.recommendations.isEmpty() ->
+          Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+              state.recommendationsError,
+              color = MaterialTheme.colorScheme.error,
+              maxLines = 2,
+              overflow = TextOverflow.Ellipsis,
+            )
+            TextButton(onClick = onRetry) { Text("重试") }
+          }
+        state.recommendations.isEmpty() ->
+          Text("暂时没有更多推荐", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        else ->
+          LazyRow(
+            modifier = Modifier.fillMaxSize(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+          ) {
+            items(state.recommendations, key = LiveSearchRoom::stableId) { room ->
+              val coverUrl = room.keyframeUrl ?: room.coverUrl.orEmpty()
+              RecommendationCard(
+                item =
+                  FeedItem(
+                    id = room.stableId,
+                    title = room.title,
+                    videoUrl = "",
+                    coverUrl = coverUrl,
+                    uploader = room.uname,
+                    playCount = null,
+                    duration = null,
+                  ),
+                coverVisible = room.stableId != hiddenCoverItemId,
+                onCoverBoundsChanged = { bounds -> onRoomBoundsChanged(room, bounds) },
+                onClick = { bounds -> onRoom(room, bounds) },
+                onLongClick = {},
+                cardWidth = cardWidth,
+                compactHorizontal = compactHorizontal,
+                compactHeight = compactHeight,
+              )
+            }
+          }
+      }
+    }
+  }
 }
 
 private data class AudienceRankOption(
@@ -1083,6 +1300,75 @@ private fun LiveRankUserCard(user: LiveRankUser) {
             maxLines = 1,
           )
         }
+      }
+    }
+  }
+}
+
+@Composable
+private fun LiveSecondaryPane(
+  state: LiveRoomUiState,
+  account: UserInfo,
+  selectedTab: LiveSecondaryTab,
+  onSelectedTabChange: (LiveSecondaryTab) -> Unit,
+  onText: (String, Int) -> Unit,
+  onSend: () -> Unit,
+  onToggleEmoji: () -> Unit,
+  onSelectEmojiPack: (String) -> Unit,
+  onEmoji: (LiveEmoji) -> Unit,
+  onJoinLottery: () -> Unit,
+  onLogin: () -> Unit,
+  onRankTab: (LiveRankTab) -> Unit,
+  onAudienceRank: (String, String) -> Unit,
+  onGuardType: (Int) -> Unit,
+  onLoadMoreGuards: () -> Unit,
+) {
+  Column(
+    Modifier.fillMaxSize(),
+    verticalArrangement = Arrangement.spacedBy(8.dp),
+  ) {
+    Surface(
+      modifier = Modifier.fillMaxWidth(),
+      shape = RoundedCornerShape(18.dp),
+      color = MaterialTheme.colorScheme.surfaceContainerLow,
+      border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+      Row(
+        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 5.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        LiveSecondaryTab.entries.forEach { tab ->
+          FilterChip(
+            selected = selectedTab == tab,
+            onClick = { onSelectedTabChange(tab) },
+            label = { Text(tab.title) },
+          )
+        }
+      }
+    }
+    Box(Modifier.fillMaxWidth().weight(1f)) {
+      when (selectedTab) {
+        LiveSecondaryTab.CHAT ->
+          LiveMessagePane(
+            state = state,
+            account = account,
+            onText = onText,
+            onSend = onSend,
+            onToggleEmoji = onToggleEmoji,
+            onSelectEmojiPack = onSelectEmojiPack,
+            onEmoji = onEmoji,
+            onJoinLottery = onJoinLottery,
+            onLogin = onLogin,
+          )
+        LiveSecondaryTab.RANK ->
+          LiveRankSection(
+            state = state,
+            onRankTab = onRankTab,
+            onAudienceRank = onAudienceRank,
+            onGuardType = onGuardType,
+            onLoadMoreGuards = onLoadMoreGuards,
+            modifier = Modifier.fillMaxSize(),
+          )
       }
     }
   }
@@ -1454,9 +1740,9 @@ private fun LiveComposer(
     remember(state.emojiPacks) {
       state.emojiPacks
         .flatMap(LiveEmojiPack::emojis)
-        .filter { !it.directSend && it.sendToken.isNotBlank() && it.imageUrl.isNotBlank() }
-        .distinctBy(LiveEmoji::sendToken)
-        .map { BiliEmote(text = it.sendToken, url = it.imageUrl) }
+        .filter { !it.directSend && it.inputText.isNotBlank() && it.imageUrl.isNotBlank() }
+        .distinctBy(LiveEmoji::inputText)
+        .map { BiliEmote(text = it.inputText, url = it.imageUrl) }
     }
   val markerSnapshot = remember(inputEmotes) { emoteRegistry.snapshot(inputEmotes) }
   val latestComposer by rememberUpdatedState(state.composer)

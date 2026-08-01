@@ -11,6 +11,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
@@ -29,8 +31,10 @@ import dev.openbili.webdemo.feed.FeedViewModel
 import dev.openbili.webdemo.my.MyViewModel
 import dev.openbili.webdemo.search.SearchViewModel
 import dev.openbili.webdemo.settings.AppSettingsViewModel
+import dev.openbili.webdemo.settings.ThemeMode
 import dev.openbili.webdemo.ui.AppRoot
 import dev.openbili.webdemo.ui.BiliDemoTheme
+import dev.openbili.webdemo.ui.LocalGlassEffectsEnabled
 import dev.openbili.webdemo.ui.WebLinkHost
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -114,17 +118,25 @@ class MainActivity : ComponentActivity() {
 
     composeView.setContent {
       val settings by settingsViewModel.state.collectAsState()
-      val darkTheme = settings.forceDarkMode || isSystemInDarkTheme()
+      val systemDarkTheme = isSystemInDarkTheme()
+      val darkTheme =
+        when (settings.themeMode) {
+          ThemeMode.SYSTEM -> systemDarkTheme
+          ThemeMode.LIGHT -> false
+          ThemeMode.DARK -> true
+        }
       SideEffect {
         darkShellTheme = darkTheme
         applyImmersiveShell()
       }
-      BiliDemoTheme(darkTheme = darkTheme) {
+      BiliDemoTheme(darkTheme = darkTheme, accent = settings.themeAccent) {
         // Keep the app's typography stable on tablets whose system font is enlarged.
         // Layout density remains device-specific; only sp conversion is fixed to 1x.
         val deviceDensity = LocalDensity.current
         CompositionLocalProvider(
-          LocalDensity provides Density(deviceDensity.density, fontScale = 1f)
+          LocalDensity provides Density(deviceDensity.density, fontScale = 1f),
+          LocalGlassEffectsEnabled provides settings.glassEffects,
+          LocalContentColor provides MaterialTheme.colorScheme.onBackground,
         ) {
           WebLinkHost {
             AppRoot(

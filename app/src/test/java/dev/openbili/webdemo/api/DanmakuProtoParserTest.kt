@@ -16,6 +16,7 @@ class DanmakuProtoParserTest {
         varintField(4, 25),
         varintField(5, 0x66CCFF),
         stringField(7, "第一条弹幕"),
+        varintField(9, 8),
         varintField(24, DANMAKU_COLORFUL_VIP_GRADIENT.toLong()),
         varintField(20, 99),
       )

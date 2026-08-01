@@ -7,6 +7,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -14,6 +15,8 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+
+val LocalGlassEffectsEnabled = staticCompositionLocalOf { true }
 
 /**
  * A translucent, readable surface. It deliberately does not blur its own content or continuously
@@ -28,19 +31,26 @@ fun GlassSurface(
   tonalElevation: Dp = 0.dp,
   content: @Composable () -> Unit,
 ) {
+  val glassEffectsEnabled = LocalGlassEffectsEnabled.current
+  val resolvedContainerColor =
+    if (glassEffectsEnabled) containerColor else MaterialTheme.colorScheme.surface
+  val resolvedBorderColor =
+    if (glassEffectsEnabled) borderColor else MaterialTheme.colorScheme.outlineVariant
   val overlay =
-    remember(containerColor) {
+    remember(resolvedContainerColor, glassEffectsEnabled) {
       Brush.verticalGradient(
         listOf(
-          Color.White.copy(alpha = GlassTokens.GradientOverlayAlpha),
-          containerColor.copy(alpha = 0f),
+          Color.White.copy(
+            alpha = if (glassEffectsEnabled) GlassTokens.GradientOverlayAlpha else 0f
+          ),
+          resolvedContainerColor.copy(alpha = 0f),
         )
       )
     }
   Surface(
-    modifier = modifier.border(GlassTokens.BorderWidth, borderColor, shape),
+    modifier = modifier.border(GlassTokens.BorderWidth, resolvedBorderColor, shape),
     shape = shape,
-    color = containerColor,
+    color = resolvedContainerColor,
     contentColor = MaterialTheme.colorScheme.onSurface,
     tonalElevation = tonalElevation,
   ) {

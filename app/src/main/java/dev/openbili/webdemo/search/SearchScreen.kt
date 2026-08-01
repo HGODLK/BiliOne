@@ -98,6 +98,7 @@ import dev.openbili.webdemo.video.CommentLevelIcon
 import dev.openbili.webdemo.video.extractAvatarDominantColors
 import dev.openbili.webdemo.video.readableCommentCardColor
 import dev.openbili.webdemo.ui.PressableVideoCard
+import dev.openbili.webdemo.ui.NavigationCardBottomClearance
 import dev.openbili.webdemo.ui.PullRefreshContainer
 import dev.openbili.webdemo.ui.VideoCardReveal
 import dev.openbili.webdemo.ui.VideoShapeTokens
@@ -452,7 +453,7 @@ fun SearchResultsScreen(
                 ) 5
                 else 3
               ),
-            contentPadding = PaddingValues(bottom = 40.dp),
+            contentPadding = PaddingValues(bottom = NavigationCardBottomClearance),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
           ) {

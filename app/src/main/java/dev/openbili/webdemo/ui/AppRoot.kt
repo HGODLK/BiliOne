@@ -1,8 +1,8 @@
 package dev.openbili.webdemo.ui
 
 import android.content.Context
-import android.graphics.BitmapFactory
-import android.net.Uri
+import android.net.ConnectivityManager
+import android.net.Network
 import android.view.ViewGroup
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -11,16 +11,9 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -29,9 +22,9 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -49,29 +42,21 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.boundsInRoot
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.util.UnstableApi
@@ -86,7 +71,6 @@ import dev.openbili.webdemo.LoginState
 import dev.openbili.webdemo.MainViewModel
 import dev.openbili.webdemo.PlaybackProgressStore
 import dev.openbili.webdemo.PlayerViewModel
-import dev.openbili.webdemo.R
 import dev.openbili.webdemo.api.AccountMessage
 import dev.openbili.webdemo.api.ArticleDetail
 import dev.openbili.webdemo.api.ArticleItem
@@ -100,18 +84,12 @@ import dev.openbili.webdemo.api.CommentNavigationTarget
 import dev.openbili.webdemo.api.CommentSort
 import dev.openbili.webdemo.api.DanmakuItem
 import dev.openbili.webdemo.api.DanmakuMaskParser
-import dev.openbili.webdemo.api.DanmakuMaskTimeline
 import dev.openbili.webdemo.api.MessageTargetKind
 import dev.openbili.webdemo.api.RiskControlManager
 import dev.openbili.webdemo.api.SpaceContentCard
-import dev.openbili.webdemo.api.BangumiIndexItem
 import dev.openbili.webdemo.api.VideoEngagement
 import dev.openbili.webdemo.api.VideoInfo
 import dev.openbili.webdemo.api.VideoPage
-import dev.openbili.webdemo.api.commentTimeHasMore
-import dev.openbili.webdemo.api.commentTimeNextPage
-import dev.openbili.webdemo.api.commentTimeStartPage
-import dev.openbili.webdemo.api.orderCommentsByTime
 import dev.openbili.webdemo.article.ArticleOrigin
 import dev.openbili.webdemo.article.ArticleScreen
 import dev.openbili.webdemo.article.ArticleStackFrame
@@ -120,7 +98,6 @@ import dev.openbili.webdemo.article.ArticleTransitionSession
 import dev.openbili.webdemo.bangumi.BangumiRecommendationViewModel
 import dev.openbili.webdemo.bangumi.BangumiExploreViewModel
 import dev.openbili.webdemo.bangumi.BangumiIndexViewModel
-import dev.openbili.webdemo.feed.CoverImage
 import dev.openbili.webdemo.feed.CoverImageRequestFactory
 import dev.openbili.webdemo.feed.FeedItem
 import dev.openbili.webdemo.feed.FeedScrollAnchor
@@ -130,21 +107,25 @@ import dev.openbili.webdemo.feed.FeedViewModel
 import dev.openbili.webdemo.feed.LoadedFeedImageRegistry
 import dev.openbili.webdemo.feed.LocalCoverImageLoadingEnabled
 import dev.openbili.webdemo.live.LiveRoomScreen
+import dev.openbili.webdemo.live.LiveRoomViewModel
+import dev.openbili.webdemo.live.LiveHomeSourceAnchor
 import dev.openbili.webdemo.live.LiveSearchRoom
+import dev.openbili.webdemo.live.currentDisplayCoverUrl
 import dev.openbili.webdemo.my.MyScreen
 import dev.openbili.webdemo.my.MyViewModel
 import dev.openbili.webdemo.my.ProfilePrivateConversationPane
+import dev.openbili.webdemo.my.WatchLaterViewModel
+import dev.openbili.webdemo.my.contains
 import dev.openbili.webdemo.search.SearchResultsScreen
 import dev.openbili.webdemo.search.SearchScreen
 import dev.openbili.webdemo.search.SearchViewModel
 import dev.openbili.webdemo.settings.AppSettingsViewModel
-import dev.openbili.webdemo.settings.PreferredResolutionMode
-import dev.openbili.webdemo.video.CommentProfileAnchor
+import dev.openbili.webdemo.settings.preferredResolutionModeFor
 import dev.openbili.webdemo.video.BangumiPageUi
+import dev.openbili.webdemo.video.CommentProfileAnchor
+import dev.openbili.webdemo.video.DanmakuWindowController
 import dev.openbili.webdemo.video.VideoInfoTile
 import dev.openbili.webdemo.video.VideoScreen
-import dev.openbili.webdemo.video.bangumiPageLayoutForPane
-import dev.openbili.webdemo.video.videoPaneSpec
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -156,7 +137,6 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlin.math.roundToInt
 
 private val playerTransitionRequiredSignals =
   setOf(
@@ -176,317 +156,6 @@ private val exitTransitionRequiredSignals =
   )
 
 private const val NESTED_PROFILE_HEADER_FADE_OUT_MS = 140L
-
-private enum class RootPlayerSurfaceRole {
-  IDLE,
-  PREVIEW_PENDING,
-  PREVIEW,
-  DETAIL_PENDING,
-  DETAIL,
-  EXIT_COVERED,
-}
-
-private data class RootPlayerOwnership(
-  val role: RootPlayerSurfaceRole,
-  val mediaId: String? = null,
-)
-
-private data class SharedPlayerHostConfig(
-  val modifier: Modifier,
-  val fullscreenProgress: Float,
-  val fullscreen: Boolean,
-  val danmakuAllowed: Boolean,
-)
-
-private enum class SharedPlayerViewRole {
-  PREVIEW,
-  DETAIL,
-}
-
-private data class HeldPlayerView(
-  val role: SharedPlayerViewRole,
-  val view: PlayerView,
-)
-
-internal fun shouldPositionBangumiPreviewPortal(
-  previewOwned: Boolean,
-  boundsUsable: Boolean,
-  previewPortalVisible: Boolean,
-): Boolean = previewOwned && boundsUsable && previewPortalVisible
-
-internal fun shouldUseRootPlayerHost(
-  startupWarmupVisible: Boolean,
-  bangumiRootPageActive: Boolean,
-  hasBangumiHomeTransition: Boolean,
-): Boolean =
-  !startupWarmupVisible && (bangumiRootPageActive || hasBangumiHomeTransition)
-
-internal fun shouldActivateBangumiRootPage(
-  selectedTab: RootTab,
-  settledPage: Int,
-  pageSwitchInProgress: Boolean,
-  videoScreenVisible: Boolean,
-): Boolean =
-  selectedTab == RootTab.BANGUMI &&
-    settledPage == RootTab.BANGUMI.ordinal &&
-    !pageSwitchInProgress &&
-    !videoScreenVisible
-
-internal fun shouldSuppressDetailPlayerForBangumiCardTransition(
-  kind: TransitionKind,
-  phase: SessionPhase,
-): Boolean =
-  when (kind) {
-    TransitionKind.ENTER_ROOT ->
-      phase == SessionPhase.PREPARING ||
-        phase == SessionPhase.READY ||
-        phase == SessionPhase.FLYING
-    TransitionKind.EXIT_ROOT ->
-      phase == SessionPhase.FLYING || phase == SessionPhase.REVEALING_BACKGROUND
-    else -> false
-  }
-
-@Composable
-private fun CachedBangumiTransitionCover(
-  coverUrl: String,
-  modifier: Modifier = Modifier,
-) {
-  val bitmap =
-    LoadedFeedImageRegistry.bitmap(bangumiPreviewCoverCacheKey(coverUrl))
-      ?: LoadedFeedImageRegistry.bitmap(coverUrl)
-  if (bitmap != null) {
-    Image(
-      bitmap = bitmap.asImageBitmap(),
-      contentDescription = null,
-      modifier = modifier,
-      contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-    )
-  } else {
-    Box(modifier.background(Color.Black))
-  }
-}
-
-@Composable
-private fun RootPlayerLayer(
-  hostEnabled: Boolean,
-  ownership: RootPlayerOwnership,
-  previewBounds: Rect,
-  previewCoverAlpha: () -> Float,
-  previewCoverBlend: BangumiPreviewCoverBlend?,
-  previewGestureVisualActive: Boolean,
-  previewPortalVisible: Boolean,
-  previewImageLoadingEnabled: Boolean,
-  previewTarget: BangumiPreviewTarget?,
-  layerItem: FeedItem?,
-  playerContent: @Composable (SharedPlayerHostConfig) -> Unit,
-) {
-  if (!hostEnabled) return
-  val density = LocalDensity.current
-  // The preview portal owns the physical host while its media id is being switched. Requiring the
-  // old ownership id to already match the new target briefly parks the SurfaceView at 1 x 1 before
-  // the ownership effect can catch up, which is visible as a positional flash.
-  val previewOwned =
-    ownership.role in setOf(RootPlayerSurfaceRole.PREVIEW_PENDING, RootPlayerSurfaceRole.PREVIEW)
-  // PREVIEW_PENDING must already receive the real preview bounds. Waiting for the first frame
-  // before sizing the SurfaceView creates a deadlock on devices that do not render a 1 px parked
-  // surface. A cover remains above it until that first frame is reported.
-  val previewPositioned =
-    shouldPositionBangumiPreviewPortal(
-      previewOwned = previewOwned,
-      boundsUsable = previewBounds.hasUsableSize(),
-      previewPortalVisible = previewPortalVisible,
-    )
-  val bounds = if (previewPositioned) previewBounds else Rect.Zero
-  val contentVisible = bounds.hasUsableSize()
-  // SurfaceView cannot be parked outside the window: on Samsung's SurfaceControl implementation
-  // an off-screen parent may stay in SurfaceFlinger's Offscreen Hierarchy after the Compose view
-  // returns. A one-pixel on-screen host keeps the one surface attached without exposing content.
-  val hostBounds =
-    if (contentVisible) bounds
-    else Rect(0f, 0f, 1f, 1f)
-
-  Box(
-    Modifier.offset { IntOffset(hostBounds.left.roundToInt(), hostBounds.top.roundToInt()) }
-      .size(
-        width = with(density) { hostBounds.width.toDp() },
-        height = with(density) { hostBounds.height.toDp() },
-      )
-      .clip(VideoShapeTokens.Player)
-  ) {
-    if (contentVisible) {
-      VideoCardGradient(
-        coverUrl = layerItem?.coverUrl.orEmpty(),
-        modifier = Modifier.fillMaxSize(),
-        loadKey = "root-player-background:${layerItem?.id.orEmpty()}",
-      ) {
-        Box(
-          Modifier.matchParentSize().background(Color.Black.copy(alpha = .36f))
-        )
-      }
-    }
-    // Keep the sole AndroidView mounted after warmup. Parking it off-screen avoids the stale
-    // SurfaceView buffer size seen when a PV-sized host was detached and later reused by a larger
-    // homepage player.
-    playerContent(
-      SharedPlayerHostConfig(
-        modifier = Modifier.fillMaxSize(),
-        fullscreenProgress = 0f,
-        fullscreen = false,
-        danmakuAllowed = false,
-      )
-    )
-    if (contentVisible && previewPositioned) {
-      Box(
-        Modifier.fillMaxSize().graphicsLayer {
-          alpha = previewCoverAlpha().coerceIn(0f, 1f)
-        }
-      ) {
-        if (previewGestureVisualActive && previewCoverBlend != null) {
-          CachedBangumiTransitionCover(
-            coverUrl = previewCoverBlend.fromCoverUrl,
-            modifier = Modifier.fillMaxSize(),
-          )
-          CachedBangumiTransitionCover(
-            coverUrl = previewCoverBlend.toCoverUrl,
-            modifier =
-              Modifier.fillMaxSize().graphicsLayer { alpha = previewCoverBlend.progress },
-          )
-        } else {
-          CoverImage(
-            coverUrl =
-              previewTarget?.item?.coverUrl?.ifBlank { layerItem?.coverUrl.orEmpty() }
-                ?: layerItem?.coverUrl,
-            contentDescription = null,
-            modifier = Modifier.fillMaxSize(),
-            shape = VideoShapeTokens.Player,
-            enforceAspectRatio = false,
-            requestWidth = 1600,
-            requestHeight = 900,
-            loadKey = "root-player-preview-pending:${previewTarget?.item?.id.orEmpty()}",
-            bitmapCacheKey =
-              bangumiPreviewCoverCacheKey(
-                previewTarget?.item?.coverUrl?.ifBlank { layerItem?.coverUrl.orEmpty() }
-                  ?: layerItem?.coverUrl.orEmpty()
-              ),
-            alwaysLoad = true,
-            loadingEnabled = previewImageLoadingEnabled,
-            retainBitmap = true,
-            fadeIn = false,
-          )
-        }
-      }
-    }
-  }
-}
-
-private data class ActiveBangumiPage(
-  val sourceCard: SpaceContentCard,
-  val sourceProfileEntryId: Long,
-  val sourceMid: Long,
-  val sourceBounds: Rect?,
-  val sourceVideoCoverUrl: String = "",
-  val returnToSourceCover: Boolean = false,
-  /** Keeps the portrait transition contract while routing source-cover visibility to Explore. */
-  val sourceIsBangumiExplorePoster: Boolean = false,
-  val sourceUsesLivePlayer: Boolean = false,
-  val sourceOrigin: PageOrigin = PageOrigin.Profile(sourceProfileEntryId, sourceMid),
-  val sourceSeasonId: Long = sourceCard.seasonId,
-  val sourceFollowedByViewer: Boolean = false,
-  val seasonChangedFromSource: Boolean = false,
-  val season: BangumiSeason? = null,
-  val loading: Boolean = true,
-  val error: String? = null,
-  val currentEpisodeId: Long = sourceCard.episodeId,
-  val followBusy: Boolean = false,
-  val playbackFallbackEmitted: Boolean = false,
-)
-
-/** Result of resolving which episode and start position to use when entering a bangumi page. */
-data class BangumiEntryTarget(
-  val card: SpaceContentCard,
-  val startPositionMs: Long,
-  val serverResumeAuthoritative: Boolean,
-)
-
-/**
- * Pure function that decides the effective entry target for a bangumi card.
- *
- * Priority:
- * 1. [card.watchProgress] with valid episodeId → server-recorded episode and position.
- * 2. [localSelection] (when [allowLocalSelection]) → last-watched from BangumiPlaybackStore.
- * 3. Fallback → source card's default [card.episodeId] / new_ep.
- */
-internal fun resolveBangumiEntryTarget(
-  sourceCard: SpaceContentCard,
-  localSelection: BangumiPlaybackStore.Selection?,
-  allowLocalSelection: Boolean,
-): BangumiEntryTarget {
-  val progress = sourceCard.watchProgress
-  if (progress != null && progress.episodeId > 0L) {
-    val videoUrl = "https://www.bilibili.com/bangumi/play/ep${progress.episodeId}"
-    return BangumiEntryTarget(
-      card = sourceCard.copy(
-        videoUrl = videoUrl,
-        episodeId = progress.episodeId,
-      ),
-      startPositionMs = progress.positionMs,
-      serverResumeAuthoritative = true,
-    )
-  }
-  if (allowLocalSelection && localSelection != null) {
-    val restoredSeasonId = localSelection.seasonId.takeIf { it > 0L } ?: sourceCard.seasonId
-    val videoUrl = "https://www.bilibili.com/bangumi/play/ep${localSelection.episodeId}"
-    return BangumiEntryTarget(
-      card = sourceCard.copy(
-        aid = 0L,
-        bvid = localSelection.bvid,
-        videoUrl = videoUrl,
-        seasonId = restoredSeasonId,
-        episodeId = localSelection.episodeId,
-      ),
-      startPositionMs = 0L,
-      serverResumeAuthoritative = false,
-    )
-  }
-  return BangumiEntryTarget(
-    card = sourceCard,
-    startPositionMs = 0L,
-    serverResumeAuthoritative = false,
-  )
-}
-
-private fun SpaceContentCard.toBangumiVideoItem(
-  uploader: String? = null,
-  uploaderFace: String? = null,
-  uploaderMid: Long = 0L,
-): FeedItem =
-  FeedItem(
-    id = id,
-    title = title,
-    videoUrl =
-      episodeId.takeIf { it > 0L }?.let { "https://www.bilibili.com/bangumi/play/ep$it" }
-        ?: videoUrl,
-    coverUrl = coverUrl,
-    uploader = uploader,
-    playCount = null,
-    duration = null,
-    uploaderFace = uploaderFace,
-    uploaderMid = uploaderMid,
-    description = subtitle,
-  )
-
-private fun BangumiIndexItem.toIndexBangumiCard(): SpaceContentCard =
-  SpaceContentCard(
-    id = stableId,
-    title = title,
-    subtitle = indexShow.ifBlank { subtitle },
-    coverUrl = coverUrl,
-    videoUrl = targetUrl,
-    seasonId = seasonId,
-    episodeId = episodeId,
-    kind = dev.openbili.webdemo.api.SpaceContentKind.BANGUMI,
-    seasonType = seasonType,
-  )
 
 @OptIn(UnstableApi::class)
 @Composable
@@ -512,6 +181,8 @@ fun AppRoot(
   val playerState by playerViewModel.playerState.collectAsState()
   val renderedVideoId by playerViewModel.renderedVideoId.collectAsState()
   val myState by myViewModel.state.collectAsState()
+  val watchLaterViewModel: WatchLaterViewModel = viewModel()
+  val watchLaterState by watchLaterViewModel.state.collectAsState()
   val profileMessageState by profileMessageViewModel.state.collectAsState()
   val searchState by searchViewModel.state.collectAsState()
   val settings by settingsViewModel.state.collectAsState()
@@ -521,17 +192,59 @@ fun AppRoot(
   val bangumiIndexState by bangumiIndexViewModel.state.collectAsState()
   val riskChallenge by RiskControlManager.challenge.collectAsState()
   val context = LocalContext.current
+  fun currentPreferredResolutionMode() = settings.preferredResolutionModeFor(context)
+
   val lifecycleOwner = LocalLifecycleOwner.current
   val scope = rememberCoroutineScope()
   val rootDensity = LocalDensity.current
   val focusManager = LocalFocusManager.current
   val keyboardController = LocalSoftwareKeyboardController.current
+  val connectivityManager =
+    remember(context.applicationContext) {
+      context.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE)
+        as? ConnectivityManager
+    }
+  DisposableEffect(lifecycleOwner, myViewModel, authUserInfo.mid, connectivityManager) {
+    fun syncUnreadMonitoring() {
+      myViewModel.setUnreadMonitoringActive(
+        authUserInfo.mid > 0L &&
+          lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+      )
+    }
+    val lifecycleObserver = LifecycleEventObserver { _, _ -> syncUnreadMonitoring() }
+    val networkCallback =
+      object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+          myViewModel.onUnreadNetworkAvailable()
+        }
+      }
+    lifecycleOwner.lifecycle.addObserver(lifecycleObserver)
+    val networkCallbackRegistered =
+      connectivityManager
+        ?.let { manager ->
+          runCatching {
+              manager.registerDefaultNetworkCallback(networkCallback)
+              true
+            }
+            .getOrDefault(false)
+        } ?: false
+    syncUnreadMonitoring()
+    onDispose {
+      lifecycleOwner.lifecycle.removeObserver(lifecycleObserver)
+      if (networkCallbackRegistered) {
+        runCatching { connectivityManager.unregisterNetworkCallback(networkCallback) }
+      }
+      myViewModel.setUnreadMonitoringActive(false)
+    }
+  }
   val feedGridState = rememberLazyGridState()
   val searchGridState = rememberLazyGridState()
   val bangumiIndexGridState = rememberLazyGridState()
   // Feed geometry is an event-time reference, not UI state. Keeping it outside snapshot state
   // prevents every layout tick during a fling from invalidating AppRoot.
   val feedCardBounds = remember { mutableMapOf<String, Rect>() }
+  val popularCardBounds = remember { mutableMapOf<String, Rect>() }
+  val homeLiveCardBounds = remember { mutableMapOf<String, Rect>() }
   val myCardBounds = remember { mutableStateMapOf<String, Rect>() }
   val myInteractionVideoMessageIds = remember { mutableStateMapOf<String, Long>() }
   val searchCardBounds = remember { mutableStateMapOf<String, Rect>() }
@@ -543,6 +256,8 @@ fun AppRoot(
   val articleVideoBounds = remember { mutableStateMapOf<String, Rect>() }
   val profileCardBounds = remember { mutableStateMapOf<ProfileVideoKey, Rect>() }
   val profileStateHolder = rememberSaveableStateHolder()
+  val liveRoomStateHolder = rememberSaveableStateHolder()
+  val liveRecommendationCardBounds = remember { mutableStateMapOf<String, Rect>() }
   var startupWarmupVisible by remember {
     mutableStateOf(FeedPerformanceConfig.startupWarmupMaskEnabled)
   }
@@ -563,12 +278,20 @@ fun AppRoot(
   var showSearch by rememberSaveable { mutableStateOf(false) }
   var showSearchResults by rememberSaveable { mutableStateOf(false) }
   var activeLiveRoom by remember { mutableStateOf<LiveSearchRoom?>(null) }
+  var activeLiveEntryId by remember { mutableStateOf(0L) }
+  var nextLiveEntryId by remember { mutableStateOf(0L) }
+  var liveRoomParentStack by remember { mutableStateOf<List<LiveRoomParentFrame>>(emptyList()) }
+  var hiddenLiveRecommendationCoverItemId by remember { mutableStateOf<String?>(null) }
   var activeLiveOrigin by remember { mutableStateOf<PageOrigin>(PageOrigin.Search) }
+  var activeLiveSourceAnchor by remember { mutableStateOf<LiveHomeSourceAnchor?>(null) }
   var livePlayerBounds by remember { mutableStateOf(Rect.Zero) }
   var liveTransitionSession by remember { mutableStateOf<CardTransitionSession?>(null) }
   var liveExitPrelude by remember { mutableStateOf<VideoExitPrelude?>(null) }
   var liveVideoSurfaceVisible by remember { mutableStateOf(true) }
   var liveTransitionJob by remember { mutableStateOf<Job?>(null) }
+  var homeLivePreludeActive by remember { mutableStateOf(false) }
+  var liveFullscreenTransitionActive by remember { mutableStateOf(false) }
+  var videoFullscreenTransitionActive by remember { mutableStateOf(false) }
   val livePageAlpha = remember { Animatable(1f) }
   var showBangumiIndex by rememberSaveable { mutableStateOf(false) }
   var bangumiIndexTransitionDirection by remember { mutableStateOf<SearchTransitionDirection?>(null) }
@@ -596,6 +319,8 @@ fun AppRoot(
   var transitionSession by remember { mutableStateOf<CardTransitionSession?>(null) }
   var transitionToken by remember { mutableStateOf(0L) }
   var hiddenFeedCoverItemId by remember { mutableStateOf<String?>(null) }
+  var hiddenPopularCoverItemId by remember { mutableStateOf<String?>(null) }
+  var hiddenHomeLiveCoverItemId by remember { mutableStateOf<String?>(null) }
   var hiddenMyCoverItemId by remember { mutableStateOf<String?>(null) }
   var hiddenSearchCoverItemId by remember { mutableStateOf<String?>(null) }
   var hiddenBangumiIndexItemId by remember { mutableStateOf<String?>(null) }
@@ -644,6 +369,7 @@ fun AppRoot(
   var interactionTargetLoadingId by remember { mutableStateOf<Long?>(null) }
   val articlePageAlpha = remember { Animatable(0f) }
   val videoState = remember { AppRootVideoState() }
+  val danmakuWindowController = remember { DanmakuWindowController() }
   val videoEntryCache = videoState.videoEntryCache
   var dataCommitAllowedId by remember { mutableStateOf(appState.selectedVideo?.id) }
   var playerActivationId by remember { mutableStateOf(appState.selectedVideo?.id) }
@@ -718,6 +444,16 @@ fun AppRoot(
   var spaceDynamicLoading by profileState::spaceDynamicLoading
   var spaceDynamicError by profileState::spaceDynamicError
   var selectedDynamicId by profileState::selectedDynamicId
+  var spaceCollections by profileState::spaceCollections
+  var spaceCollectionsLoading by profileState::spaceCollectionsLoading
+  var spaceCollectionsError by profileState::spaceCollectionsError
+  var selectedCollectionId by profileState::selectedCollectionId
+  var spaceCollectionVideos by profileState::spaceCollectionVideos
+  var spaceCollectionPage by profileState::spaceCollectionPage
+  var spaceCollectionHasMore by profileState::spaceCollectionHasMore
+  var spaceCollectionLoading by profileState::spaceCollectionLoading
+  var spaceCollectionError by profileState::spaceCollectionError
+  var spaceCollectionTotal by profileState::spaceCollectionTotal
   fun launchTransition(block: suspend CoroutineScope.() -> Unit) {
     val previous = activeTransitionJob
     activeTransitionJob = scope.launch {
@@ -783,7 +519,11 @@ fun AppRoot(
     animateToRootTab(RootTab.HOME)
   }
 
-  val playerSession = remember { AppRootPlayerSessionState() }
+  val playerSession = remember {
+    AppRootPlayerSessionState(
+      initialShowDanmaku = settings.defaultShowDanmaku,
+    )
+  }
   var currentPositionMs by playerSession::currentPositionMs
   var scrubPreviewMs by playerSession::scrubPreviewMs
   var pendingSeekTargetMs by playerSession::pendingSeekTargetMs
@@ -795,6 +535,9 @@ fun AppRoot(
   var playerControlsVisible by playerSession::playerControlsVisible
   var playbackEnded by playerSession::playbackEnded
   var playbackSpeed by playerSession::playbackSpeed
+  LaunchedEffect(appState.selectedVideo?.id, settings.defaultShowDanmaku) {
+    if (appState.selectedVideo != null) showDanmaku = settings.defaultShowDanmaku
+  }
   val danmakuPositionEpoch = playerSession.danmakuPositionEpoch
   val latestScrubPreview by rememberUpdatedState(scrubPreviewMs)
   val latestPendingSeekTarget by rememberUpdatedState(pendingSeekTargetMs)
@@ -904,6 +647,7 @@ fun AppRoot(
   val latestDanmakuOpacity by rememberUpdatedState(settings.danmakuOpacity)
   val latestDanmakuDisplayArea by rememberUpdatedState(settings.danmakuDisplayArea)
   val latestDanmakuDensity by rememberUpdatedState(settings.danmakuDensity)
+  val latestDanmakuBlockLevel by rememberUpdatedState(settings.danmakuBlockLevel)
   val latestDanmakuFontScale by rememberUpdatedState(settings.danmakuFontScale)
   val latestDanmakuSpeed by rememberUpdatedState(settings.danmakuSpeed)
   val latestDanmakuSmartBlocking by rememberUpdatedState(settings.danmakuSmartBlocking)
@@ -1206,72 +950,71 @@ fun AppRoot(
       Boolean?,
     ) -> Unit =
     { modifier, fullscreenProgress, fullscreen, danmakuAllowed, role, surfaceVisible ->
-        // Read overlay inputs during composition. If they are read only inside AndroidView's
-        // update lambda, rememberUpdatedState can change without invalidating that update block.
-        val danmakuItems = if (danmakuAllowed) latestDanmaku else emptyList()
-        val maskTimeline = if (danmakuAllowed) latestDanmakuMask else null
-        val danmakuEnabled = danmakuAllowed && latestShowDanmaku
-        val smartBlocking = latestDanmakuSmartBlocking
-        val danmakuPaused = latestDanmakuPaused
-        val danmakuOpacity = latestDanmakuOpacity
-        val danmakuDisplayArea = latestDanmakuDisplayArea
-        val danmakuDensity = latestDanmakuDensity
-        val danmakuFontScale = latestDanmakuFontScale
-        val danmakuSpeed = latestDanmakuSpeed
-        val danmakuPositionEpoch = latestDanmakuPositionEpoch
-        val highDynamicRange = latestIsHdrPlayback
-        val danmakuState = remember { DanmakuUpdateState() }
-        AndroidView(
-          factory = { ctx -> obtainPlayerViewForHost(ctx, role) },
-          update = { playerView ->
-            if (playerView.player !== playerViewModel.exoPlayer) {
-              playerView.player = playerViewModel.exoPlayer
-            }
-            surfaceVisible?.let { visible ->
-              playerView.updateVideoSurfaceAlpha(if (visible) 1f else 0f)
-            }
-            val fullscreenRadius =
-              if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) 14f else 0f
-            playerView.updatePlayerCornerRadius(
-              20f + (fullscreenRadius - 20f) * fullscreenProgress
+      // Read overlay inputs during composition. If they are read only inside AndroidView's
+      // update lambda, rememberUpdatedState can change without invalidating that update block.
+      val danmakuItems = if (danmakuAllowed) latestDanmaku else emptyList()
+      val maskTimeline = if (danmakuAllowed) latestDanmakuMask else null
+      val danmakuEnabled = danmakuAllowed && latestShowDanmaku
+      val smartBlocking = latestDanmakuSmartBlocking
+      val danmakuPaused = latestDanmakuPaused
+      val danmakuOpacity = latestDanmakuOpacity
+      val danmakuDisplayArea = latestDanmakuDisplayArea
+      val danmakuDensity = latestDanmakuDensity
+      val danmakuBlockLevel = latestDanmakuBlockLevel
+      val danmakuFontScale = latestDanmakuFontScale
+      val danmakuSpeed = latestDanmakuSpeed
+      val danmakuPositionEpoch = latestDanmakuPositionEpoch
+      val highDynamicRange = latestIsHdrPlayback
+      val danmakuState = remember { DanmakuUpdateState() }
+      AndroidView(
+        factory = { ctx -> obtainPlayerViewForHost(ctx, role) },
+        update = { playerView ->
+          if (playerView.player !== playerViewModel.exoPlayer) {
+            playerView.player = playerViewModel.exoPlayer
+          }
+          surfaceVisible?.let { visible ->
+            playerView.updateVideoSurfaceAlpha(if (visible) 1f else 0f)
+          }
+          playerView.updatePlayerCornerRadius(20f * (1f - fullscreenProgress.coerceIn(0f, 1f)))
+          if (
+            danmakuState.changed(
+              danmakuItems,
+              maskTimeline,
+              danmakuEnabled,
+              smartBlocking,
+              danmakuPaused,
+              fullscreen,
+              highDynamicRange,
+              danmakuOpacity,
+              danmakuDisplayArea,
+              danmakuDensity,
+              danmakuBlockLevel,
+              danmakuFontScale,
+              danmakuSpeed,
+              danmakuPositionEpoch,
             )
-            if (
-              danmakuState.changed(
-                danmakuItems,
-                maskTimeline,
-                danmakuEnabled,
-                smartBlocking,
-                danmakuPaused,
-                fullscreen,
-                highDynamicRange,
-                danmakuOpacity,
-                danmakuDisplayArea,
-                danmakuDensity,
-                danmakuFontScale,
-                danmakuSpeed,
-                danmakuPositionEpoch,
-              )
-            ) {
-              playerView.updateDanmakuOverlay(
-                danmakuItems,
-                maskTimeline,
-                danmakuEnabled,
-                smartBlocking,
-                danmakuPaused,
-                fullscreen,
-                highDynamicRange,
-                danmakuOpacity,
-                danmakuDisplayArea,
-                danmakuDensity,
-                danmakuFontScale,
-                danmakuSpeed,
-                danmakuPositionEpoch,
-                latestPlayerPositionProvider,
-              )
-            }
-          },
-          modifier = modifier,
-        )
+          ) {
+            playerView.updateDanmakuOverlay(
+              danmakuItems,
+              maskTimeline,
+              danmakuEnabled,
+              smartBlocking,
+              danmakuPaused,
+              fullscreen,
+              highDynamicRange,
+              danmakuOpacity,
+              danmakuDisplayArea,
+              danmakuDensity,
+              danmakuBlockLevel,
+              danmakuFontScale,
+              danmakuSpeed,
+              danmakuPositionEpoch,
+              latestPlayerPositionProvider,
+            )
+          }
+        },
+        modifier = modifier,
+      )
     }
 
   fun previewSeek(targetMs: Long) = playerSession.previewSeek(playerViewModel, targetMs)
@@ -1326,6 +1069,8 @@ fun AppRoot(
         transitionPhase = TransitionPhase.Video(session.item, null)
         transitionSession = null
         hiddenFeedCoverItemId = null
+        hiddenPopularCoverItemId = null
+        hiddenPopularCoverItemId = null
         hiddenMyCoverItemId = null
         hiddenSearchCoverItemId = null
         hiddenBangumiIndexItemId = null
@@ -1352,12 +1097,19 @@ fun AppRoot(
     }
     feedViewModel.updateUserInfo(authUserInfo)
     myViewModel.setUser(authUserInfo.mid)
+    watchLaterViewModel.setAccount(authUserInfo.mid)
     profileMessageViewModel.setUser(authUserInfo.mid, loadInitialSection = false)
     if (changedAccount) feedViewModel.refresh()
   }
 
-  LaunchedEffect(settings.initialFeedCount) {
-    feedViewModel.setInitialTargetCount(settings.initialFeedCount)
+  LaunchedEffect(watchLaterState.feedback?.token) {
+    val feedback = watchLaterState.feedback ?: return@LaunchedEffect
+    Toast.makeText(context, feedback.message, Toast.LENGTH_SHORT).show()
+    watchLaterViewModel.consumeFeedback()
+  }
+
+  LaunchedEffect(Unit) {
+    feedViewModel.setInitialTargetCount(30)
   }
 
   LaunchedEffect(
@@ -1979,7 +1731,7 @@ fun AppRoot(
         item,
         startPositionMs = restore?.savedPositionMs ?: 0L,
         preferredStreamIndex = restore?.qualityIndex,
-        preferredResolutionMode = settings.preferredResolutionMode,
+        preferredResolutionMode = currentPreferredResolutionMode(),
       )
     }
   }
@@ -2292,7 +2044,7 @@ fun AppRoot(
     }
     playerViewModel.loadVideo(
       item = item,
-      preferredResolutionMode = settings.preferredResolutionMode,
+      preferredResolutionMode = currentPreferredResolutionMode(),
       page = page,
     )
   }
@@ -2367,7 +2119,7 @@ fun AppRoot(
       item = episode,
       startPositionMs = retained?.savedPositionMs ?: 0L,
       preferredStreamIndex = retained?.qualityIndex,
-      preferredResolutionMode = settings.preferredResolutionMode,
+      preferredResolutionMode = currentPreferredResolutionMode(),
     )
   }
 
@@ -2403,6 +2155,35 @@ fun AppRoot(
   LaunchedEffect(
     appState.selectedVideo?.id,
     historyCid,
+    historyDuration,
+    dataCommitAllowedId,
+  ) {
+    val item = appState.selectedVideo ?: return@LaunchedEffect
+    if (dataCommitAllowedId != item.id || historyCid <= 0L) return@LaunchedEffect
+    val expectedCid = historyCid
+    val expectedDuration = historyDuration
+    val cachedEntry = videoEntryCache[item.id]
+    danmakuWindowController.seedLocalDanmaku(expectedCid, cachedEntry?.danmaku.orEmpty())
+    val initialPositionMs =
+      cachedEntry?.takeIf { it.cid == expectedCid }?.savedPositionMs ?: playerUiPositionProvider()
+    danmakuWindowController.monitor(
+      cid = expectedCid,
+      durationSeconds = expectedDuration,
+      initialPositionMs = initialPositionMs,
+      positionProvider = playerPositionProvider,
+    ) { window ->
+      if (appState.selectedVideo?.id != item.id || historyCid != expectedCid) return@monitor
+      danmaku = window
+      videoEntryCache[item.id]
+        ?.takeIf { it.cid == expectedCid }
+        ?.let { cacheEntry(it.copy(danmaku = window)) }
+    }
+  }
+
+  LaunchedEffect(
+    appState.selectedVideo?.id,
+    historyCid,
+    historyDuration,
     dataCommitAllowedId,
     settings.danmakuDensity == 5,
     videoInfo?.publishedAt,
@@ -2412,39 +2193,18 @@ fun AppRoot(
     if (dataCommitAllowedId != item.id || historyCid <= 0L) return@LaunchedEffect
     val expectedCid = historyCid
     val requestAllHistory = settings.danmakuDensity == 5
+    if (!requestAllHistory) {
+      danmakuWindowController.clearHistoricalDanmaku(expectedCid)?.let { window ->
+        if (appState.selectedVideo?.id == item.id && historyCid == expectedCid) danmaku = window
+      }
+      return@LaunchedEffect
+    }
     val expectedDuration = historyDuration
     val expectedPublishedAt = videoInfo?.publishedAt ?: 0L
     val expectedDanmakuCount = videoInfo?.danmakuCount ?: 0L
-    val cachedDanmaku = videoEntryCache[item.id]?.danmaku.orEmpty()
-    if (cachedDanmaku.isNotEmpty()) {
-      danmaku = cachedDanmaku
-      if (!requestAllHistory) return@LaunchedEffect
-    }
-
-    val current =
-      if (cachedDanmaku.isNotEmpty()) {
-        cachedDanmaku
-      } else {
-        withContext(Dispatchers.IO) {
-          runCatching {
-              BiliApi.getDanmaku(
-                cid = expectedCid,
-                durationSeconds = expectedDuration,
-              )
-            }
-            .getOrDefault(emptyList())
-        }
-      }
-    if (appState.selectedVideo?.id != item.id || historyCid != expectedCid) return@LaunchedEffect
-    if (current.isNotEmpty()) {
-      danmaku = current
-      videoEntryCache[item.id]
-        ?.takeIf { it.cid == expectedCid }
-        ?.let { cacheEntry(it.copy(danmaku = current)) }
-    }
     // Wait for the video publication timestamp before walking history months. The effect is keyed
     // by videoInfo above and will restart as soon as metadata arrives.
-    if (!requestAllHistory || expectedPublishedAt <= 0L) return@LaunchedEffect
+    if (expectedPublishedAt <= 0L) return@LaunchedEffect
 
     val loaded =
       withContext(Dispatchers.IO) {
@@ -2457,7 +2217,7 @@ fun AppRoot(
               includeHistory = true,
             )
           }
-          .getOrDefault(current)
+          .getOrDefault(emptyList())
       }
     if (
       appState.selectedVideo?.id != item.id ||
@@ -2466,10 +2226,12 @@ fun AppRoot(
     ) {
       return@LaunchedEffect
     }
-    danmaku = loaded
-    videoEntryCache[item.id]
-      ?.takeIf { it.cid == expectedCid }
-      ?.let { cacheEntry(it.copy(danmaku = loaded)) }
+    danmakuWindowController.setHistoricalDanmaku(expectedCid, loaded)?.let { window ->
+      danmaku = window
+      videoEntryCache[item.id]
+        ?.takeIf { it.cid == expectedCid }
+        ?.let { cacheEntry(it.copy(danmaku = window)) }
+    }
   }
 
   LaunchedEffect(
@@ -2650,6 +2412,7 @@ fun AppRoot(
     val parent =
       when (origin) {
         VideoOrigin.HOME -> PageOrigin.Home
+        VideoOrigin.POPULAR -> PageOrigin.Home
         VideoOrigin.MY -> PageOrigin.My
         VideoOrigin.SEARCH -> PageOrigin.Search
         VideoOrigin.BANGUMI -> PageOrigin.BangumiHome
@@ -2727,7 +2490,7 @@ fun AppRoot(
           playerViewModel.loadVideo(
             item,
             startPositionMs = startPositionMs,
-            preferredResolutionMode = settings.preferredResolutionMode,
+            preferredResolutionMode = currentPreferredResolutionMode(),
             restoreSavedProgress = restoreSavedProgress,
           )
         }
@@ -2735,6 +2498,7 @@ fun AppRoot(
       }
       session.endBounds = target
       hiddenFeedCoverItemId = item.id.takeIf { origin == VideoOrigin.HOME }
+      hiddenPopularCoverItemId = item.id.takeIf { origin == VideoOrigin.POPULAR }
       hiddenMyCoverItemId = item.id.takeIf { origin == VideoOrigin.MY }
       hiddenSearchCoverItemId = item.id.takeIf { origin == VideoOrigin.SEARCH }
       hiddenBangumiIndexItemId = item.id.takeIf { bangumiIndexEnter }
@@ -2809,7 +2573,7 @@ fun AppRoot(
         playerViewModel.loadVideo(
           item,
           startPositionMs = startPositionMs,
-          preferredResolutionMode = settings.preferredResolutionMode,
+          preferredResolutionMode = currentPreferredResolutionMode(),
           restoreSavedProgress = restoreSavedProgress,
         )
         // The stationary card owns the media wait and first-frame reveal. Defer comments,
@@ -2825,7 +2589,7 @@ fun AppRoot(
         playerViewModel.loadVideo(
           item,
           startPositionMs = startPositionMs,
-          preferredResolutionMode = settings.preferredResolutionMode,
+          preferredResolutionMode = currentPreferredResolutionMode(),
           restoreSavedProgress = restoreSavedProgress,
         )
       }
@@ -2911,7 +2675,7 @@ fun AppRoot(
         showEmbeddedCover = true
         playerViewModel.loadVideo(
           item,
-          preferredResolutionMode = settings.preferredResolutionMode,
+          preferredResolutionMode = currentPreferredResolutionMode(),
         )
         return@launchTransition
       }
@@ -2949,7 +2713,7 @@ fun AppRoot(
       dataCommitAllowedId = item.id
       session.phase = SessionPhase.WAITING_FIRST_FRAME
       playerActivationId = item.id
-      playerViewModel.loadVideo(item, preferredResolutionMode = settings.preferredResolutionMode)
+      playerViewModel.loadVideo(item, preferredResolutionMode = currentPreferredResolutionMode())
     }
   }
 
@@ -3178,7 +2942,7 @@ fun AppRoot(
                 playerViewModel.loadVideo(
                   item = fallbackItem,
                   startPositionMs = 0L,
-                  preferredResolutionMode = settings.preferredResolutionMode,
+                  preferredResolutionMode = currentPreferredResolutionMode(),
                   restoreSavedProgress = true,
                 )
               }
@@ -3433,7 +3197,7 @@ fun AppRoot(
         dataCommitAllowedId = item.id
         playerActivationId = item.id
         showEmbeddedCover = true
-        playerViewModel.loadVideo(item, preferredResolutionMode = settings.preferredResolutionMode)
+        playerViewModel.loadVideo(item, preferredResolutionMode = currentPreferredResolutionMode())
         return@launchTransition
       }
       session?.endBounds = target
@@ -3479,7 +3243,7 @@ fun AppRoot(
       if (session != null) session.phase = SessionPhase.WAITING_FIRST_FRAME
       else transitionPhase = TransitionPhase.Video(item, null)
       playerActivationId = item.id
-      playerViewModel.loadVideo(item, preferredResolutionMode = settings.preferredResolutionMode)
+      playerViewModel.loadVideo(item, preferredResolutionMode = currentPreferredResolutionMode())
     }
   }
 
@@ -3582,7 +3346,7 @@ fun AppRoot(
         dataCommitAllowedId = item.id
         playerActivationId = item.id
         showEmbeddedCover = true
-        playerViewModel.loadVideo(item, preferredResolutionMode = settings.preferredResolutionMode)
+        playerViewModel.loadVideo(item, preferredResolutionMode = currentPreferredResolutionMode())
         return@launchTransition
       }
       session?.endBounds = target
@@ -3625,7 +3389,7 @@ fun AppRoot(
       if (session != null) session.phase = SessionPhase.WAITING_FIRST_FRAME
       else transitionPhase = TransitionPhase.Video(item, null)
       playerActivationId = item.id
-      playerViewModel.loadVideo(item, preferredResolutionMode = settings.preferredResolutionMode)
+      playerViewModel.loadVideo(item, preferredResolutionMode = currentPreferredResolutionMode())
     }
   }
 
@@ -4230,6 +3994,7 @@ fun AppRoot(
     activeTransitionJob?.cancel()
     activeTransitionJob = null
     playerViewModel.cancelPendingLoad()
+    playerViewModel.exoPlayer?.pause()
     val remainingStack = videoStack.dropLast(1)
     val parentFrame = remainingStack.lastOrNull()
     if (parentFrame != null) {
@@ -4265,7 +4030,12 @@ fun AppRoot(
     val returnBounds = frame.sourceCardBounds.takeUnless { frame.inPlaceSelectionChanged }
     fun latestReturnBounds(): Rect? =
       when (frame.parentPage) {
-        PageOrigin.Home -> feedCardBounds[item.id]
+        PageOrigin.Home ->
+          if (frame.rootFeedScrollAnchor != null) {
+            feedCardBounds[item.id]
+          } else {
+            popularCardBounds[item.id] ?: feedCardBounds[item.id]
+          }
         PageOrigin.My -> myCardBounds[item.id]
         PageOrigin.Search -> searchCardBounds[item.id]
         PageOrigin.Article -> articleVideoBounds[item.id]
@@ -4400,6 +4170,8 @@ fun AppRoot(
       transitionSession = null
       transitionPhase = TransitionPhase.Feed
       hiddenFeedCoverItemId = null
+      hiddenPopularCoverItemId = null
+      hiddenPopularCoverItemId = null
       hiddenMyCoverItemId = null
       hiddenSearchCoverItemId = null
       hiddenArticleVideoCoverItemId = null
@@ -4528,7 +4300,7 @@ fun AppRoot(
           parentFrame.item,
           startPositionMs = restore?.savedPositionMs ?: 0L,
           preferredStreamIndex = restore?.qualityIndex,
-          preferredResolutionMode = settings.preferredResolutionMode,
+          preferredResolutionMode = currentPreferredResolutionMode(),
         )
       }
     }
@@ -4548,6 +4320,9 @@ fun AppRoot(
       return
     session.reverseRequested = true
     session.preparation.cancel()
+    if (session.kind == TransitionKind.ENTER_PROFILE) {
+      playerViewModel.exoPlayer?.pause()
+    }
     // Until the recommendation commits, playerActivationId still belongs to the parent. Keep that
     // exact ExoPlayer load alive during a mid-flight reversal instead of rebuilding it from cache.
     val retainedRecommendationParent =
@@ -4669,6 +4444,7 @@ fun AppRoot(
           }
           transitionPhase = TransitionPhase.Feed
           hiddenFeedCoverItemId = null
+          hiddenPopularCoverItemId = null
           hiddenMyCoverItemId = null
           hiddenSearchCoverItemId = null
           hiddenBangumiIndexItemId = null
@@ -4711,7 +4487,7 @@ fun AppRoot(
                 parentFrame.item,
                 startPositionMs = restore?.savedPositionMs ?: 0L,
                 preferredStreamIndex = restore?.qualityIndex,
-                preferredResolutionMode = settings.preferredResolutionMode,
+                preferredResolutionMode = currentPreferredResolutionMode(),
               )
             }
           }
@@ -4761,6 +4537,7 @@ fun AppRoot(
     }
     transitionPhase = TransitionPhase.Feed
     hiddenFeedCoverItemId = null
+    hiddenPopularCoverItemId = null
     hiddenMyCoverItemId = null
     hiddenSearchCoverItemId = null
     hiddenBangumiIndexItemId = null
@@ -4845,7 +4622,7 @@ fun AppRoot(
         showEmbeddedCover = true
         playerViewModel.loadVideo(
           recommendation,
-          preferredResolutionMode = settings.preferredResolutionMode,
+          preferredResolutionMode = currentPreferredResolutionMode(),
         )
         return@launchTransition
       }
@@ -4884,7 +4661,7 @@ fun AppRoot(
       playerActivationId = recommendation.id
       playerViewModel.loadVideo(
         recommendation,
-        preferredResolutionMode = settings.preferredResolutionMode,
+        preferredResolutionMode = currentPreferredResolutionMode(),
       )
     }
   }
@@ -5599,7 +5376,7 @@ fun AppRoot(
       id = room.stableId,
       title = room.title,
       videoUrl = "https://live.bilibili.com/${room.roomId}",
-      coverUrl = room.keyframeUrl ?: room.coverUrl.orEmpty(),
+      coverUrl = room.currentDisplayCoverUrl(),
       uploader = room.uname,
       playCount = null,
       duration = null,
@@ -5624,6 +5401,8 @@ fun AppRoot(
   fun setLiveSourceCoverHidden(room: LiveSearchRoom, hidden: Boolean) {
     when (activeLiveOrigin) {
       PageOrigin.My -> hiddenMyCoverItemId = room.stableId.takeIf { hidden }
+      PageOrigin.Home ->
+        hiddenHomeLiveCoverItemId = activeLiveSourceAnchor?.stableId.takeIf { hidden }
       else -> hiddenSearchCoverItemId = room.stableId.takeIf { hidden }
     }
   }
@@ -5631,6 +5410,7 @@ fun AppRoot(
   fun liveSourceBounds(room: LiveSearchRoom): Rect? =
     when (activeLiveOrigin) {
       PageOrigin.My -> myCardBounds[room.stableId]
+      PageOrigin.Home -> activeLiveSourceAnchor?.stableId?.let(homeLiveCardBounds::get)
       else -> searchCardBounds[room.stableId]
     }
 
@@ -5638,6 +5418,7 @@ fun AppRoot(
     room: LiveSearchRoom,
     cardBounds: Rect?,
     origin: PageOrigin = PageOrigin.Search,
+    sourceAnchor: LiveHomeSourceAnchor? = null,
   ) {
     if (activeLiveRoom != null || transitionSession != null || articleTransitionSession != null) return
     playerViewModel.cancelPendingLoad()
@@ -5649,86 +5430,259 @@ fun AppRoot(
     hiddenSearchCoverItemId = null
     hiddenMyCoverItemId = null
     activeLiveOrigin = origin
+    activeLiveSourceAnchor = sourceAnchor.takeIf { origin == PageOrigin.Home }
+    liveRoomParentStack = emptyList()
+    hiddenLiveRecommendationCoverItemId = null
+    activeLiveEntryId = ++nextLiveEntryId
     activeLiveRoom = room
     val source = cardBounds?.takeIf { it.hasUsableSize() }
     val item = liveTransitionItem(room)
-    val session =
-      source?.let {
-        CardTransitionSession(
-            token = ++transitionToken,
-            kind = TransitionKind.ENTER_ROOT,
-            item = item,
-            startBounds = it,
-            endBounds = it,
-            initialProgress = 0f,
-            requiredSignals = playerTransitionRequiredSignals,
-          )
-          .also { created ->
-            created.preparation.markReady(TransitionReadySignal.SOURCE_BOUNDS)
-            liveTransitionSession = created
-          }
-      }
+    val session = source?.let {
+      CardTransitionSession(
+          token = ++transitionToken,
+          kind = TransitionKind.ENTER_ROOT,
+          item = item,
+          startBounds = it,
+          endBounds = it,
+          initialProgress = 0f,
+          requiredSignals = playerTransitionRequiredSignals,
+        )
+        .also { created ->
+          created.preparation.markReady(TransitionReadySignal.SOURCE_BOUNDS)
+          liveTransitionSession = created
+        }
+    }
     val previous = liveTransitionJob
-    liveTransitionJob =
-      scope.launch {
-        previous?.cancelAndJoin()
-        livePageAlpha.snapTo(0f)
-        if (session == null) {
+    liveTransitionJob = scope.launch {
+      previous?.cancelAndJoin()
+      livePageAlpha.snapTo(0f)
+      if (session == null) {
+        livePageAlpha.animateTo(
+          1f,
+          tween(if (settings.reduceMotion) 100 else 220, easing = FastOutSlowInEasing),
+        )
+        liveVideoSurfaceVisible = true
+        liveTransitionJob = null
+        return@launch
+      }
+      withFrameNanos {}
+      val target = prepareCardTransition(session) { livePlayerBounds }
+      if (!target.hasUsableSize()) {
+        session.phase = SessionPhase.CANCELLED
+        if (liveTransitionSession === session) liveTransitionSession = null
+        livePageAlpha.animateTo(
+          1f,
+          tween(if (settings.reduceMotion) 100 else 220, easing = FastOutSlowInEasing),
+        )
+        liveVideoSurfaceVisible = true
+        liveTransitionJob = null
+        return@launch
+      }
+      session.endBounds = target
+      setLiveSourceCoverHidden(room, true)
+      session.phase = SessionPhase.FLYING
+      withFrameNanos {}
+      kotlinx.coroutines.coroutineScope {
+        launch {
+          session.progress.animateTo(
+            1f,
+            tween(if (settings.reduceMotion) 140 else 400, easing = FastOutSlowInEasing),
+          )
+        }
+        launch {
+          delay(if (settings.reduceMotion) 10 else 45)
           livePageAlpha.animateTo(
             1f,
-            tween(if (settings.reduceMotion) 100 else 220, easing = FastOutSlowInEasing),
+            tween(if (settings.reduceMotion) 100 else 300, easing = FastOutSlowInEasing),
           )
-          liveVideoSurfaceVisible = true
-          liveTransitionJob = null
-          return@launch
         }
-        withFrameNanos {}
-        val target = prepareCardTransition(session) { livePlayerBounds }
-        if (!target.hasUsableSize()) {
-          session.phase = SessionPhase.CANCELLED
-          if (liveTransitionSession === session) liveTransitionSession = null
-          livePageAlpha.animateTo(
-            1f,
-            tween(if (settings.reduceMotion) 100 else 220, easing = FastOutSlowInEasing),
-          )
-          liveVideoSurfaceVisible = true
-          liveTransitionJob = null
-          return@launch
+      }
+      session.phase = SessionPhase.REVEALING
+      liveVideoSurfaceVisible = true
+      session.coverAlpha.animateTo(
+        0f,
+        tween(if (settings.reduceMotion) 90 else 180, easing = FastOutSlowInEasing),
+      )
+      session.phase = SessionPhase.COMPLETED
+      setLiveSourceCoverHidden(room, false)
+      if (liveTransitionSession === session) liveTransitionSession = null
+      liveTransitionJob = null
+    }
+  }
+
+  fun startEnterRecommendedLive(room: LiveSearchRoom, cardBounds: Rect) {
+    val parentRoom = activeLiveRoom ?: return
+    if (
+      room.roomId == parentRoom.roomId ||
+        liveRoomParentStack.any { it.room.roomId == room.roomId } ||
+        liveTransitionJob != null ||
+        liveTransitionSession != null ||
+        cardBounds.width <= 0f ||
+        cardBounds.height <= 0f
+    ) {
+      return
+    }
+    val parentEntryId = activeLiveEntryId
+    val playerTarget = livePlayerBounds.takeIf { it.hasUsableSize() }
+    val item = liveTransitionItem(room)
+    val session = playerTarget?.let { target ->
+      CardTransitionSession(
+          token = ++transitionToken,
+          kind = TransitionKind.ENTER_RECOMMENDATION,
+          item = item,
+          startBounds = cardBounds,
+          endBounds = target,
+          initialProgress = 0f,
+        )
+        .also {
+          it.transitionBitmap = LoadedFeedImageRegistry.bitmap(item.coverUrl)
+          it.phase = SessionPhase.FLYING
+          liveTransitionSession = it
         }
-        session.endBounds = target
-        setLiveSourceCoverHidden(room, true)
-        session.phase = SessionPhase.FLYING
+    }
+    liveRecommendationCardBounds[liveRecommendationBoundsKey(parentRoom.roomId, room.roomId)] =
+      cardBounds
+    liveRoomParentStack =
+      (liveRoomParentStack +
+          LiveRoomParentFrame(
+            entryId = parentEntryId,
+            room = parentRoom,
+            childRoomId = room.roomId,
+            childCoverBounds = cardBounds,
+          ))
+        .takeLast(MAX_LIVE_ROOM_STACK_DEPTH)
+    hiddenLiveRecommendationCoverItemId = room.stableId
+    playerViewModel.exoPlayer?.pause()
+    liveVideoSurfaceVisible = false
+    val previous = liveTransitionJob
+    liveTransitionJob = scope.launch {
+      previous?.cancelAndJoin()
+      livePageAlpha.animateTo(
+        0f,
+        tween(if (settings.reduceMotion) 70 else 150, easing = FastOutSlowInEasing),
+      )
+      activeLiveEntryId = ++nextLiveEntryId
+      activeLiveRoom = room
+      livePlayerBounds = Rect.Zero
+      withFrameNanos {}
+      repeat(10) {
+        if (livePlayerBounds.hasUsableSize()) return@repeat
         withFrameNanos {}
-        kotlinx.coroutines.coroutineScope {
+      }
+      session?.endBounds = livePlayerBounds.takeIf { it.hasUsableSize() } ?: session.endBounds
+      kotlinx.coroutines.coroutineScope {
+        if (session != null) {
           launch {
             session.progress.animateTo(
               1f,
-              tween(if (settings.reduceMotion) 140 else 400, easing = FastOutSlowInEasing),
-            )
-          }
-          launch {
-            delay(if (settings.reduceMotion) 10 else 45)
-            livePageAlpha.animateTo(
-              1f,
-              tween(if (settings.reduceMotion) 100 else 300, easing = FastOutSlowInEasing),
+              tween(if (settings.reduceMotion) 140 else 380, easing = FastOutSlowInEasing),
             )
           }
         }
-        session.phase = SessionPhase.REVEALING
-        liveVideoSurfaceVisible = true
-        session.coverAlpha.animateTo(
-          0f,
-          tween(if (settings.reduceMotion) 90 else 180, easing = FastOutSlowInEasing),
-        )
-        session.phase = SessionPhase.COMPLETED
-        setLiveSourceCoverHidden(room, false)
-        if (liveTransitionSession === session) liveTransitionSession = null
-        liveTransitionJob = null
+        launch {
+          livePageAlpha.animateTo(
+            1f,
+            tween(if (settings.reduceMotion) 90 else 260, easing = FastOutSlowInEasing),
+          )
+        }
       }
+      liveVideoSurfaceVisible = true
+      session?.apply {
+        phase = SessionPhase.REVEALING
+        coverAlpha.animateTo(
+          0f,
+          tween(if (settings.reduceMotion) 80 else 170, easing = FastOutSlowInEasing),
+        )
+        phase = SessionPhase.COMPLETED
+      }
+      if (liveTransitionSession === session) liveTransitionSession = null
+      hiddenLiveRecommendationCoverItemId = null
+      liveTransitionJob = null
+    }
+  }
+
+  fun startBackToPreviousLive() {
+    val parentFrame = liveRoomParentStack.lastOrNull() ?: return
+    val departing = activeLiveRoom ?: return
+    if (liveTransitionJob != null || liveTransitionSession != null) return
+    val savedPlayerBounds = livePlayerBounds.takeIf { it.hasUsableSize() }
+    val item = liveTransitionItem(departing)
+    playerViewModel.exoPlayer?.pause()
+    val prelude = savedPlayerBounds?.let { bounds ->
+      VideoExitPrelude(item = item, playerBounds = bounds).also {
+        it.transitionBitmap = LoadedFeedImageRegistry.bitmap(item.coverUrl)
+        liveExitPrelude = it
+      }
+    }
+    liveVideoSurfaceVisible = false
+    val key = liveRecommendationBoundsKey(parentFrame.room.roomId, parentFrame.childRoomId)
+    liveRecommendationCardBounds.remove(key)
+    hiddenLiveRecommendationCoverItemId = departing.stableId
+    val previous = liveTransitionJob
+    liveTransitionJob = scope.launch {
+      previous?.cancelAndJoin()
+      prelude
+        ?.coverAlpha
+        ?.animateTo(
+          1f,
+          tween(if (settings.reduceMotion) 70 else 140, easing = FastOutSlowInEasing),
+        )
+      livePageAlpha.animateTo(
+        0f,
+        tween(if (settings.reduceMotion) 90 else 190, easing = FastOutSlowInEasing),
+      )
+      activeLiveEntryId = parentFrame.entryId
+      activeLiveRoom = parentFrame.room
+      liveRoomParentStack = liveRoomParentStack.dropLast(1)
+      livePlayerBounds = Rect.Zero
+      withFrameNanos {}
+      repeat(10) {
+        if (liveRecommendationCardBounds[key]?.hasUsableSize() == true) return@repeat
+        withFrameNanos {}
+      }
+      livePageAlpha.animateTo(
+        1f,
+        tween(if (settings.reduceMotion) 90 else 200, easing = FastOutSlowInEasing),
+      )
+      val destination =
+        liveRecommendationCardBounds[key]?.takeIf { it.hasUsableSize() }
+          ?: parentFrame.childCoverBounds.takeIf { it.hasUsableSize() }
+      val session =
+        if (savedPlayerBounds != null && destination != null) {
+          CardTransitionSession(
+              token = ++transitionToken,
+              kind = TransitionKind.EXIT_RECOMMENDATION,
+              item = item,
+              startBounds = savedPlayerBounds,
+              endBounds = destination,
+              initialProgress = 0f,
+            )
+            .also {
+              it.transitionBitmap = prelude?.transitionBitmap
+              it.phase = SessionPhase.FLYING
+              liveTransitionSession = it
+            }
+        } else null
+      liveVideoSurfaceVisible = true
+      liveExitPrelude = null
+      session
+        ?.progress
+        ?.animateTo(
+          1f,
+          tween(if (settings.reduceMotion) 140 else 340, easing = FastOutSlowInEasing),
+        )
+      session?.phase = SessionPhase.COMPLETED
+      if (liveTransitionSession === session) liveTransitionSession = null
+      hiddenLiveRecommendationCoverItemId = null
+      liveTransitionJob = null
+    }
   }
 
   fun startExitLive(closeSearchAfter: Boolean = false) {
     val room = activeLiveRoom ?: return
+    // Match point-on-demand exits: stop live audio on the click path before the cover replaces the
+    // player, while retaining the media item until the shared return has completed.
+    playerViewModel.exoPlayer?.pause()
     val item = liveTransitionItem(room)
     val activeFlight = liveTransitionSession
     val startBounds =
@@ -5743,84 +5697,38 @@ fun AppRoot(
         playerBounds = livePlayerBounds,
       )
     val previous = liveTransitionJob
-    liveTransitionJob =
-      scope.launch {
-        previous?.cancelAndJoin()
-        activeFlight?.preparation?.cancel()
-        val prelude =
-          startBounds?.let { bounds ->
-            VideoExitPrelude(item = item, playerBounds = bounds).also {
-              it.transitionBitmap =
-                activeFlight?.transitionBitmap ?: LoadedFeedImageRegistry.bitmap(item.coverUrl)
-              liveExitPrelude = it
-            }
-          }
-        if (prelude != null) {
-          prelude.coverAlpha.animateTo(
-            1f,
-            tween(if (settings.reduceMotion) 80 else 180, easing = FastOutSlowInEasing),
-          )
-          liveVideoSurfaceVisible = false
-          withFrameNanos {}
+    liveTransitionJob = scope.launch {
+      previous?.cancelAndJoin()
+      activeFlight?.preparation?.cancel()
+      val prelude = startBounds?.let { bounds ->
+        VideoExitPrelude(item = item, playerBounds = bounds).also {
+          it.transitionBitmap =
+            activeFlight?.transitionBitmap ?: LoadedFeedImageRegistry.bitmap(item.coverUrl)
+          liveExitPrelude = it
         }
-        if (startBounds == null || destination == null) {
-          livePageAlpha.animateTo(
-            0f,
-            tween(if (settings.reduceMotion) 90 else 180, easing = FastOutSlowInEasing),
-          )
-          activeLiveRoom = null
-          liveTransitionSession = null
-          liveExitPrelude = null
-          setLiveSourceCoverHidden(room, false)
-          liveVideoSurfaceVisible = true
-          livePageAlpha.snapTo(1f)
-          if (activeLiveOrigin == PageOrigin.My) myViewModel.refresh()
-          if (closeSearchAfter) {
-            if (activeLiveOrigin == PageOrigin.Search) closeSearchResultsAnimated()
-            else animateToRootTab(RootTab.HOME)
-          }
-          liveTransitionJob = null
-          return@launch
-        }
-        val session =
-          CardTransitionSession(
-            token = ++transitionToken,
-            kind = TransitionKind.EXIT_ROOT,
-            item = item,
-            startBounds = startBounds,
-            endBounds = destination,
-            initialProgress = 0f,
-            initialPanelAlpha = 1f,
-          )
-        session.transitionBitmap =
-          prelude?.transitionBitmap
-            ?: activeFlight?.transitionBitmap
-            ?: LoadedFeedImageRegistry.bitmap(item.coverUrl)
-        session.phase = SessionPhase.FLYING
-        liveTransitionSession = session
-        setLiveSourceCoverHidden(room, true)
+      }
+      if (prelude != null) {
+        prelude.coverAlpha.animateTo(
+          1f,
+          tween(if (settings.reduceMotion) 70 else 140, easing = FastOutSlowInEasing),
+        )
+        liveVideoSurfaceVisible = false
         withFrameNanos {}
-        liveExitPrelude = null
-        kotlinx.coroutines.coroutineScope {
-          launch {
-            session.progress.animateTo(
-              1f,
-              tween(if (settings.reduceMotion) 130 else 360, easing = FastOutSlowInEasing),
-            )
-          }
-          launch {
-            livePageAlpha.animateTo(
-              0f,
-              tween(if (settings.reduceMotion) 90 else 220, easing = FastOutSlowInEasing),
-            )
-          }
-        }
-        session.phase = SessionPhase.COMPLETED
+        withFrameNanos {}
+      }
+      if (startBounds == null || destination == null) {
+        livePageAlpha.animateTo(
+          0f,
+          tween(if (settings.reduceMotion) 90 else 180, easing = FastOutSlowInEasing),
+        )
         activeLiveRoom = null
+        activeLiveEntryId = 0L
+        liveRoomParentStack = emptyList()
         liveTransitionSession = null
         liveExitPrelude = null
+        hiddenLiveRecommendationCoverItemId = null
         setLiveSourceCoverHidden(room, false)
-        livePlayerBounds = Rect.Zero
+        activeLiveSourceAnchor = null
         liveVideoSurfaceVisible = true
         livePageAlpha.snapTo(1f)
         if (activeLiveOrigin == PageOrigin.My) myViewModel.refresh()
@@ -5829,7 +5737,56 @@ fun AppRoot(
           else animateToRootTab(RootTab.HOME)
         }
         liveTransitionJob = null
+        return@launch
       }
+      val session =
+        CardTransitionSession(
+          token = ++transitionToken,
+          kind = TransitionKind.EXIT_ROOT,
+          item = item,
+          startBounds = startBounds,
+          endBounds = destination,
+          initialProgress = 0f,
+          initialPanelAlpha = 1f,
+        )
+      session.transitionBitmap =
+        prelude?.transitionBitmap
+          ?: activeFlight?.transitionBitmap
+          ?: LoadedFeedImageRegistry.bitmap(item.coverUrl)
+      // Reveal the retained source page under a stationary player-position cover. The source
+      // card's own cover must already be hidden so there is only one copy during the prelude.
+      setLiveSourceCoverHidden(room, true)
+      livePageAlpha.animateTo(
+        0f,
+        tween(if (settings.reduceMotion) 90 else 200, easing = FastOutSlowInEasing),
+      )
+      session.phase = SessionPhase.FLYING
+      liveTransitionSession = session
+      withFrameNanos {}
+      liveExitPrelude = null
+      session.progress.animateTo(
+        1f,
+        tween(if (settings.reduceMotion) 140 else 340, easing = FastOutSlowInEasing),
+      )
+      session.phase = SessionPhase.COMPLETED
+      activeLiveRoom = null
+      activeLiveEntryId = 0L
+      liveRoomParentStack = emptyList()
+      liveTransitionSession = null
+      liveExitPrelude = null
+      hiddenLiveRecommendationCoverItemId = null
+      setLiveSourceCoverHidden(room, false)
+      activeLiveSourceAnchor = null
+      livePlayerBounds = Rect.Zero
+      liveVideoSurfaceVisible = true
+      livePageAlpha.snapTo(1f)
+      if (activeLiveOrigin == PageOrigin.My) myViewModel.refresh()
+      if (closeSearchAfter) {
+        if (activeLiveOrigin == PageOrigin.Search) closeSearchResultsAnimated()
+        else animateToRootTab(RootTab.HOME)
+      }
+      liveTransitionJob = null
+    }
   }
 
   // ── Screen coexistence ───────────────────────────────────────────────
@@ -5852,6 +5809,23 @@ fun AppRoot(
         activeSession != null ||
         articleTransitionSession != null ||
         (transitionPhase !is TransitionPhase.Feed && transitionPhase !is TransitionPhase.Video))
+  val interactionTransitionActive =
+    navigationLocked ||
+      rootPageSwitchRequested ||
+      directHomeInProgress ||
+      searchTransitionDirection != null ||
+      bangumiIndexTransitionDirection != null ||
+      liveTransitionJob != null ||
+      liveTransitionSession != null ||
+      liveExitPrelude != null ||
+      homeLivePreludeActive ||
+      liveFullscreenTransitionActive ||
+      videoFullscreenTransitionActive ||
+      profileVideoTransitionActive ||
+      profileTransitionInputLocked(
+        activeCommentTransitionBlocksInput = commentProfileTransition?.blocksInput == true,
+        activeAvatarTransition = avatarProfileTransition != null,
+      )
   val preparingRootEnter =
     (transitionPhase as? TransitionPhase.ToVideo)?.let { !it.fromVideo && activeSession == null } ==
       true
@@ -5982,9 +5956,7 @@ fun AppRoot(
               hiddenCoverItemId = hiddenSearchCoverItemId,
               hiddenArticleItemId = hiddenSearchArticleItemId,
               backEnabled =
-                activeLiveRoom == null &&
-                  !appState.isVideoScreen &&
-                  activeArticleFrame == null,
+                activeLiveRoom == null && !appState.isVideoScreen && activeArticleFrame == null,
             )
           }
         } else {
@@ -6018,12 +5990,12 @@ fun AppRoot(
             ) { page ->
               val tab = RootTab.entries[page]
               if (tab == RootTab.HOME) {
-                FeedScreen(
-                  state = feedState,
+                HomeHubScreen(
+                  feedState = feedState,
                   userInfo = userInfo,
-                  onRefresh = onFeedRefresh,
-                  onLoadNextPage = { feedViewModel.loadNextPage() },
-                  onItemClick = { item, bounds, scrollAnchor ->
+                  onRecommendationRefresh = onFeedRefresh,
+                  onRecommendationLoadNextPage = { feedViewModel.loadNextPage() },
+                  onRecommendationItemClick = { item, bounds, scrollAnchor ->
                     if (transitionPhase is TransitionPhase.Feed)
                       startEnterVideo(
                         item,
@@ -6032,8 +6004,20 @@ fun AppRoot(
                         rootFeedScrollAnchor = scrollAnchor,
                       )
                   },
-                  onItemLongClick = { showVideoPreview(it, fromHomeFeed = true) },
-                  onProfileClick = { item, bounds ->
+                  onPopularItemClick = { item, bounds, scrollAnchor ->
+                    if (transitionPhase is TransitionPhase.Feed) {
+                      val sourceBounds = bounds.takeIf { it.hasUsableSize() }
+                      if (sourceBounds != null) popularCardBounds[item.id] = sourceBounds
+                      startEnterVideo(
+                        item,
+                        sourceBounds,
+                        VideoOrigin.POPULAR,
+                        rootFeedScrollAnchor = scrollAnchor,
+                      )
+                    }
+                  },
+                  onRecommendationItemLongClick = { showVideoPreview(it, fromHomeFeed = true) },
+                  onRecommendationProfileClick = { item, bounds ->
                     openAvatarProfile(
                       item.uploaderMid,
                       bounds,
@@ -6041,7 +6025,7 @@ fun AppRoot(
                       item.uploader,
                     )
                   },
-                  onLoginClick = { bounds ->
+                  onRecommendationLoginClick = { bounds ->
                     if (userInfo.isLogin) openAvatarProfile(userInfo.mid, bounds)
                     else authViewModel.startLogin()
                   },
@@ -6054,26 +6038,58 @@ fun AppRoot(
                   searchQuery = searchState.query,
                   onSearchQueryChange = searchViewModel::setQuery,
                   onSearchSubmit = ::openSearchResultsAnimated,
-                  onConsumeRefreshMessage = { feedViewModel.consumeRefreshMessage() },
+                  onConsumeRecommendationRefreshMessage = {
+                    feedViewModel.consumeRefreshMessage()
+                  },
                   onSearchBoundsChanged = { searchBounds = it },
-                  coverPrefetchCount = settings.coverPrefetchScreens * 9,
+                  coverPrefetchCount = 18,
                   backgroundWorkAllowed =
-                    !rootPageSwitchInProgress && transitionPhase is TransitionPhase.Feed,
-                  gridState = feedGridState,
-                  hiddenCoverItemId = hiddenFeedCoverItemId,
-                  dismissedItemIds = dismissedFeedItemIds,
-                  onRestoreDismissedItem = { item ->
+                    !rootPageSwitchInProgress &&
+                      transitionPhase is TransitionPhase.Feed &&
+                      activeLiveRoom == null,
+                  recommendationGridState = feedGridState,
+                  hiddenRecommendationCoverItemId = hiddenFeedCoverItemId,
+                  hiddenPopularCoverItemId = hiddenPopularCoverItemId,
+                  dismissedRecommendationItemIds = dismissedFeedItemIds,
+                  onRestoreDismissedRecommendationItem = { item ->
                     dismissedFeedItemIds = dismissedFeedItemIds - item.id
                   },
-                  onItemBoundsChanged = { feedItem, bounds ->
+                  onRecommendationItemBoundsChanged = { feedItem, bounds ->
                     feedCardBounds[feedItem.id] = bounds
                   },
+                  onLiveRoomClick = { room, sourceAnchor, bounds ->
+                    val sourceBounds = bounds.takeIf { it.hasUsableSize() }
+                    if (sourceBounds != null) {
+                      homeLiveCardBounds[sourceAnchor.stableId] = sourceBounds
+                    }
+                    startEnterLive(
+                      room,
+                      sourceBounds,
+                      PageOrigin.Home,
+                      sourceAnchor = sourceAnchor,
+                    )
+                  },
+                  onLiveRoomBoundsChanged = { sourceAnchor, bounds ->
+                    if (bounds.hasUsableSize()) {
+                      homeLiveCardBounds[sourceAnchor.stableId] = bounds
+                    }
+                  },
+                  onLiveTransitionActiveChanged = { homeLivePreludeActive = it },
+                  hiddenLiveCoverItemId = hiddenHomeLiveCoverItemId,
+                  liveDetailActive =
+                    activeLiveRoom != null && activeLiveOrigin == PageOrigin.Home,
                 )
               } else if (tab == RootTab.MY) {
                 MyScreen(
                   user = userInfo,
                   state = myState,
-                  onSection = myViewModel::select,
+                  watchLaterState = watchLaterState,
+                  onSection = { section ->
+                    myViewModel.select(section)
+                    if (section == dev.openbili.webdemo.my.MySection.WATCH_LATER) {
+                      watchLaterViewModel.ensureLoaded()
+                    }
+                  },
                   onFolder = myViewModel::selectFolder,
                   onVideo = { item, bounds ->
                     val sourceBounds = bounds.takeUnless { it == Rect.Zero }
@@ -6124,6 +6140,7 @@ fun AppRoot(
                   onFollowingOrder = myViewModel::selectFollowingOrder,
                   onLoadMoreFollowings = myViewModel::loadMoreFollowings,
                   onRefresh = myViewModel::refresh,
+                  onWatchLaterRefresh = watchLaterViewModel::refresh,
                   onLogin = { authViewModel.startLogin() },
                   onAccountClick = { bounds -> openAvatarProfile(userInfo.mid, bounds) },
                   onMessage = myViewModel::selectMessage,
@@ -6143,6 +6160,7 @@ fun AppRoot(
                   onInteractionProfile = ::openCommentProfile,
                   onLoadMoreInteractions = myViewModel::loadMoreInteractions,
                   onErrorConsumed = myViewModel::consumeError,
+                  onWatchLaterErrorConsumed = watchLaterViewModel::consumeError,
                   hiddenInteractionCommentAvatarRpid =
                     commentProfileTransition
                       ?.takeIf { it.sourceAvatarBounds != null }
@@ -6290,33 +6308,34 @@ fun AppRoot(
               }
             }
           }
-          if (!showBangumiIndex) BottomCapsule(
-            selected = rootTab,
-            backdropLayer = rootBackdropLayer,
-            onSelected = ::animateToRootTab,
-            selectionPosition = {
-              (rootPagerState.currentPage + rootPagerState.currentPageOffsetFraction).coerceIn(
-                0f,
-                RootTab.entries.lastIndex.toFloat(),
-              )
-            },
-            onSelectionDrag = { position ->
-              rootPageSwitchRequested = true
-              val anchor = rootPagerAnchorForCapsulePosition(position)
-              rootPagerState.requestScrollToPage(
-                page = anchor.page,
-                pageOffsetFraction = anchor.offsetFraction,
-              )
-            },
-            onInteractionStart = {},
-            onInteractionEnd = {},
-            dragEnabled =
-              !navigationLocked &&
-                searchTransitionDirection == null &&
-                bangumiIndexTransitionDirection == null &&
-                !showBangumiIndex,
-            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp),
-          )
+          if (!showBangumiIndex)
+            BottomCapsule(
+              selected = rootTab,
+              backdropLayer = rootBackdropLayer,
+              onSelected = ::animateToRootTab,
+              selectionPosition = {
+                (rootPagerState.currentPage + rootPagerState.currentPageOffsetFraction).coerceIn(
+                  0f,
+                  RootTab.entries.lastIndex.toFloat(),
+                )
+              },
+              onSelectionDrag = { position ->
+                rootPageSwitchRequested = true
+                val anchor = rootPagerAnchorForCapsulePosition(position)
+                rootPagerState.requestScrollToPage(
+                  page = anchor.page,
+                  pageOffsetFraction = anchor.offsetFraction,
+                )
+              },
+              onInteractionStart = {},
+              onInteractionEnd = {},
+              dragEnabled =
+                !navigationLocked &&
+                  searchTransitionDirection == null &&
+                  bangumiIndexTransitionDirection == null &&
+                  !showBangumiIndex,
+              modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp),
+            )
         }
       }
     }
@@ -6336,7 +6355,11 @@ fun AppRoot(
           shape = VideoShapeTokens.Card,
           color = MaterialTheme.colorScheme.background,
           tonalElevation = 2.dp,
-          border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+          border =
+            androidx.compose.foundation.BorderStroke(
+              1.dp,
+              MaterialTheme.colorScheme.outlineVariant,
+            ),
         ) {
           BangumiIndexScreen(
             state = bangumiIndexState,
@@ -6374,35 +6397,34 @@ fun AppRoot(
     // Layer 1: Video
     if (showVideo) {
       val item = appState.selectedVideo!!
-      val bangumiPageUi =
-        activeBangumiPage?.let { page ->
-          BangumiPageUi(
-            sourceCard = page.sourceCard,
-            season = page.season,
-            loading = page.loading,
-            error = page.error,
-            currentEpisodeId = page.currentEpisodeId,
-            posterVisible =
-              transitionSession?.let { session ->
-                val enteringPosterFlight =
-                  session.fitCover &&
-                    session.kind in
-                      setOf(
-                        TransitionKind.ENTER_ROOT,
-                        TransitionKind.ENTER_RECOMMENDATION,
-                        TransitionKind.ENTER_PROFILE,
-                      )
-                !enteringPosterFlight ||
-                  session.phase in
+      val bangumiPageUi = activeBangumiPage?.let { page ->
+        BangumiPageUi(
+          sourceCard = page.sourceCard,
+          season = page.season,
+          loading = page.loading,
+          error = page.error,
+          currentEpisodeId = page.currentEpisodeId,
+          posterVisible =
+            transitionSession?.let { session ->
+              val enteringPosterFlight =
+                session.fitCover &&
+                  session.kind in
                     setOf(
-                      SessionPhase.WAITING_FIRST_FRAME,
-                      SessionPhase.REVEALING,
-                      SessionPhase.COMPLETED,
+                      TransitionKind.ENTER_ROOT,
+                      TransitionKind.ENTER_RECOMMENDATION,
+                      TransitionKind.ENTER_PROFILE,
                     )
-              } ?: true,
-            followBusy = page.followBusy,
-          )
-        }
+              !enteringPosterFlight ||
+                session.phase in
+                  setOf(
+                    SessionPhase.WAITING_FIRST_FRAME,
+                    SessionPhase.REVEALING,
+                    SessionPhase.COMPLETED,
+                  )
+            } ?: true,
+          followBusy = page.followBusy,
+        )
+      }
       val showSearchBangumiTransitionTarget =
         (deferSearchBangumiPageComposition || deferBangumiIndexPageComposition) &&
           activeBangumiPage?.sourceOrigin in setOf(PageOrigin.Search, PageOrigin.BangumiIndex) &&
@@ -6416,7 +6438,8 @@ fun AppRoot(
           val pageAlpha =
             when {
               preparingRootEnter ||
-                shouldHideVideoPageBehindExitCover(activeSession?.kind, activeSession?.phase) -> 0f
+                shouldHideVideoPageBehindExitCover(activeSession?.kind, activeSession?.phase) ->
+                0f
               rootEnterSession != null -> rootEnterSession.backgroundAlpha.value.coerceIn(0f, 1f)
               profileEnterSession != null ->
                 profileEnterSession.backgroundAlpha.value.coerceIn(0f, 1f)
@@ -6438,714 +6461,335 @@ fun AppRoot(
             LocalCoverImageLoadingEnabled provides (bangumiHomeTransitionSession == null)
           ) {
             VideoScreen(
-          item = item,
-          description = videoDescription,
-          videoInfo = videoInfo,
-          currentCid = historyCid,
-          videoEngagement = videoEngagement,
-          favoriteFolders = favoriteFolders,
-          favoriteFoldersLoading = favoriteFoldersLoading,
-          showCoverUntilFirstFrame = showEmbeddedCover && renderedVideoId != item.id,
-          onlineViewerText = onlineViewerText,
-          playerState = playerState,
-          danmaku = danmaku,
-          danmakuPaused = transitionVisualsActive,
-          commentItems = commentItems,
-          commentTotalCount = commentTotalCount,
-          commentHasMore = commentHasMore,
-          commentsLoading = commentsLoading,
-          commentSort = commentSort,
-          commentsRefreshing = commentsRefreshing,
-          pageContentLoading = videoPageDataReadyId != item.id,
-          currentAccountMid = authUserInfo.mid,
-          hiddenCommentAvatarRpid =
-            commentProfileTransition?.takeIf { it.sourceAvatarBounds != null }?.sourceComment?.rpid,
-          commentNavigationTarget = pendingVideoCommentTarget,
-          replyRoot = replyRoot,
-          replyItems = replyItems,
-          replyHasMore = replyHasMore,
-          repliesLoading = repliesLoading,
-          emotes = emotes,
-          emotePackages = emotePackages,
-          mentionSuggestions = mentionSuggestions,
-          mentionSuggestionsLoading = mentionSuggestionsLoading,
-          recommendations = videoRecommendations,
-          hiddenRecommendationCoverItemId = hiddenRecommendationCoverItemId,
-          hiddenPlaybackEndRecommendationCoverItemId =
-            hiddenPlaybackEndRecommendationCoverItemId,
-          hiddenLinkedArticleItemId = hiddenVideoCommentArticleItemId,
-          currentPositionMs = playerUiPositionProvider,
-          durationMs = historyDuration * 1000,
-          playerPositionProvider = playerPositionProvider,
-          isPlaying =
-            if (scrubPreviewMs != null || pendingSeekTargetMs != null) seekWasPlaying
-            else isPlaying,
-          isBuffering = isBuffering,
-          playbackEnded = playbackEnded,
-          playbackSpeed = playbackSpeed,
-          showDanmaku = showDanmaku,
-          isFullscreen = appState.video.isFullscreen,
-          isPlaybackPageForeground =
-            isVideoPageForeground(
-              videoScreenVisible = appState.isVideoScreen,
-              profileVisible = profileMid != null,
-              // A Bangumi detail page is still a video page, but it must not claim foreground
-              // while a profile opened from its comments is visible above it.
-              profileSuppressed = profileLayerSuppressed,
-            ),
-          pageExitAlpha = { videoExitPrelude?.pageAlpha?.value ?: 1f },
-          playerControlsVisible = playerControlsVisible,
-          panelSlideProgress = {
-            transitionSession?.let { session ->
-              when (session.kind) {
-                TransitionKind.EXIT_ROOT,
-                TransitionKind.EXIT_RECOMMENDATION,
-                TransitionKind.EXIT_PROFILE -> 1f - session.panelAlpha.value
-                else -> session.panelAlpha.value
-              }
-            } ?: 1f
-          },
-          settings = settings,
-          onSettingsChange = settingsViewModel::update,
-          onFullscreenChanged = mainViewModel::onFullscreenChanged,
-          onFullscreenTransitionChanged = { active ->
-            playerViewHolder[0]?.view?.setDanmakuTransitionSuppressed(active)
-          },
-          onBack = {
-            if (directHomeInProgress) Unit
-            else if (appState.video.isFullscreen) mainViewModel.onFullscreenChanged(false)
-            else if (
-              transitionSession?.kind == TransitionKind.ENTER_ROOT ||
-                transitionSession?.kind == TransitionKind.ENTER_RECOMMENDATION ||
-                transitionSession?.kind == TransitionKind.ENTER_PROFILE
-            )
-              reverseActiveEnter()
-            else if (transitionSession == null && transitionPhase is TransitionPhase.ToVideo)
-              if (videoStack.lastOrNull()?.parentPage is PageOrigin.Profile)
-                cancelPreparingProfileVideo()
-              else cancelPreparingRootEnter()
-            else if (transitionPhase is TransitionPhase.Video)
-              if (activeBangumiPage != null)
-                startExitBangumi()
-              else if (videoStack.lastOrNull()?.parentPage is PageOrigin.Profile)
-                startExitVideoToProfile()
-              else if (videoStack.size > 1) startBackToPreviousVideo() else startExitVideo()
-          },
-          onHome = {
-            // returnDirectlyHome commits synchronously; keep the PGC page identity alive for it.
-            returnDirectlyHome()
-            activeBangumiPage = null
-            deferSearchBangumiPageComposition = false
-            deferBangumiIndexPageComposition = false
-            deferBangumiHomePageComposition = false
-            bangumiPosterBounds = Rect.Zero
-          },
-          onTogglePlayPause = {
-            val p = playerViewModel.exoPlayer
-            if (p != null) {
-              if (p.isPlaying) p.pause() else p.play()
-            }
-          },
-          onTemporarySpeedChanged = ::setTemporarySpeedBoost,
-          onPlaybackSpeedChanged = ::setPlaybackSpeed,
-          onRetryPlayback = {
-            playerSession.clearPlaybackEnded()
-            playerViewModel.retry()
-          },
-          onRetryNextQuality = {
-            playerSession.clearPlaybackEnded()
-            playerViewModel.retryWithNextQuality()
-          },
-          onReplay = {
-            val replayItem = appState.selectedVideo
-            playerSession.clearPlaybackEnded()
-            if (replayItem != null) {
-              val retained = videoEntryCache[replayItem.id]
-              retained?.let {
-                cacheEntry(it.copy(savedPositionMs = 0L, playbackEnded = false))
-              }
-              playerSession.currentPositionMs = 0L
-              if (!playerViewModel.replayIfLoaded(replayItem.id)) {
-                // A retained completed parent deliberately does not replace the child's media
-                // while its end overlay is restored. Reload that parent only when the user asks
-                // to replay, preserving its selected part and quality while forcing position 0.
-                playerActivationId = replayItem.id
-                rootPlayerOwnership =
-                  RootPlayerOwnership(RootPlayerSurfaceRole.DETAIL_PENDING, replayItem.id)
-                showEmbeddedCover = true
-                val replayPage = videoInfo?.pages?.firstOrNull { it.cid == historyCid }
-                playerViewModel.loadVideo(
-                  item = replayItem,
-                  startPositionMs = 0L,
-                  preferredStreamIndex = retained?.qualityIndex,
-                  preferredResolutionMode = settings.preferredResolutionMode,
-                  page = replayPage,
-                  restoreSavedProgress = false,
+              item = item,
+              description = videoDescription,
+              videoInfo = videoInfo,
+              currentCid = historyCid,
+              videoEngagement = videoEngagement,
+              favoriteFolders = favoriteFolders,
+              favoriteFoldersLoading = favoriteFoldersLoading,
+              showCoverUntilFirstFrame = showEmbeddedCover && renderedVideoId != item.id,
+              onlineViewerText = onlineViewerText,
+              playerState = playerState,
+              danmaku = danmaku,
+              danmakuPaused = transitionVisualsActive,
+              commentItems = commentItems,
+              commentTotalCount = commentTotalCount,
+              commentHasMore = commentHasMore,
+              commentsLoading = commentsLoading,
+              commentSort = commentSort,
+              commentsRefreshing = commentsRefreshing,
+              pageContentLoading = videoPageDataReadyId != item.id,
+              currentAccountMid = authUserInfo.mid,
+              hiddenCommentAvatarRpid =
+                commentProfileTransition
+                  ?.takeIf { it.sourceAvatarBounds != null }
+                  ?.sourceComment
+                  ?.rpid,
+              commentNavigationTarget = pendingVideoCommentTarget,
+              replyRoot = replyRoot,
+              replyItems = replyItems,
+              replyHasMore = replyHasMore,
+              repliesLoading = repliesLoading,
+              emotes = emotes,
+              emotePackages = emotePackages,
+              mentionSuggestions = mentionSuggestions,
+              mentionSuggestionsLoading = mentionSuggestionsLoading,
+              recommendations = videoRecommendations,
+              hiddenRecommendationCoverItemId = hiddenRecommendationCoverItemId,
+              hiddenPlaybackEndRecommendationCoverItemId =
+                hiddenPlaybackEndRecommendationCoverItemId,
+              hiddenLinkedArticleItemId = hiddenVideoCommentArticleItemId,
+              currentPositionMs = playerUiPositionProvider,
+              durationMs = historyDuration * 1000,
+              playerPositionProvider = playerPositionProvider,
+              isPlaying =
+                if (scrubPreviewMs != null || pendingSeekTargetMs != null) seekWasPlaying
+                else isPlaying,
+              isBuffering = isBuffering,
+              playbackEnded = playbackEnded,
+              playbackSpeed = playbackSpeed,
+              showDanmaku = showDanmaku,
+              isFullscreen = appState.video.isFullscreen,
+              isPlaybackPageForeground =
+                isVideoPageForeground(
+                  videoScreenVisible = appState.isVideoScreen,
+                  profileVisible = profileMid != null,
+                  // A Bangumi detail page is still a video page, but it must not claim foreground
+                  // while a profile opened from its comments is visible above it.
+                  profileSuppressed = profileLayerSuppressed,
+                ),
+              pageExitAlpha = { videoExitPrelude?.pageAlpha?.value ?: 1f },
+              playerControlsVisible = playerControlsVisible,
+              panelSlideProgress = {
+                transitionSession?.let { session ->
+                  when (session.kind) {
+                    TransitionKind.EXIT_ROOT,
+                    TransitionKind.EXIT_RECOMMENDATION,
+                    TransitionKind.EXIT_PROFILE -> 1f - session.panelAlpha.value
+                    else -> session.panelAlpha.value
+                  }
+                } ?: 1f
+              },
+              settings = settings,
+              onSettingsChange = settingsViewModel::update,
+              onFullscreenChanged = mainViewModel::onFullscreenChanged,
+              onFullscreenTransitionChanged = { active ->
+                videoFullscreenTransitionActive = active
+                playerViewHolder[0]?.view?.setDanmakuTransitionSuppressed(active)
+              },
+              onBack = {
+                if (directHomeInProgress) Unit
+                else if (appState.video.isFullscreen) mainViewModel.onFullscreenChanged(false)
+                else if (
+                  transitionSession?.kind == TransitionKind.ENTER_ROOT ||
+                    transitionSession?.kind == TransitionKind.ENTER_RECOMMENDATION ||
+                    transitionSession?.kind == TransitionKind.ENTER_PROFILE
                 )
-              }
-            }
-          },
-          onSeek = ::commitSeek,
-          onSeekPreview = ::previewSeek,
-          onSeekCancel = ::cancelSeekPreview,
-          onToggleDanmaku = { showDanmaku = !showDanmaku },
-          onSendDanmaku = { message, color, mode, fontSize, colorful ->
-            if (historyCid > 0) {
-              val position = playerViewModel.exoPlayer?.currentPosition ?: 0L
-              scope.launch {
-                val result =
-                  withContext(Dispatchers.IO) {
-                    runCatching {
-                      BiliApi.sendDanmakuAuthenticated(
-                        cid = historyCid,
-                        aid = historyAid,
-                        bvid =
-                          item.id.takeIf { it.startsWith("BV") }
-                            ?: item.videoUrl
-                              .substringAfterLast("/")
-                              .substringBefore("?")
-                              .takeIf { it.startsWith("BV") }
-                              .orEmpty(),
-                        message = message,
-                        progressMs = position,
-                        color = color,
-                        mode = mode,
-                        fontSize = fontSize,
-                        colorful = colorful,
-                      )
-                    }
+                  reverseActiveEnter()
+                else if (transitionSession == null && transitionPhase is TransitionPhase.ToVideo)
+                  if (videoStack.lastOrNull()?.parentPage is PageOrigin.Profile)
+                    cancelPreparingProfileVideo()
+                  else cancelPreparingRootEnter()
+                else if (transitionPhase is TransitionPhase.Video)
+                  if (activeBangumiPage != null) startExitBangumi()
+                  else if (videoStack.lastOrNull()?.parentPage is PageOrigin.Profile)
+                    startExitVideoToProfile()
+                  else if (videoStack.size > 1) startBackToPreviousVideo() else startExitVideo()
+              },
+              onHome = {
+                // returnDirectlyHome commits synchronously; keep the PGC page identity alive for
+                // it.
+                returnDirectlyHome()
+                activeBangumiPage = null
+                deferSearchBangumiPageComposition = false
+                deferBangumiIndexPageComposition = false
+                deferBangumiHomePageComposition = false
+                bangumiPosterBounds = Rect.Zero
+              },
+              onTogglePlayPause = {
+                val p = playerViewModel.exoPlayer
+                if (p != null) {
+                  if (p.isPlaying) p.pause() else p.play()
+                }
+              },
+              onTemporarySpeedChanged = ::setTemporarySpeedBoost,
+              onPlaybackSpeedChanged = ::setPlaybackSpeed,
+              onRetryPlayback = {
+                playerSession.clearPlaybackEnded()
+                playerViewModel.retry()
+              },
+              onRetryNextQuality = {
+                playerSession.clearPlaybackEnded()
+                playerViewModel.retryWithNextQuality()
+              },
+              onReplay = {
+                val replayItem = appState.selectedVideo
+                playerSession.clearPlaybackEnded()
+                if (replayItem != null) {
+                  val retained = videoEntryCache[replayItem.id]
+                  retained?.let {
+                    cacheEntry(it.copy(savedPositionMs = 0L, playbackEnded = false))
                   }
-                if (result.isSuccess) {
-                  danmaku =
-                    danmaku +
-                      DanmakuItem(
-                        timeMs = position,
-                        type = mode,
-                        fontSize = fontSize,
-                        color = color,
-                        content = message,
-                        isLocal = true,
-                        colorful = colorful,
-                      )
-                } else {
-                  Toast.makeText(
-                      context,
-                      result.exceptionOrNull()?.message ?: "弹幕发送失败",
-                      Toast.LENGTH_SHORT,
+                  playerSession.currentPositionMs = 0L
+                  if (!playerViewModel.replayIfLoaded(replayItem.id)) {
+                    // A retained completed parent deliberately does not replace the child's media
+                    // while its end overlay is restored. Reload that parent only when the user
+                    // asks
+                    // to replay, preserving its selected part and quality while forcing position
+                    // 0.
+                    playerActivationId = replayItem.id
+                    rootPlayerOwnership =
+                      RootPlayerOwnership(RootPlayerSurfaceRole.DETAIL_PENDING, replayItem.id)
+                    showEmbeddedCover = true
+                    val replayPage = videoInfo?.pages?.firstOrNull { it.cid == historyCid }
+                    playerViewModel.loadVideo(
+                      item = replayItem,
+                      startPositionMs = 0L,
+                      preferredStreamIndex = retained?.qualityIndex,
+                      preferredResolutionMode = currentPreferredResolutionMode(),
+                      page = replayPage,
+                      restoreSavedProgress = false,
                     )
-                    .show()
+                  }
                 }
-              }
-            }
-          },
-          onRecommendationClick = { rec, bounds, returnBounds, fromPlaybackEnd ->
-            startRecommendedVideo(item, rec, bounds, returnBounds, fromPlaybackEnd)
-          },
-          onVideoPageSelected = ::selectVideoPage,
-          onCollectionEpisodeSelected = { episode, _ -> selectCollectionEpisode(episode) },
-          onLoadMoreComments = {
-            if (!commentsLoading && commentOid != 0L && commentHasMore) {
-              val expectedUrl = item.videoUrl
-              val expectedOid = commentOid
-              val expectedSort = commentSort
-              val next =
-                if (expectedSort == CommentSort.TIME) {
-                  commentTimeNextPage(commentPage)
-                } else {
-                  commentPage + 1
-                }
-              commentsLoading = true
-              scope.launch {
-                try {
-                  val resp =
-                    withContext(Dispatchers.IO) {
-                      BiliApi.getComments(expectedOid, next, expectedSort.apiValue)
-                    }
-                  if (
-                    mainViewModel.state.value.selectedVideo?.videoUrl != expectedUrl ||
-                      commentOid != expectedOid ||
-                      commentSort != expectedSort
-                  )
-                    return@launch
-                  val combined = (commentItems + resp.items).distinctBy { it.rpid }
-                  commentItems =
-                    if (expectedSort == CommentSort.TIME) {
-                      orderCommentsByTime(combined)
-                    } else combined
-                  commentHasMore =
-                    if (expectedSort == CommentSort.TIME) {
-                      commentTimeHasMore(next, resp.totalCount)
-                    } else {
-                      resp.hasMore
-                    }
-                  commentPage = next
-                } finally {
-                  if (mainViewModel.state.value.selectedVideo?.videoUrl == expectedUrl)
-                    commentsLoading = false
-                }
-              }
-            }
-          },
-          onRefreshComments = {
-            if (!commentsRefreshing && !commentsLoading && commentOid > 0L) {
-              val expectedItemId = item.id
-              val expectedOid = commentOid
-              val expectedSort = commentSort
-              val targetPage =
-                if (expectedSort == CommentSort.TIME) {
-                  commentTimeStartPage()
-                } else {
-                  1
-                }
-              commentsRefreshing = true
-              scope.launch {
-                try {
-                  val response =
-                    withContext(Dispatchers.IO) {
-                      BiliApi.getComments(expectedOid, targetPage, expectedSort.apiValue)
-                    }
-                  if (
-                    appState.selectedVideo?.id == expectedItemId &&
-                      commentOid == expectedOid &&
-                      commentSort == expectedSort
-                  ) {
-                    commentItems =
-                      if (expectedSort == CommentSort.TIME) {
-                        orderCommentsByTime(response.items)
-                      } else response.items
-                    commentTotalCount = response.totalCount
-                    commentHasMore =
-                      if (expectedSort == CommentSort.TIME) {
-                        commentTimeHasMore(targetPage, response.totalCount)
-                      } else {
-                        response.hasMore
-                      }
-                    commentPage = targetPage
-                  }
-                } finally {
-                  if (appState.selectedVideo?.id == expectedItemId) commentsRefreshing = false
-                }
-              }
-            }
-          },
-          onPostComment = { message, imageUri ->
-            if (!commentsLoading && commentOid != 0L) {
-              val expectedOid = commentOid
-              commentsLoading = true
-              scope.launch {
-                try {
-                  val added =
-                    withContext(Dispatchers.IO) {
-                      val uploadedImage = imageUri?.let { uploadCommentImage(context, it) }
-                      BiliApi.addComment(expectedOid, message, image = uploadedImage)
-                    }
-                  if (commentOid == expectedOid) {
-                    val updated = (commentItems + added).distinctBy { it.rpid }
-                    commentItems =
-                      if (commentSort == CommentSort.TIME) {
-                        orderCommentsByTime(updated)
-                      } else listOf(added) + commentItems
-                  }
-                  if (commentOid == expectedOid) commentTotalCount += 1
-                } catch (error: Exception) {
-                  if (error is kotlinx.coroutines.CancellationException) throw error
-                  Toast.makeText(context, error.message ?: "评论发送失败", Toast.LENGTH_SHORT).show()
-                } finally {
-                  if (commentOid == expectedOid) commentsLoading = false
-                }
-              }
-            }
-          },
-          onRecommendationLongClick = { showVideoPreview(it) },
-          onArticleClick = { article, bounds ->
-            startEnterArticle(article, bounds.takeIf(Rect::hasUsableSize), ArticleOrigin.VIDEO)
-          },
-          onPostReply = { root, parent, message, imageUri ->
-            if (!repliesLoading && commentOid != 0L) {
-              val expectedOid = commentOid
-              repliesLoading = true
-              scope.launch {
-                try {
-                  val added =
-                    withContext(Dispatchers.IO) {
-                      val uploadedImage = imageUri?.let { uploadCommentImage(context, it) }
-                      BiliApi.addReply(
-                        expectedOid,
-                        root.rpid,
-                        parent.rpid,
-                        message,
-                        image = uploadedImage,
-                      )
-                    }
-                  if (commentOid == expectedOid) {
-                    if (replyRoot?.rpid == root.rpid)
-                      replyItems = (replyItems + added).distinctBy { it.rpid }
-                    commentItems = commentItems.map {
-                      if (it.rpid == root.rpid) it.copy(replyCount = it.replyCount + 1) else it
-                    }
-                  }
-                } catch (error: Exception) {
-                  if (error is kotlinx.coroutines.CancellationException) throw error
-                  Toast.makeText(context, error.message ?: "回复发送失败", Toast.LENGTH_SHORT).show()
-                } finally {
-                  if (commentOid == expectedOid) repliesLoading = false
-                }
-              }
-            }
-          },
-          onLikeComment = { comment ->
-            val expectedOid = commentOid
-            scope.launch {
-              val target = !comment.liked
-              val success =
-                withContext(Dispatchers.IO) {
-                  runCatching { BiliApi.setCommentLike(expectedOid, comment.rpid, target) }
-                    .isSuccess
-                }
-              if (success && commentOid == expectedOid)
-                commentItems = commentItems.map {
-                  if (it.rpid == comment.rpid)
-                    it.copy(
-                      liked = target,
-                      likeCount = (it.likeCount + if (target) 1 else -1).coerceAtLeast(0),
-                    )
-                  else it
-                }
-              if (success && commentOid == expectedOid)
-                replyItems = replyItems.map {
-                  if (it.rpid == comment.rpid)
-                    it.copy(
-                      liked = target,
-                      likeCount = (it.likeCount + if (target) 1 else -1).coerceAtLeast(0),
-                    )
-                  else it
-                }
-            }
-          },
-          onDeleteComment = { comment ->
-            val expectedOid = commentOid
-            if (expectedOid > 0L) {
-              scope.launch {
-                val result =
-                  withContext(Dispatchers.IO) {
-                    runCatching { BiliApi.deleteComment(expectedOid, comment.rpid) }
-                  }
-                result
-                  .onSuccess {
-                    if (commentOid == expectedOid) {
-                      val deletedRoot = commentItems.any { it.rpid == comment.rpid }
-                      commentItems = commentItems.filterNot { it.rpid == comment.rpid }
-                      if (replyRoot?.rpid == comment.rpid) {
-                        replyRoot = null
-                        replyItems = emptyList()
-                        replyHasMore = false
-                      } else if (replyItems.any { it.rpid == comment.rpid }) {
-                        replyItems = replyItems.filterNot { it.rpid == comment.rpid }
-                        replyRoot = replyRoot?.let { root ->
-                          root.copy(replyCount = (root.replyCount - 1).coerceAtLeast(0))
-                        }
-                        val rootId = replyRoot?.rpid
-                        commentItems = commentItems.map { root ->
-                          if (root.rpid == rootId)
-                            root.copy(replyCount = (root.replyCount - 1).coerceAtLeast(0))
-                          else root
-                        }
-                      }
-                      if (deletedRoot) commentTotalCount = (commentTotalCount - 1).coerceAtLeast(0)
-                      appState.selectedVideo?.let { cacheEntry(snapshotEntry(it)) }
-                    }
-                    Toast.makeText(context, "评论已删除", Toast.LENGTH_SHORT).show()
-                  }
-                  .onFailure {
-                    Toast.makeText(context, it.message ?: "删除失败", Toast.LENGTH_SHORT).show()
-                  }
-              }
-            }
-          },
-          onLikeVideo = { targetLiked ->
-            val expected = videoInfo
-            if (expected != null && !videoActionBusy) {
-              val previousEngagement = videoEngagement
-              val previousInfo = expected
-              videoActionBusy = true
-              videoEngagement = previousEngagement.copy(liked = targetLiked)
-              videoInfo =
-                previousInfo.copy(
-                  likeCount = (previousInfo.likeCount + if (targetLiked) 1 else -1).coerceAtLeast(0)
-                )
-              scope.launch {
-                val result =
-                  withContext(Dispatchers.IO) {
-                    runCatching { BiliApi.setVideoLike(expected.aid, targetLiked) }
-                  }
-                result
-                  .onSuccess {
-                    Toast.makeText(
-                        context,
-                        if (targetLiked) "已点赞" else "已取消点赞",
-                        Toast.LENGTH_SHORT,
-                      )
-                      .show()
-                  }
-                  .onFailure {
-                    if (videoInfo?.aid == expected.aid) {
-                      videoEngagement = previousEngagement
-                      videoInfo = previousInfo
-                    }
-                    Toast.makeText(context, it.message ?: "点赞失败", Toast.LENGTH_SHORT).show()
-                  }
-                if (videoInfo?.aid == expected.aid) videoActionBusy = false
-              }
-            }
-          },
-          onCoinVideo = { count, alsoLike ->
-            val expected = videoInfo
-            val remaining = (2 - videoEngagement.coins).coerceAtLeast(0)
-            if (expected != null && !videoActionBusy && count in 1..remaining) {
-              videoActionBusy = true
-              scope.launch {
-                val result =
-                  withContext(Dispatchers.IO) {
-                    runCatching { BiliApi.coinVideo(expected.aid, count, alsoLike) }
-                  }
-                result
-                  .onSuccess {
-                    if (videoInfo?.aid == expected.aid) {
-                      val wasLiked = videoEngagement.liked
-                      videoEngagement =
-                        videoEngagement.copy(
-                          coins = (videoEngagement.coins + count).coerceAtMost(2),
-                          liked = videoEngagement.liked || alsoLike,
-                        )
-                      videoInfo =
-                        videoInfo?.copy(
-                          coinCount = expected.coinCount + count,
-                          likeCount = expected.likeCount + if (alsoLike && !wasLiked) 1 else 0,
-                        )
-                    }
-                    Toast.makeText(context, "已投 $count 枚硬币", Toast.LENGTH_SHORT).show()
-                  }
-                  .onFailure {
-                    Toast.makeText(context, it.message ?: "投币失败", Toast.LENGTH_SHORT).show()
-                  }
-                if (videoInfo?.aid == expected.aid) videoActionBusy = false
-              }
-            }
-          },
-          onFavoriteVideo = { addIds, removeIds ->
-            val expected = videoInfo
-            if (expected != null && !videoActionBusy) {
-              val previousFolders = favoriteFolders
-              val wasFavorited = previousFolders.any { it.favorited }
-              videoActionBusy = true
-              scope.launch {
-                val result =
-                  withContext(Dispatchers.IO) {
-                    runCatching { BiliApi.setFavoriteFolders(expected.aid, addIds, removeIds) }
-                  }
-                result
-                  .onSuccess {
-                    if (videoInfo?.aid == expected.aid) {
-                      favoriteFolders = previousFolders.map { folder ->
-                        when (folder.id) {
-                          in addIds -> folder.copy(favorited = true)
-                          in removeIds -> folder.copy(favorited = false)
-                          else -> folder
-                        }
-                      }
-                      val isFavorited = favoriteFolders.any { it.favorited }
-                      videoEngagement = videoEngagement.copy(favorited = isFavorited)
-                      if (wasFavorited != isFavorited) {
-                        videoInfo =
-                          videoInfo?.copy(
-                            favoriteCount =
-                              (expected.favoriteCount + if (isFavorited) 1 else -1).coerceAtLeast(0)
+              },
+              onSeek = ::commitSeek,
+              onSeekPreview = ::previewSeek,
+              onSeekCancel = ::cancelSeekPreview,
+              onToggleDanmaku = {
+                val enabled = !showDanmaku
+                showDanmaku = enabled
+                settingsViewModel.update { it.copy(defaultShowDanmaku = enabled) }
+              },
+              onSendDanmaku = { message, color, mode, fontSize, colorful ->
+                if (historyCid > 0) {
+                  val position = playerViewModel.exoPlayer?.currentPosition ?: 0L
+                  scope.launch {
+                    val result =
+                      withContext(Dispatchers.IO) {
+                        runCatching {
+                          BiliApi.sendDanmakuAuthenticated(
+                            cid = historyCid,
+                            aid = historyAid,
+                            bvid =
+                              item.id.takeIf { it.startsWith("BV") }
+                                ?: item.videoUrl
+                                  .substringAfterLast("/")
+                                  .substringBefore("?")
+                                  .takeIf { it.startsWith("BV") }
+                                  .orEmpty(),
+                            message = message,
+                            progressMs = position,
+                            color = color,
+                            mode = mode,
+                            fontSize = fontSize,
+                            colorful = colorful,
                           )
+                        }
                       }
+                    if (result.isSuccess) {
+                      val local =
+                        DanmakuItem(
+                          timeMs = position,
+                          type = mode,
+                          fontSize = fontSize,
+                          color = color,
+                          content = message,
+                          isLocal = true,
+                          colorful = colorful,
+                        )
+                      danmakuWindowController.addLocalDanmaku(historyCid, local)?.let {
+                        danmaku = it
+                      }
+                    } else {
                       Toast.makeText(
                           context,
-                          if (isFavorited) "收藏成功" else "已取消收藏",
+                          result.exceptionOrNull()?.message ?: "弹幕发送失败",
                           Toast.LENGTH_SHORT,
                         )
                         .show()
                     }
                   }
-                  .onFailure {
-                    Toast.makeText(context, it.message ?: "收藏失败", Toast.LENGTH_SHORT).show()
-                  }
-                if (videoInfo?.aid == expected.aid) videoActionBusy = false
-              }
-            }
-          },
-          onLoadFavoriteFolders = {
-            val aid = videoInfo?.aid ?: 0L
-            if (!favoriteFoldersLoading && aid > 0) {
-              favoriteFoldersLoading = true
-              scope.launch {
-                val result =
-                  withContext(Dispatchers.IO) {
-                    runCatching { BiliApi.getFavoriteFolders(authUserInfo.mid, aid) }
-                  }
-                result
-                  .onSuccess { folders ->
-                    if (videoInfo?.aid == aid) {
-                      favoriteFolders = folders
-                      videoEngagement =
-                        videoEngagement.copy(favorited = folders.any { it.favorited })
-                    }
-                  }
-                  .onFailure {
-                    Toast.makeText(
-                        context,
-                        it.message ?: "收藏夹加载失败",
-                        Toast.LENGTH_SHORT,
-                      )
-                      .show()
-                  }
-                if (videoInfo?.aid == aid) favoriteFoldersLoading = false
-              }
-            }
-          },
-          onPlayerBoundsChanged = { bounds ->
-            if (bounds.width > 0f && bounds.height > 0f) playerBounds = bounds
-          },
-          onOpenReplies = { comment ->
-            if (!repliesLoading && commentOid > 0) {
-              replyRoot = comment
-              replyItems = emptyList()
-              replyPage = 1
-              replyHasMore = false
-              repliesLoading = true
-              val expectedOid = commentOid
-              scope.launch {
-                try {
-                  val response =
-                    withContext(Dispatchers.IO) {
-                      BiliApi.getCommentReplies(expectedOid, comment.rpid, 1)
-                    }
-                  if (commentOid == expectedOid && replyRoot?.rpid == comment.rpid) {
-                    replyItems = response.items
-                    replyHasMore = response.hasMore
-                  }
-                } finally {
-                  if (replyRoot?.rpid == comment.rpid) repliesLoading = false
                 }
-              }
-            }
-          },
-          onLoadMoreReplies = {
-            val root = replyRoot
-            if (root != null && replyHasMore && !repliesLoading && commentOid > 0) {
-              repliesLoading = true
-              val expectedOid = commentOid
-              val next = replyPage + 1
-              scope.launch {
-                try {
-                  val response =
-                    withContext(Dispatchers.IO) {
-                      BiliApi.getCommentReplies(expectedOid, root.rpid, next)
-                    }
-                  if (commentOid == expectedOid && replyRoot?.rpid == root.rpid) {
-                    replyItems = (replyItems + response.items).distinctBy { it.rpid }
-                    replyHasMore = response.hasMore
-                    replyPage = next
-                  }
-                } finally {
-                  if (replyRoot?.rpid == root.rpid) repliesLoading = false
+              },
+              onRecommendationClick = { rec, bounds, returnBounds, fromPlaybackEnd ->
+                startRecommendedVideo(item, rec, bounds, returnBounds, fromPlaybackEnd)
+              },
+              onVideoPageSelected = ::selectVideoPage,
+              onCollectionEpisodeSelected = { episode, _ -> selectCollectionEpisode(episode) },
+              onLoadMoreComments = {
+                videoState.loadMoreComments(
+                  item = item,
+                  selectedVideoUrl = { mainViewModel.state.value.selectedVideo?.videoUrl },
+                  scope = scope,
+                )
+              },
+              onRefreshComments = {
+                videoState.refreshComments(
+                  item = item,
+                  selectedVideoId = { appState.selectedVideo?.id },
+                  scope = scope,
+                )
+              },
+              onPostComment = { message, imageUri ->
+                videoState.postComment(context, message, imageUri, scope)
+              },
+              onRecommendationLongClick = { showVideoPreview(it) },
+              onArticleClick = { article, bounds ->
+                startEnterArticle(
+                  article,
+                  bounds.takeIf(Rect::hasUsableSize),
+                  ArticleOrigin.VIDEO,
+                )
+              },
+              onPostReply = { root, parent, message, imageUri ->
+                videoState.postReply(context, root, parent, message, imageUri, scope)
+              },
+              onLikeComment = { comment -> videoState.toggleCommentLike(comment, scope) },
+              onDeleteComment = { comment ->
+                videoState.deleteComment(context, comment, scope) {
+                  appState.selectedVideo?.let { cacheEntry(snapshotEntry(it)) }
                 }
-              }
-            }
-          },
-          onRefreshReplies = {
-            val root = replyRoot
-            if (root != null && !repliesLoading && commentOid > 0L) {
-              repliesLoading = true
-              val expectedOid = commentOid
-              scope.launch {
-                try {
-                  val response =
-                    withContext(Dispatchers.IO) {
-                      BiliApi.getCommentReplies(expectedOid, root.rpid, 1)
-                    }
-                  if (commentOid == expectedOid && replyRoot?.rpid == root.rpid) {
-                    replyItems = response.items
-                    replyHasMore = response.hasMore
-                    replyPage = 1
-                  }
-                } finally {
-                  if (replyRoot?.rpid == root.rpid) repliesLoading = false
+              },
+              onLikeVideo = { targetLiked ->
+                videoState.setVideoLike(context, targetLiked, scope)
+              },
+              onCoinVideo = { count, alsoLike ->
+                videoState.coinVideo(context, count, alsoLike, scope)
+              },
+              onFavoriteVideo = { addIds, removeIds ->
+                videoState.setFavoriteFolders(context, addIds, removeIds, scope)
+              },
+              onLoadFavoriteFolders = {
+                videoState.loadFavoriteFolders(context, authUserInfo.mid, scope)
+              },
+              onPlayerBoundsChanged = { bounds ->
+                if (bounds.width > 0f && bounds.height > 0f) playerBounds = bounds
+              },
+              onOpenReplies = { comment -> videoState.openReplies(comment, scope) },
+              onLoadMoreReplies = { videoState.loadMoreReplies(scope) },
+              onRefreshReplies = { videoState.refreshReplies(scope) },
+              onDismissReplies = { replyRoot = null },
+              onCommentNavigationConsumed = { pendingVideoCommentTarget = null },
+              onProfileClick = { mid, face, name, bounds ->
+                openAvatarProfile(mid, bounds, face, name)
+              },
+              onUploaderProfileClick = { mid, face, name, bounds ->
+                openAvatarProfile(mid, bounds, face, name)
+              },
+              onCommentSort = ::selectCommentSort,
+              showUploaderFollowButton =
+                (videoInfo?.uploaderMid ?: item.uploaderMid).let {
+                  it > 0L && it != authUserInfo.mid
+                },
+              uploaderFollowed =
+                followingStates[videoInfo?.uploaderMid ?: item.uploaderMid] == true,
+              uploaderFollowBusy =
+                followingBusy[videoInfo?.uploaderMid ?: item.uploaderMid] == true,
+              followingGroups = followingGroups,
+              followingGroupsLoading = followingGroupsLoading,
+              loggedIn = authUserInfo.isLogin,
+              premiumAudioVisible = authUserInfo.vipActive,
+              commentImageEnabled = authUserInfo.vipActive || userInfo.vipActive,
+              onLoadFollowingGroups = ::loadFollowingGroups,
+              onSelectUploaderFollowingGroup = { groupId ->
+                selectFollowingGroup(videoInfo?.uploaderMid ?: item.uploaderMid, groupId)
+              },
+              onUnfollowUploader = { unfollow(videoInfo?.uploaderMid ?: item.uploaderMid) },
+              onLogin = authViewModel::startLogin,
+              onCommentProfileClick = ::openCommentProfile,
+              onMentionQuery = ::loadMentionSuggestions,
+              playerView = { modifier, fullscreenProgress, fullscreen ->
+                if (playerReady && !rootPlayerHostEnabled && !bangumiDetailPlayerSuppressed) {
+                  rootPlayerContent(
+                    modifier,
+                    fullscreenProgress,
+                    fullscreen,
+                    true,
+                    SharedPlayerViewRole.DETAIL,
+                    true,
+                  )
                 }
-              }
-            }
-          },
-          onDismissReplies = { replyRoot = null },
-          onCommentNavigationConsumed = { pendingVideoCommentTarget = null },
-          onProfileClick = { mid, face, name, bounds ->
-            openAvatarProfile(mid, bounds, face, name)
-          },
-          onUploaderProfileClick = { mid, face, name, bounds ->
-            openAvatarProfile(mid, bounds, face, name)
-          },
-          onCommentSort = ::selectCommentSort,
-          showUploaderFollowButton =
-            (videoInfo?.uploaderMid ?: item.uploaderMid).let {
-              it > 0L && it != authUserInfo.mid
-            },
-          uploaderFollowed = followingStates[videoInfo?.uploaderMid ?: item.uploaderMid] == true,
-          uploaderFollowBusy = followingBusy[videoInfo?.uploaderMid ?: item.uploaderMid] == true,
-          followingGroups = followingGroups,
-          followingGroupsLoading = followingGroupsLoading,
-          loggedIn = authUserInfo.isLogin,
-          premiumAudioVisible = authUserInfo.vipActive,
-          commentImageEnabled = authUserInfo.vipActive || userInfo.vipActive,
-          onLoadFollowingGroups = ::loadFollowingGroups,
-          onSelectUploaderFollowingGroup = { groupId ->
-            selectFollowingGroup(videoInfo?.uploaderMid ?: item.uploaderMid, groupId)
-          },
-          onUnfollowUploader = { unfollow(videoInfo?.uploaderMid ?: item.uploaderMid) },
-          onLogin = authViewModel::startLogin,
-          onCommentProfileClick = ::openCommentProfile,
-          onMentionQuery = ::loadMentionSuggestions,
-          playerView = { modifier, fullscreenProgress, fullscreen ->
-            if (playerReady && !rootPlayerHostEnabled && !bangumiDetailPlayerSuppressed) {
-              rootPlayerContent(
-                modifier,
-                fullscreenProgress,
-                fullscreen,
-                true,
-                SharedPlayerViewRole.DETAIL,
-                true,
-              )
-            }
-          },
-          onSwitchQuality = { idx -> playerViewModel.switchQuality(idx) },
-          onSwitchPremiumAudio = playerViewModel::switchPremiumAudio,
-          bangumiPage = bangumiPageUi,
-          onBangumiPosterBoundsChanged = { bounds ->
-            if (bounds.hasUsableSize()) bangumiPosterBounds = bounds
-          },
-          onBangumiEpisodeSelected = ::selectBangumiEpisode,
-          onBangumiSeasonSelected = ::selectBangumiSeason,
-          onBangumiFollow = ::toggleBangumiFollow,
-          onBangumiRate = ::postBangumiShortReview,
-          )
-        }
-        }
-        if (navigationLocked) {
-          Box(
-            Modifier.fillMaxSize().pointerInput(transitionToken, transitionPhase) {
-              awaitPointerEventScope {
-                while (true) {
-                  awaitPointerEvent().changes.forEach { it.consume() }
-                }
-              }
-            }
-          )
+              },
+              onSwitchQuality = { idx -> playerViewModel.switchQuality(idx) },
+              onSwitchPremiumAudio = playerViewModel::switchPremiumAudio,
+              bangumiPage = bangumiPageUi,
+              onBangumiPosterBoundsChanged = { bounds ->
+                if (bounds.hasUsableSize()) bangumiPosterBounds = bounds
+              },
+              onBangumiEpisodeSelected = ::selectBangumiEpisode,
+              onBangumiSeasonSelected = ::selectBangumiSeason,
+              onBangumiFollow = ::toggleBangumiFollow,
+              onBangumiRate = ::postBangumiShortReview,
+            )
+          }
         }
       }
     }
 
-    // Only the bangumi homepage owns this app-root PlayerView. Card flights detach the real player;
+    // Only the bangumi homepage owns this app-root PlayerView. Card flights detach the real
+    // player;
     // the landed detail page mounts it later underneath the stationary cached cover.
     RootPlayerLayer(
       hostEnabled =
@@ -7176,39 +6820,56 @@ fun AppRoot(
     // Layer 1: Live room. It is a peer detail page to Video, Bangumi, and Article while retaining
     // the search results underneath as its only first-stage entry source.
     activeLiveRoom?.let { liveRoom ->
-      key(liveRoom.stableId) {
-        Box(Modifier.fillMaxSize().graphicsLayer { alpha = livePageAlpha.value }) {
-          LiveRoomScreen(
-            entry = liveRoom,
-            account = authUserInfo,
-            player = playerViewModel.preparePlayer(),
-            playerView = { modifier, fullscreenProgress, fullscreen ->
-              if (profileStack.isEmpty()) {
-                rootPlayerContent(
-                  modifier,
-                  fullscreenProgress,
-                  fullscreen,
-                  false,
-                  SharedPlayerViewRole.DETAIL,
-                  liveVideoSurfaceVisible,
-                )
-              }
-            },
-            onPlaySource = playerViewModel::playLive,
-            onStopPlayback = playerViewModel::stopLive,
-            onSeekLiveEdge = playerViewModel::seekToLiveEdge,
-            onBack = { startExitLive() },
-            onHome = { startExitLive(closeSearchAfter = true) },
-            onLogin = authViewModel::startLogin,
-            onAnchorProfile = { mid, face, name, bounds ->
-              playerViewModel.exoPlayer?.pause()
-              openAvatarProfile(mid, bounds, face, name)
-            },
-            settings = settings,
-            onSettingsChange = settingsViewModel::update,
-            onPlayerBoundsChanged = { bounds -> livePlayerBounds = bounds },
-            active = profileStack.isEmpty(),
-          )
+      key(activeLiveEntryId) {
+        liveRoomStateHolder.SaveableStateProvider("live:$activeLiveEntryId") {
+          val roomViewModel: LiveRoomViewModel = viewModel(key = "live_room_${liveRoom.roomId}")
+          Box(Modifier.fillMaxSize().graphicsLayer { alpha = livePageAlpha.value }) {
+            LiveRoomScreen(
+              entry = liveRoom,
+              navigationEntryId = activeLiveEntryId,
+              account = authUserInfo,
+              player = playerViewModel.preparePlayer(),
+              playerView = { modifier, fullscreenProgress, fullscreen ->
+                if (profileStack.isEmpty()) {
+                  rootPlayerContent(
+                    modifier,
+                    fullscreenProgress,
+                    fullscreen,
+                    false,
+                    SharedPlayerViewRole.DETAIL,
+                    liveVideoSurfaceVisible,
+                  )
+                }
+              },
+              onPlaySource = playerViewModel::playLive,
+              onStopPlayback = playerViewModel::stopLive,
+              onSeekLiveEdge = playerViewModel::seekToLiveEdge,
+              onFullscreenTransitionChanged = { liveFullscreenTransitionActive = it },
+              onBack = {
+                if (liveRoomParentStack.isNotEmpty()) startBackToPreviousLive()
+                else startExitLive()
+              },
+              onHome = { startExitLive(closeSearchAfter = true) },
+              onLogin = authViewModel::startLogin,
+              onAnchorProfile = { mid, face, name, bounds ->
+                playerViewModel.exoPlayer?.pause()
+                openAvatarProfile(mid, bounds, face, name)
+              },
+              onRecommendedRoom = ::startEnterRecommendedLive,
+              onRecommendedRoomBoundsChanged = { room, bounds ->
+                if (bounds.hasUsableSize()) {
+                  liveRecommendationCardBounds[
+                    liveRecommendationBoundsKey(liveRoom.roomId, room.roomId)] = bounds
+                }
+              },
+              hiddenRecommendationCoverItemId = hiddenLiveRecommendationCoverItemId,
+              settings = settings,
+              onSettingsChange = settingsViewModel::update,
+              onPlayerBoundsChanged = { bounds -> livePlayerBounds = bounds },
+              active = profileStack.isEmpty(),
+              viewModel = roomViewModel,
+            )
+          }
         }
       }
     }
@@ -7322,6 +6983,16 @@ fun AppRoot(
       dynamicsHasMore = spaceDynamicHasMore,
       dynamicsError = spaceDynamicError,
       selectedDynamicId = selectedDynamicId,
+      collections = spaceCollections,
+      collectionsLoading = spaceCollectionsLoading,
+      collectionsError = spaceCollectionsError,
+      selectedCollectionId = selectedCollectionId,
+      collectionVideos = spaceCollectionVideos,
+      collectionPage = spaceCollectionPage,
+      collectionHasMore = spaceCollectionHasMore,
+      collectionLoading = spaceCollectionLoading,
+      collectionError = spaceCollectionError,
+      collectionTotal = spaceCollectionTotal,
       loading = spaceLoading,
       hasMore = spaceHasMore,
       error = spaceError,
@@ -7430,6 +7101,33 @@ fun AppRoot(
       onLoadMoreDynamics = { loadSpaceDynamics(refresh = false) },
       onRefreshDynamics = { loadSpaceDynamics(refresh = true) },
       onSelectedDynamicIdChange = { selectedDynamicId = it },
+      onEnsureCollections = {
+        profileMid?.let { mid ->
+          profileState.loadSpaceCollections(mid, refresh = false, scope)
+        }
+      },
+      onRefreshCollections = {
+        profileMid?.let { mid ->
+          profileState.loadSpaceCollections(mid, refresh = true, scope)
+        }
+      },
+      onSelectedCollectionChange = { collection ->
+        val mid = profileMid
+        if (collection == null) profileState.clearSelectedSpaceCollection()
+        else if (mid != null) profileState.selectSpaceCollection(mid, collection, scope)
+      },
+      onLoadMoreCollection = {
+        val mid = profileMid
+        val collection = spaceCollections.firstOrNull { it.id == selectedCollectionId }
+        if (mid != null && collection != null) {
+          profileState.loadSpaceCollectionPage(
+            mid = mid,
+            collection = collection,
+            page = (spaceCollectionPage + 1).coerceAtLeast(1),
+            scope = scope,
+          )
+        }
+      },
       onDynamicLike = { entryId, item ->
         activeProfileEntry(entryId)
           ?.state
@@ -7480,12 +7178,12 @@ fun AppRoot(
   // the poster never bypasses the non-player-content mask. Skip the dim during exit transitions
   // because leaveHdrPlaybackPage() has already released the overlay by that point.
   bangumiHomeTransitionSession?.let { session ->
-      Box(
-        Modifier.fillMaxSize()
-          .zIndex(1.5f)
-          .graphicsLayer { alpha = session.themeScrimAlpha.value.coerceIn(0f, 1f) }
-          .background(MaterialTheme.colorScheme.background)
-      )
+    Box(
+      Modifier.fillMaxSize()
+        .zIndex(1.5f)
+        .graphicsLayer { alpha = session.themeScrimAlpha.value.coerceIn(0f, 1f) }
+        .background(MaterialTheme.colorScheme.background)
+    )
   }
   liveTransitionSession
     ?.takeIf {
@@ -7506,9 +7204,7 @@ fun AppRoot(
     }
   liveExitPrelude
     ?.takeIf {
-      it.playerBounds != Rect.Zero &&
-        it.playerBounds.width > 0f &&
-        it.playerBounds.height > 0f
+      it.playerBounds != Rect.Zero && it.playerBounds.width > 0f && it.playerBounds.height > 0f
     }
     ?.let { prelude ->
       CardTransitionOverlay(
@@ -7552,9 +7248,7 @@ fun AppRoot(
   // destination background second, flying cover last.
   videoExitPrelude
     ?.takeIf {
-      it.playerBounds != Rect.Zero &&
-        it.playerBounds.width > 0f &&
-        it.playerBounds.height > 0f
+      it.playerBounds != Rect.Zero && it.playerBounds.width > 0f && it.playerBounds.height > 0f
     }
     ?.let { prelude ->
       CardTransitionOverlay(
@@ -7627,6 +7321,16 @@ fun AppRoot(
         previewInfo = null
         previewFromHomeFeed = false
       },
+      onAddToWatchLater = {
+        val aid = previewInfo?.aid
+        previewItem = null
+        previewInfo = null
+        previewFromHomeFeed = false
+        if (authUserInfo.isLogin) watchLaterViewModel.add(item, aid)
+        else authViewModel.startLogin()
+      },
+      watchLaterAdded = watchLaterState.contains(item, previewInfo?.aid),
+      watchLaterBusy = item.id in watchLaterState.busyVideoIds,
       onNotInterested =
         if (previewFromHomeFeed) {
           {
@@ -7671,196 +7375,24 @@ fun AppRoot(
       BiliOneStartupAnimation(reduceMotion = settings.reduceMotion)
     }
   }
-}
-
-@Composable
-private fun BiliOneStartupAnimation(
-  reduceMotion: Boolean,
-  modifier: Modifier = Modifier,
-) {
-  // Reuse the exact foreground used by the Android adaptive icon so the first visual impression
-  // and the launcher identity cannot drift apart.
-  val logoAlpha = remember(reduceMotion) { Animatable(if (reduceMotion) 1f else 0f) }
-  val logoScale = remember(reduceMotion) { Animatable(if (reduceMotion) 1f else .9f) }
-  LaunchedEffect(reduceMotion) {
-    if (reduceMotion) return@LaunchedEffect
-    logoAlpha.snapTo(0f)
-    logoScale.snapTo(.9f)
-    launch { logoAlpha.animateTo(1f, animationSpec = tween(150, easing = FastOutSlowInEasing)) }
-    logoScale.animateTo(1f, animationSpec = tween(280, easing = FastOutSlowInEasing))
-  }
-  Image(
-    painter = painterResource(R.drawable.bilione_icon_foreground_compact),
-    contentDescription = null,
-    modifier =
-      modifier.size(172.dp).graphicsLayer {
-        alpha = logoAlpha.value
-        scaleX = logoScale.value
-        scaleY = logoScale.value
-      },
-  )
-}
-
-/**
- * Measures only the poster destination used by the search-to-bangumi shared transition. Keeping
- * this layout independent from [VideoScreen] prevents the player, comments, and page effects from
- * being composed while the poster is in flight.
- */
-@Composable
-private fun SearchBangumiTransitionTarget(onPosterBoundsChanged: (Rect) -> Unit) {
-  BoxWithConstraints(Modifier.fillMaxSize()) {
-    val density = LocalDensity.current
-    val contentWidth = maxOf(1.dp, maxWidth - 28.dp)
-    val contentHeight = maxOf(1.dp, maxHeight - 88.dp)
-    val paneSpec =
-      videoPaneSpec(
-        widthPx = with(density) { contentWidth.roundToPx() },
-        heightPx = with(density) { contentHeight.roundToPx() },
-        density = density.density,
-        fontScale = density.fontScale,
-      )
-    val primaryWidth =
-      if (paneSpec.split) {
-        maxOf(1.dp, contentWidth - with(density) { paneSpec.secondarySizePx.toDp() } - 12.dp)
-      } else contentWidth
-    val primaryHeight =
-      if (paneSpec.split) contentHeight
-      else maxOf(1.dp, contentHeight * .68f)
-    val pageLayout =
-      bangumiPageLayoutForPane(
-        primaryWidthDp = primaryWidth.value,
-        primaryHeightDp = primaryHeight.value,
-        fontScale = density.fontScale,
-      )
-    val posterHeight = maxOf(1.dp, primaryHeight - pageLayout.playerHeight - 8.dp)
+  if (interactionTransitionActive) {
     Box(
-      Modifier.offset(x = 16.dp, y = 84.dp + pageLayout.playerHeight)
-        .size(width = posterHeight * .75f, height = posterHeight)
-        .onGloballyPositioned { onPosterBoundsChanged(it.boundsInRoot()) }
+      Modifier.fillMaxSize()
+        .zIndex(320f)
+        .pointerInput(
+          transitionToken,
+          transitionPhase,
+          searchTransitionDirection,
+          bangumiIndexTransitionDirection,
+          liveFullscreenTransitionActive,
+          videoFullscreenTransitionActive,
+        ) {
+          awaitPointerEventScope {
+            while (true) {
+              awaitPointerEvent().changes.forEach { it.consume() }
+            }
+          }
+        }
     )
-  }
-}
-
-/** Lightweight 16:9 destination used while a bangumi-home player/card flight owns the frame. */
-@Composable
-private fun BangumiPlayerTransitionTarget(onPlayerBoundsChanged: (Rect) -> Unit) {
-  BoxWithConstraints(Modifier.fillMaxSize()) {
-    val density = LocalDensity.current
-    val contentWidth = maxOf(1.dp, maxWidth - 28.dp)
-    val contentHeight = maxOf(1.dp, maxHeight - 88.dp)
-    val paneSpec =
-      videoPaneSpec(
-        widthPx = with(density) { contentWidth.roundToPx() },
-        heightPx = with(density) { contentHeight.roundToPx() },
-        density = density.density,
-        fontScale = density.fontScale,
-      )
-    val primaryWidth =
-      if (paneSpec.split) {
-        maxOf(1.dp, contentWidth - with(density) { paneSpec.secondarySizePx.toDp() } - 12.dp)
-      } else contentWidth
-    val primaryHeight =
-      if (paneSpec.split) contentHeight
-      else maxOf(1.dp, contentHeight * .68f)
-    val pageLayout =
-      bangumiPageLayoutForPane(
-        primaryWidthDp = primaryWidth.value,
-        primaryHeightDp = primaryHeight.value,
-        fontScale = density.fontScale,
-      )
-    Box(
-      // Mirror VideoContent exactly: 76 dp BangumiHeader, then the content's 16 dp start padding.
-      // The real Surface uses playerWidth, not the complete primary pane width.
-      Modifier.offset(x = 16.dp, y = 76.dp)
-        .size(width = pageLayout.playerWidth, height = pageLayout.playerHeight)
-        .onGloballyPositioned { onPlayerBoundsChanged(it.boundsInRoot()) }
-    )
-  }
-}
-
-private fun uploadCommentImage(context: Context, uri: Uri): BiliApi.PrivateImageUpload {
-  val bytes =
-    context.contentResolver.openInputStream(uri)?.use { input -> input.readBytes() }
-      ?: throw IllegalStateException("无法读取评论图片")
-  val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-  BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-  if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
-    throw IllegalStateException("评论图片格式不受支持")
-  }
-  val mimeType = context.contentResolver.getType(uri).orEmpty().ifBlank { "image/jpeg" }
-  return BiliApi.uploadCommentImage(
-    bytes = bytes,
-    fileName = "comment-image.${mimeType.substringAfterLast('/', "jpg")}",
-    mimeType = mimeType,
-    width = bounds.outWidth,
-    height = bounds.outHeight,
-  )
-}
-
-/**
- * Tracks the last danmaku parameters so we can skip [PlayerView.updateDanmakuOverlay] when nothing
- * has changed across recompositions.
- */
-private class DanmakuUpdateState {
-  private var itemsRef: List<dev.openbili.webdemo.api.DanmakuItem>? = null
-  private var maskRef: DanmakuMaskTimeline? = null
-  private var enabled = false
-  private var smartBlocking = false
-  private var paused = false
-  private var fullscreen = false
-  private var highDynamicRange = false
-  private var opacity = .72f
-  private var displayArea = .75f
-  private var densityLevel = 3
-  private var fontScale = 1f
-  private var speed = 1f
-  private var positionEpoch = Long.MIN_VALUE
-
-  fun changed(
-    items: List<dev.openbili.webdemo.api.DanmakuItem>,
-    mask: DanmakuMaskTimeline?,
-    enabled: Boolean,
-    smartBlocking: Boolean,
-    paused: Boolean,
-    fullscreen: Boolean,
-    highDynamicRange: Boolean,
-    opacity: Float,
-    displayArea: Float,
-    densityLevel: Int,
-    fontScale: Float,
-    speed: Float,
-    positionEpoch: Long,
-  ): Boolean {
-    if (
-      items !== itemsRef ||
-        mask !== maskRef ||
-        enabled != this.enabled ||
-        smartBlocking != this.smartBlocking ||
-        paused != this.paused ||
-        fullscreen != this.fullscreen ||
-        highDynamicRange != this.highDynamicRange ||
-        opacity != this.opacity ||
-        displayArea != this.displayArea ||
-        densityLevel != this.densityLevel ||
-        fontScale != this.fontScale ||
-        speed != this.speed ||
-        positionEpoch != this.positionEpoch
-    ) {
-      itemsRef = items
-      maskRef = mask
-      this.enabled = enabled
-      this.smartBlocking = smartBlocking
-      this.paused = paused
-      this.fullscreen = fullscreen
-      this.highDynamicRange = highDynamicRange
-      this.opacity = opacity
-      this.displayArea = displayArea
-      this.densityLevel = densityLevel
-      this.fontScale = fontScale
-      this.speed = speed
-      this.positionEpoch = positionEpoch
-      return true
-    }
-    return false
   }
 }
