@@ -5,6 +5,7 @@ plugins {
   id("com.android.application")
   id("org.jetbrains.kotlin.plugin.compose")
   id("com.diffplug.spotless")
+  id("androidx.baselineprofile")
 }
 
 val biliAppSignerEndpoint =
@@ -32,6 +33,21 @@ spotless {
   }
 }
 
+baselineProfile {
+  // Keep the producer dependency and generated profile limited to the formal release variant.
+  // Debug and local performance variants must not consume this release-only profile.
+  variants {
+    create("release") {
+      // Profiles are generated explicitly, not on every release build.
+      automaticGenerationDuringBuild = false
+      // Keep the profile out of the shared main source set.
+      mergeIntoMain = false
+      saveInSrc = true
+      from(project(":baselineprofile"))
+    }
+  }
+}
+
 android {
   namespace = "dev.openbili.webdemo"
   compileSdk = 37
@@ -40,8 +56,8 @@ android {
     applicationId = "io.github.shuyunr.bilione"
     minSdk = 24
     targetSdk = 37
-    versionCode = 2
-    versionName = "0.2.0"
+    versionCode = 1
+    versionName = "0.3.0-preview.3"
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     vectorDrawables.useSupportLibrary = true
     buildConfigField(
@@ -119,7 +135,11 @@ dependencies {
   implementation("androidx.media3:media3-exoplayer-hls:1.10.1")
   implementation("androidx.media3:media3-datasource:1.10.1")
   implementation("androidx.media3:media3-database:1.10.1")
+  implementation("androidx.media3:media3-session:1.10.1")
   implementation("androidx.media3:media3-ui:1.10.1")
+  // App Baseline Profile: the release APK embeds baseline.prof/baseline.profm assets that the
+  // profileinstaller installs and hands to ART for background compilation on first run.
+  implementation("androidx.profileinstaller:profileinstaller:1.4.1")
 
   debugImplementation("androidx.compose.ui:ui-tooling:1.11.4")
   debugImplementation("androidx.compose.ui:ui-test-manifest:1.11.4")

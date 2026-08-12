@@ -1,5 +1,6 @@
 package dev.openbili.webdemo.my
 
+import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -25,6 +26,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.text.input.delete
 import androidx.compose.foundation.text.input.rememberTextFieldState
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
@@ -128,6 +130,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -172,6 +175,8 @@ import dev.openbili.webdemo.settings.canSelectPreferredResolution
 import dev.openbili.webdemo.settings.detectSimAvailability
 import dev.openbili.webdemo.ui.PressableVideoCard
 import dev.openbili.webdemo.ui.NavigationCardBottomClearance
+import dev.openbili.webdemo.ui.OfficialVerificationIcon
+import dev.openbili.webdemo.ui.OfficialVerificationIconSize
 import dev.openbili.webdemo.ui.PullRefreshContainer
 import dev.openbili.webdemo.ui.RootAccountHeader
 import dev.openbili.webdemo.ui.VideoCardGradient
@@ -226,6 +231,7 @@ fun MyScreen(
   onEditFavoriteFolder: (FavoriteFolder, String, Boolean) -> Unit,
   onDeleteFavoriteFolder: (FavoriteFolder) -> Unit,
   hiddenCoverItemId: String? = null,
+  cachedVideosBackHandlingEnabled: Boolean = true,
   hiddenArticleItemId: String? = null,
   hiddenInteractionTargetMessageId: Long? = null,
   onProfile: (FollowingUser, Rect) -> Unit,
@@ -237,6 +243,8 @@ fun MyScreen(
   onRefresh: () -> Unit,
   onWatchLaterRefresh: () -> Unit,
   onLogin: () -> Unit,
+  profileIpAuthorized: Boolean,
+  onAuthorizeProfileIp: () -> Unit,
   onAccountClick: (Rect) -> Unit,
   onMessage: (Long) -> Unit,
   onLoadMorePrivateSessions: () -> Unit,
@@ -250,6 +258,7 @@ fun MyScreen(
   onInteractionTarget: (AccountMessage, Rect) -> Unit,
   onInteractionProfile: (Long, CommentItem, CommentProfileAnchor) -> Unit,
   onLoadMoreInteractions: () -> Unit,
+  onLoadMoreLikes: () -> Unit,
   onErrorConsumed: () -> Unit,
   onWatchLaterErrorConsumed: () -> Unit,
   hiddenInteractionCommentAvatarRpid: Long? = null,
@@ -274,7 +283,9 @@ fun MyScreen(
       MySection.HISTORY,
       MySection.WATCH_LATER,
       MySection.FOLLOWING,
-      MySection.INTERACTIONS -> true
+      MySection.INTERACTIONS,
+      MySection.LIKES,
+      MySection.CACHED_VIDEOS -> true
       MySection.MESSAGES -> true
       MySection.SETTINGS -> false
     }
@@ -354,7 +365,7 @@ fun MyScreen(
               else 20.dp,
           )
       ) {
-        if (!user.isLogin) {
+        if (!user.isLogin && state.section != MySection.CACHED_VIDEOS) {
           Text(
             "登录后查看账号内容",
             modifier = Modifier.align(Alignment.Center).clickable(onClick = onLogin),
@@ -365,7 +376,10 @@ fun MyScreen(
             refreshing = contentLoading,
             onRefresh =
               if (state.section == MySection.WATCH_LATER) onWatchLaterRefresh else onRefresh,
-            enabled = state.section != MySection.SETTINGS && state.section != MySection.MESSAGES,
+            enabled =
+              state.section != MySection.SETTINGS &&
+                state.section != MySection.MESSAGES &&
+                state.section != MySection.CACHED_VIDEOS,
             modifier = Modifier.fillMaxSize(),
           ) {
             Crossfade(
@@ -446,11 +460,42 @@ fun MyScreen(
                     emotePackages = state.messageEmotePackages,
                     hiddenTargetMessageId = hiddenInteractionTargetMessageId,
                     hiddenCommentAvatarRpid = hiddenInteractionCommentAvatarRpid,
+                    hasMore = state.messageReplyHasMore || state.messageAtHasMore,
+                    allowReply = true,
+                    emptyText = "(。・ω・。) 暂无回复或@消息",
+                  )
+                MySection.LIKES ->
+                  InteractionMessagePane(
+                    state = state,
+                    onSelect = onMessage,
+                    onReply = onReplyMessage,
+                    onTarget = onInteractionTarget,
+                    onProfile = onInteractionProfile,
+                    onLoadMore = onLoadMoreLikes,
+                    emotePackages = state.messageEmotePackages,
+                    hiddenTargetMessageId = hiddenInteractionTargetMessageId,
+                    hiddenCommentAvatarRpid = hiddenInteractionCommentAvatarRpid,
+                    hasMore = state.messageLikeHasMore,
+                    allowReply = false,
+                    emptyText = "(。・ω・。) 暂无点赞消息",
+                  )
+                MySection.CACHED_VIDEOS ->
+                  CachedVideosPane(
+                    user = user,
+                    onVideo = onVideo,
+                    onBangumi = onBangumi,
+                    hiddenCoverItemId = hiddenCoverItemId,
+                    columns = settings.homeGridColumns,
+                    backHandlingEnabled = cachedVideosBackHandlingEnabled,
                   )
                 MySection.SETTINGS ->
                   SettingsPane(
                     settings = settings,
+                    favoriteFolders = state.folders,
+                    favoriteFoldersLoading = state.loading,
                     vipActive = user.vipActive,
+                    profileIpAuthorized = profileIpAuthorized,
+                    onAuthorizeProfileIp = onAuthorizeProfileIp,
                     onChange = onSettingsChange,
                   )
               }
@@ -468,7 +513,7 @@ fun MyScreen(
               modifier = Modifier.align(Alignment.TopCenter).padding(top = 12.dp),
               shape = RoundedCornerShape(16.dp),
               color = MaterialTheme.colorScheme.errorContainer,
-              shadowElevation = 5.dp,
+              shadowElevation = 0.dp,
             ) {
               Text(
                 message,
@@ -719,13 +764,22 @@ private fun FollowingUserCard(
           Modifier.padding(start = 12.dp).weight(1f),
           verticalArrangement = Arrangement.spacedBy(5.dp),
         ) {
-          Text(
-            person.name,
-            style = MaterialTheme.typography.titleSmall,
-            color = Color.White,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+          ) {
+            OfficialVerificationIcon(
+              verification = person.officialVerification,
+              modifier = Modifier.size(OfficialVerificationIconSize),
+            )
+            Text(
+              person.name,
+              style = MaterialTheme.typography.titleSmall,
+              color = Color.White,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
+          }
           BiliRichText(
             text = person.signature.ifBlank { "这个人很神秘，什么也没有写 (´･ω･`)" },
             emotes = emptyMap(),
@@ -779,7 +833,11 @@ private data class SettingsOption<T>(
 @Composable
 private fun SettingsPane(
   settings: AppSettings,
+  favoriteFolders: List<FavoriteFolder>,
+  favoriteFoldersLoading: Boolean,
   vipActive: Boolean,
+  profileIpAuthorized: Boolean,
+  onAuthorizeProfileIp: () -> Unit,
   onChange: ((AppSettings) -> AppSettings) -> Unit,
 ) {
   val context = LocalContext.current
@@ -792,9 +850,34 @@ private fun SettingsPane(
   var cacheSizeBytes by remember { mutableStateOf<Long?>(null) }
   var clearingCache by remember { mutableStateOf(false) }
   var showResetDialog by remember { mutableStateOf(false) }
+  var showMusicFolderPicker by remember { mutableStateOf(false) }
   var simAvailability by remember(context.applicationContext) {
     mutableStateOf(detectSimAvailability(context))
   }
+  val homeBackgroundPicker =
+    rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+      if (uri != null) {
+        runCatching {
+          context.contentResolver.takePersistableUriPermission(
+            uri,
+            Intent.FLAG_GRANT_READ_URI_PERMISSION,
+          )
+        }
+        onChange { it.copy(homeBackgroundUri = uri.toString()) }
+      }
+    }
+  val videoBackgroundPicker =
+    rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+      if (uri != null) {
+        runCatching {
+          context.contentResolver.takePersistableUriPermission(
+            uri,
+            Intent.FLAG_GRANT_READ_URI_PERMISSION,
+          )
+        }
+        onChange { it.copy(videoBackgroundUri = uri.toString()) }
+      }
+    }
 
   LaunchedEffect(Unit) {
     cacheSizeBytes = withContext(Dispatchers.IO) { AppCacheManager.sizeBytes(context) }
@@ -826,6 +909,18 @@ private fun SettingsPane(
       },
       dismissButton = {
         TextButton(onClick = { showResetDialog = false }) { Text("取消") }
+      },
+    )
+  }
+  if (showMusicFolderPicker) {
+    MusicFavoriteFolderPicker(
+      folders = favoriteFolders,
+      selectedFolderId = settings.musicFavoriteFolderId,
+      loading = favoriteFoldersLoading,
+      onDismiss = { showMusicFolderPicker = false },
+      onSelected = { folderId ->
+        showMusicFolderPicker = false
+        onChange { it.copy(musicFavoriteFolderId = folderId) }
       },
     )
   }
@@ -864,8 +959,17 @@ private fun SettingsPane(
       }
     }
     item {
-      SettingsSwitch("播放时阻止休眠", "仅在视频播放期间保持屏幕常亮", settings.keepScreenOn) {
+      SettingsSwitch("播放页阻止休眠", "视频或番剧播放页可见时保持屏幕常亮", settings.keepScreenOn) {
         onChange { value -> value.copy(keepScreenOn = it) }
+      }
+    }
+    item {
+      SettingsSwitch(
+        "离开应用时暂停",
+        "关闭后可在后台继续听视频",
+        settings.pauseWhenLeavingApp,
+      ) {
+        onChange { value -> value.copy(pauseWhenLeavingApp = it) }
       }
     }
     item {
@@ -888,6 +992,15 @@ private fun SettingsPane(
         ) { next ->
           onChange { it.copy(autoNextCountdownSeconds = next.roundToInt()) }
         }
+      }
+    }
+    item {
+      SettingsSwitch(
+        "默认开启字幕",
+        "进入有字幕的新视频时自动选择首个字幕轨道，播放中仍可临时关闭",
+        settings.defaultShowSubtitles,
+      ) {
+        onChange { value -> value.copy(defaultShowSubtitles = it) }
       }
     }
     item {
@@ -939,6 +1052,37 @@ private fun SettingsPane(
         }
       }
     }
+    if (!mediaCapabilities.supportsHiRes) {
+      item {
+        SettingsSwitch(
+          "解锁 Hi-Res",
+          "当前设备未报告支持 FLAC 高解析音频，仅建议用于兼容性测试",
+          settings.unlockHiRes,
+        ) {
+          onChange { value -> value.copy(unlockHiRes = it) }
+        }
+      }
+    }
+
+    item { SettingsTitle("音乐播放器") }
+    item {
+      val selectedFolder =
+        favoriteFolders.firstOrNull { it.id == settings.musicFavoriteFolderId }
+      SettingsAction(
+        title = "音乐播放器收藏夹",
+        subtitle =
+          when {
+            settings.musicFavoriteFolderId <= 0L -> "默认按名称自动查找“音乐”收藏夹"
+            selectedFolder != null ->
+              "当前使用“${selectedFolder.title}” · ${selectedFolder.mediaCount} 个内容"
+            favoriteFoldersLoading -> "正在读取个人收藏夹…"
+            else -> "已选择的收藏夹不可用，请重新选择"
+          },
+        action = if (favoriteFoldersLoading) "加载中" else "选择",
+        enabled = !favoriteFoldersLoading,
+        onClick = { showMusicFolderPicker = true },
+      )
+    }
 
     item { SettingsTitle("播放器手势") }
     item {
@@ -975,7 +1119,109 @@ private fun SettingsPane(
       }
     }
 
+    item { SettingsTitle("搜索") }
+    item {
+      SettingsSwitch(
+        "返回保留上次搜索内容",
+        "关闭时退出搜索页会立即清空首页搜索框",
+        settings.retainLastSearchQuery,
+      ) {
+        onChange { value -> value.copy(retainLastSearchQuery = it) }
+      }
+    }
+
     item { SettingsTitle("外观") }
+    item {
+      SettingsSlider(
+        title = "首页推荐列数",
+        valueText = "${settings.homeGridColumns} 列",
+        value = settings.homeGridColumns.toFloat(),
+        range = 3f..6f,
+        steps = 2,
+      ) { next ->
+        onChange { it.copy(homeGridColumns = next.roundToInt().coerceIn(3, 6)) }
+      }
+    }
+    item {
+      SettingsSwitch(
+        "播放页显示设备信息",
+        "控制普通视频、番剧、影视和直播页右上角的时间、网络与电量",
+        settings.showPlaybackDeviceStatus,
+      ) {
+        onChange { value -> value.copy(showPlaybackDeviceStatus = it) }
+      }
+    }
+    item { SettingsTitle("页面背景") }
+    item {
+      BackgroundImageSetting(
+        title = "首页背景图",
+        selected = settings.homeBackgroundUri.isNotBlank(),
+        onPick = { homeBackgroundPicker.launch(arrayOf("image/*")) },
+        onClear = { onChange { it.copy(homeBackgroundUri = "") } },
+      )
+    }
+    if (settings.homeBackgroundUri.isNotBlank()) {
+      item {
+        SettingsSwitch(
+          "模糊首页背景图",
+          "预先生成静态模糊图；开启后背景透明度不生效",
+          settings.homeBackgroundBlur,
+        ) { checked -> onChange { it.copy(homeBackgroundBlur = checked) } }
+      }
+      item {
+        SettingsSwitch(
+          "用于音乐播放页",
+          "音乐页会使用无压暗的静态模糊版本",
+          settings.useHomeBackgroundForMusic,
+        ) { checked -> onChange { it.copy(useHomeBackgroundForMusic = checked) } }
+      }
+      if (!settings.homeBackgroundBlur) {
+        item {
+          SettingsSlider(
+            title = "首页背景透明度",
+            valueText = "${(settings.homeBackgroundTransparency * 100).roundToInt()}%",
+            value = settings.homeBackgroundTransparency,
+            range = 0f..1f,
+            steps = 9,
+          ) { next -> onChange { it.copy(homeBackgroundTransparency = next) } }
+        }
+      }
+    }
+    item {
+      BackgroundImageSetting(
+        title = "播放页背景图",
+        selected = settings.videoBackgroundUri.isNotBlank(),
+        onPick = { videoBackgroundPicker.launch(arrayOf("image/*")) },
+        onClear = { onChange { it.copy(videoBackgroundUri = "") } },
+      )
+    }
+    item {
+      SettingsSwitch(
+        "使用当前视频封面作为播放页背景",
+        "默认开启；番剧和分 P 会跟随当前播放集。设置自定义播放页背景图后不生效",
+        settings.useVideoCoverBackground,
+      ) { checked -> onChange { it.copy(useVideoCoverBackground = checked) } }
+    }
+    if (settings.videoBackgroundUri.isNotBlank()) {
+      item {
+        SettingsSwitch(
+          "模糊播放页背景图",
+          "预先生成静态模糊图；开启后背景透明度不生效",
+          settings.videoBackgroundBlur,
+        ) { checked -> onChange { it.copy(videoBackgroundBlur = checked) } }
+      }
+      if (!settings.videoBackgroundBlur) {
+        item {
+          SettingsSlider(
+            title = "播放页背景透明度",
+            valueText = "${(settings.videoBackgroundTransparency * 100).roundToInt()}%",
+            value = settings.videoBackgroundTransparency,
+            range = 0f..1f,
+            steps = 9,
+          ) { next -> onChange { it.copy(videoBackgroundTransparency = next) } }
+        }
+      }
+    }
     item {
       SettingsRadioGroup(
         title = "主题",
@@ -1016,6 +1262,15 @@ private fun SettingsPane(
         settings.glassEffects,
       ) {
         onChange { value -> value.copy(glassEffects = it) }
+      }
+    }
+    item {
+      SettingsSwitch(
+        "限制加载速度",
+        "打开后会在快速滑动时分批加载封面、头像和卡片渐变，可以减少掉帧，但内容显示会稍晚",
+        settings.limitImageLoadingSpeed,
+      ) {
+        onChange { value -> value.copy(limitImageLoadingSpeed = it) }
       }
     }
     item {
@@ -1065,8 +1320,8 @@ private fun SettingsPane(
         title = "弹幕显示区域",
         valueText = "${(settings.danmakuDisplayArea * 100).roundToInt()}%",
         value = settings.danmakuDisplayArea,
-        range = .25f..1f,
-        steps = 2,
+        range = .1f..1f,
+        steps = 8,
       ) { next ->
         onChange { it.copy(danmakuDisplayArea = next) }
       }
@@ -1120,14 +1375,25 @@ private fun SettingsPane(
         title = "弹幕速度",
         valueText = String.format(java.util.Locale.US, "%.1f×", settings.danmakuSpeed),
         value = settings.danmakuSpeed,
-        range = .6f..1.8f,
-        steps = 5,
+        range = .5f..2f,
+        steps = 14,
       ) { next ->
         onChange { it.copy(danmakuSpeed = next) }
       }
     }
 
     item { SettingsTitle("存储与关于") }
+    item {
+      SettingsAction(
+        title = "个人主页 IP 属地",
+        subtitle =
+          if (profileIpAuthorized) "已授权，可显示个人主页接口返回的公开 IP 属地"
+          else "授权后可显示个人主页接口返回的公开 IP 属地",
+        action = if (profileIpAuthorized) "已授权" else "去授权",
+        enabled = !profileIpAuthorized,
+        onClick = onAuthorizeProfileIp,
+      )
+    }
     item {
       SettingsAction(
         title = "播放与图片缓存",
@@ -1162,6 +1428,52 @@ private fun SettingsPane(
       }
     }
   }
+}
+
+@Composable
+private fun MusicFavoriteFolderPicker(
+  folders: List<FavoriteFolder>,
+  selectedFolderId: Long,
+  loading: Boolean,
+  onDismiss: () -> Unit,
+  onSelected: (Long) -> Unit,
+) {
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    title = { Text("选择音乐播放器收藏夹") },
+    text = {
+      if (loading && folders.isEmpty()) {
+        Box(Modifier.fillMaxWidth().height(180.dp), contentAlignment = Alignment.Center) {
+          CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp)
+        }
+      } else {
+        LazyColumn(
+          modifier = Modifier.fillMaxWidth().heightIn(max = 380.dp),
+          verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+          item(key = "default_music_folder") {
+            SettingsRadioRow(
+              selected = selectedFolderId <= 0L,
+              title = "音乐（默认）",
+              description = "每次进入时按名称精确查找“音乐”收藏夹；没有则提示创建",
+              onClick = { onSelected(0L) },
+            )
+          }
+          items(folders, key = FavoriteFolder::id) { folder ->
+            SettingsRadioRow(
+              selected = selectedFolderId == folder.id,
+              title = folder.title,
+              description =
+                "${folder.mediaCount} 个内容 · ${if (folder.isPublic) "公开" else "私密"}",
+              onClick = { onSelected(folder.id) },
+            )
+          }
+        }
+      }
+    },
+    confirmButton = {},
+    dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+  )
 }
 
 @Composable
@@ -1263,6 +1575,32 @@ private fun SettingsTitle(text: String) {
     color = MaterialTheme.colorScheme.onBackground,
     modifier = Modifier.padding(top = 6.dp),
   )
+}
+
+@Composable
+private fun BackgroundImageSetting(
+  title: String,
+  selected: Boolean,
+  onPick: () -> Unit,
+  onClear: () -> Unit,
+) {
+  Surface(shape = RoundedCornerShape(18.dp), tonalElevation = 1.dp) {
+    Row(
+      Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Column(Modifier.weight(1f)) {
+        Text(title, style = MaterialTheme.typography.titleMedium)
+        Text(
+          if (selected) "已选择；仅作为页面最底层背景" else "未选择，使用主题背景",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
+      if (selected) TextButton(onClick = onClear) { Text("清除") }
+      Button(onClick = onPick) { Text(if (selected) "更换" else "选择") }
+    }
+  }
 }
 
 @Composable
@@ -1381,7 +1719,7 @@ private fun BiliOneAboutCard() {
           color = MaterialTheme.colorScheme.primary,
         )
         Text(
-          "版本 ${BuildConfig.VERSION_NAME} · 缓存清理不会影响登录和设置",
+          "版本 ${BuildConfig.VERSION_NAME.removeSuffix("-debugrelease")} · 缓存清理不会影响登录和设置",
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -1967,7 +2305,7 @@ private fun HistoryTimeline(
     shape = RoundedCornerShape(22.dp),
     color = MaterialTheme.colorScheme.surface.copy(alpha = .94f),
     tonalElevation = 3.dp,
-    shadowElevation = 5.dp,
+    shadowElevation = 0.dp,
   ) {
     Crossfade(
       targetState = preciseMode,
@@ -2800,6 +3138,7 @@ private fun NativeMessagePane(
   var paneBounds by remember { mutableStateOf(Rect.Zero) }
   var imagePreview by remember { mutableStateOf<CommentImagePreviewSession?>(null) }
   var actionMessage by remember { mutableStateOf<AccountMessage?>(null) }
+  var selectableMessage by remember { mutableStateOf<AccountMessage?>(null) }
   val sessionListState = rememberLazyListState()
   val density = LocalDensity.current
   val imeVisible = WindowInsets.ime.getBottom(density) > 0
@@ -3057,7 +3396,7 @@ private fun NativeMessagePane(
               Surface(
                 shape = RoundedCornerShape(16.dp),
                 color = MaterialTheme.colorScheme.errorContainer,
-                shadowElevation = 5.dp,
+                shadowElevation = 0.dp,
               ) {
                 Text(
                   state.error.orEmpty(),
@@ -3116,9 +3455,44 @@ private fun NativeMessagePane(
                 actionMessage = null
               }
             ) { Text("复制") }
+            if (message.content.isNotBlank() || message.linkUrl.isNotBlank()) {
+              TextButton(
+                onClick = {
+                  actionMessage = null
+                  selectableMessage = message
+                }
+              ) { Text("选择文本") }
+            }
           }
         },
         confirmButton = { TextButton(onClick = { actionMessage = null }) { Text("取消") } },
+      )
+    }
+    selectableMessage?.let { message ->
+      val selectableText = message.content.ifBlank { message.linkUrl }
+      var selectionValue by remember(message.id, selectableText) {
+        mutableStateOf(TextFieldValue(selectableText))
+      }
+      AlertDialog(
+        onDismissRequest = { selectableMessage = null },
+        title = { Text("选择要复制的文本") },
+        text = {
+          // A single visual line makes character hit testing depend only on horizontal position.
+          // Vertical finger drift therefore cannot jump the selection to another wrapped line.
+          BasicTextField(
+            value = selectionValue,
+            onValueChange = { selectionValue = it.copy(text = selectableText) },
+            modifier = Modifier.fillMaxWidth(),
+            readOnly = true,
+            singleLine = true,
+            textStyle = MaterialTheme.typography.bodyLarge.copy(
+              color = MaterialTheme.colorScheme.onSurface,
+            ),
+          )
+        },
+        confirmButton = {
+          TextButton(onClick = { selectableMessage = null }) { Text("完成") }
+        },
       )
     }
   }
@@ -3147,6 +3521,7 @@ private fun PrivateMessageBubble(
     }
     if (message.withdrawn || message.isPrivateNotice) {
       Surface(
+        modifier = Modifier.combinedClickable(onClick = {}, onLongClick = onLongPress),
         shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .72f),
       ) {
@@ -3266,6 +3641,7 @@ private fun PrivateMessageBubble(
         BiliRichText(
           text = message.content,
           emotes = emotes,
+          onTextLongClick = onLongPress,
           modifier = Modifier.widthIn(max = 420.dp).padding(horizontal = 14.dp, vertical = 11.dp),
           style = MaterialTheme.typography.bodyLarge,
           maxLines = Int.MAX_VALUE,
@@ -3286,15 +3662,17 @@ private fun InteractionMessagePane(
   hiddenTargetMessageId: Long?,
   hiddenCommentAvatarRpid: Long?,
   emotePackages: List<BiliEmotePackage>,
+  hasMore: Boolean,
+  allowReply: Boolean,
+  emptyText: String,
 ) {
   val listState = rememberLazyListState()
   var replyingMessageId by remember { mutableStateOf<Long?>(null) }
   val shouldLoadMore by
-    remember(state.messages.size, state.messageReplyHasMore, state.messageAtHasMore) {
+    remember(state.messages.size, hasMore) {
       derivedStateOf {
         val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-        lastVisible >= state.messages.lastIndex - 3 &&
-          (state.messageReplyHasMore || state.messageAtHasMore)
+        lastVisible >= state.messages.lastIndex - 3 && hasMore
       }
     }
   LaunchedEffect(shouldLoadMore, state.messages.size) {
@@ -3303,7 +3681,7 @@ private fun InteractionMessagePane(
   if (state.messages.isEmpty() && !state.loading) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
       Text(
-        "(。・ω・。) 暂无回复或@消息",
+        emptyText,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
     }
@@ -3333,6 +3711,7 @@ private fun InteractionMessagePane(
         targetVisible = hiddenTargetMessageId != message.id,
         avatarVisible = hiddenCommentAvatarRpid != message.id,
         emotePackages = emotePackages,
+        replyEnabled = allowReply,
       )
     }
     if (state.messagesLoadingMore) {
@@ -3344,9 +3723,7 @@ private fun InteractionMessagePane(
           CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
         }
       }
-    } else if (
-      state.messages.isNotEmpty() && !state.messageReplyHasMore && !state.messageAtHasMore
-    ) {
+    } else if (state.messages.isNotEmpty() && !hasMore) {
       item(key = "interaction_end") {
         Text(
           "已经加载全部可查询记录",
@@ -3371,6 +3748,7 @@ private fun InteractionMessageCard(
   targetVisible: Boolean,
   avatarVisible: Boolean,
   emotePackages: List<BiliEmotePackage>,
+  replyEnabled: Boolean,
 ) {
   var replyText by remember(message.id) { mutableStateOf("") }
   val comment = remember(message) { message.toInteractionCommentItem() }
@@ -3394,6 +3772,7 @@ private fun InteractionMessageCard(
       onImagePreview = { _, _ -> },
       onReplies = { _, _ -> },
       onReply = { onToggleReply() },
+      replyEnabled = replyEnabled,
       avatarVisible = avatarVisible,
       onLinkedVideoClick = { _, bounds -> onTarget(bounds) },
       onLinkedArticleClick = { _, bounds -> onTarget(bounds) },
@@ -3402,7 +3781,7 @@ private fun InteractionMessageCard(
       linkedMediaVisible = targetVisible,
       linkedArticleCompactHeight = 82.dp,
     )
-    AnimatedVisibility(visible = replying) {
+    AnimatedVisibility(visible = replying && replyEnabled) {
       MessageComposer(
         value = replyText,
         onValueChange = { replyText = it },
@@ -3613,7 +3992,7 @@ private fun PrivateMessageComposer(
               modifier = Modifier.align(Alignment.TopEnd).offset(x = 6.dp, y = (-6).dp),
               shape = CircleShape,
               color = MaterialTheme.colorScheme.surface,
-              shadowElevation = 3.dp,
+              shadowElevation = 0.dp,
             ) {
               IconButton(onClick = { imageUri = null }, modifier = Modifier.size(26.dp)) {
                 Icon(Icons.Default.Close, contentDescription = "移除图片", modifier = Modifier.size(16.dp))

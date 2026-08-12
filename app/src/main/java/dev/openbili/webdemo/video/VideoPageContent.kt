@@ -14,6 +14,7 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -39,11 +40,9 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.Icon
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -56,7 +55,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
@@ -66,6 +64,9 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -74,12 +75,14 @@ import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import dev.openbili.webdemo.PlayerSubtitleState
 import dev.openbili.webdemo.api.ArticleItem
 import dev.openbili.webdemo.api.BiliEmote
 import dev.openbili.webdemo.api.BiliEmotePackage
@@ -105,7 +108,6 @@ import dev.openbili.webdemo.ui.PullRefreshContainer
 import dev.openbili.webdemo.ui.SessionPhase
 import dev.openbili.webdemo.ui.StableBoundsTracker
 import dev.openbili.webdemo.ui.TransitionPreparationBarrier
-import dev.openbili.webdemo.ui.TransitionPreparationResult
 import dev.openbili.webdemo.ui.TransitionReadySignal
 import dev.openbili.webdemo.ui.VideoShapeTokens
 import dev.openbili.webdemo.ui.hasUsableSize
@@ -140,6 +142,10 @@ internal fun VideoContent(
   commentSort: CommentSort,
   commentsRefreshing: Boolean,
   pageContentLoading: Boolean,
+  pageForegroundColor: Color = MaterialTheme.colorScheme.onBackground,
+  glassBackdrop: PlaybackPageGlassBackdrop = PlaybackPageGlassBackdrop(),
+  deferAuxiliaryContent: Boolean = false,
+  deferCommentContent: Boolean = deferAuxiliaryContent,
   currentAccountMid: Long,
   hiddenCommentAvatarRpid: Long?,
   commentNavigationTarget: CommentNavigationTarget?,
@@ -176,6 +182,7 @@ internal fun VideoContent(
   onAutoNext: () -> Unit,
   nextPlaybackTarget: PlaybackContinuationTarget?,
   showDanmaku: Boolean,
+  danmakuComposerEnabled: Boolean,
   onRecommendationClick: (FeedItem, Rect, Rect?, Boolean) -> Unit,
   onRecommendationLongClick: (FeedItem) -> Unit,
   onArticleClick: (ArticleItem, Rect) -> Unit,
@@ -191,6 +198,7 @@ internal fun VideoContent(
   onCoinVideo: (Int, Boolean) -> Unit,
   onFavoriteVideo: (List<Long>, List<Long>) -> Unit,
   onLoadFavoriteFolders: () -> Unit,
+  onLogin: () -> Unit,
   onOpenReplies: (CommentItem) -> Unit,
   onLoadMoreReplies: () -> Unit,
   onRefreshReplies: () -> Unit,
@@ -222,7 +230,10 @@ internal fun VideoContent(
   onSwitchQuality: (Int) -> Unit,
   premiumAudioVisible: Boolean,
   commentImageEnabled: Boolean,
+  onCommentImagePreview: (CommentImage, Rect) -> Unit,
   onSwitchPremiumAudio: (PremiumAudioMode) -> Unit,
+  subtitleState: PlayerSubtitleState,
+  onSelectSubtitle: (String?) -> Unit,
   playerView: @Composable (Modifier) -> Unit,
   settings: AppSettings,
   brightnessGestureEnabled: Boolean,
@@ -236,7 +247,6 @@ internal fun VideoContent(
   modifier: Modifier = Modifier,
   onPlayerBoundsChanged: (Rect) -> Unit,
 ) {
-  val contentScope = rememberCoroutineScope()
   val recommendationImageLoadPolicy = rememberListFeedImageLoadPolicy(recommendationListState)
   val commentImageLoadPolicy = rememberListFeedImageLoadPolicy(commentListState)
   var localGestureFeedback by remember { mutableStateOf<GestureIndicator?>(null) }
@@ -289,7 +299,6 @@ internal fun VideoContent(
       mutableStateOf<TransitionPreparationBarrier?>(null)
     }
   var contentBounds by remember(item.id) { mutableStateOf(Rect.Zero) }
-  var imagePreview by remember(item.id) { mutableStateOf<CommentImagePreviewSession?>(null) }
   var longCommentOverlay by remember(item.id) { mutableStateOf(false) }
   var resumePlaybackAfterLongComment by remember(item.id) { mutableStateOf(false) }
   LaunchedEffect(
@@ -316,8 +325,10 @@ internal fun VideoContent(
       onOpenReplies(commentItems[rootIndex])
     }
   }
-  var imagePreviewJob by remember(item.id) { mutableStateOf<kotlinx.coroutines.Job?>(null) }
   var showDanmakuComposer by remember(item.id) { mutableStateOf(false) }
+  LaunchedEffect(danmakuComposerEnabled) {
+    if (!danmakuComposerEnabled) showDanmakuComposer = false
+  }
   LaunchedEffect(showDanmakuComposer) {
     onDanmakuComposerVisibilityChanged(showDanmakuComposer)
   }
@@ -502,45 +513,9 @@ internal fun VideoContent(
       replyPreparation = null
     }
   }
-  fun openImagePreview(image: CommentImage, bounds: Rect) {
-    if (bounds.width <= 0f || bounds.height <= 0f || imagePreview != null) return
-    val session = CommentImagePreviewSession(image, bounds)
-    imagePreview = session
-    imagePreviewJob?.cancel()
-    imagePreviewJob = contentScope.launch {
-      session.progress.snapTo(0f)
-      val preparationResult = session.preparation.await()
-      if (preparationResult == TransitionPreparationResult.CANCELLED || imagePreview !== session)
-        return@launch
-      session.preparationTimedOut = preparationResult == TransitionPreparationResult.TIMED_OUT
-      session.phase = SessionPhase.READY
-      withFrameNanos {}
-      session.phase = SessionPhase.FLYING
-      session.progress.animateTo(
-        1f,
-        tween(if (settings.reduceMotion) 110 else 380, easing = FastOutSlowInEasing),
-      )
-      session.phase = SessionPhase.COMPLETED
-    }
-  }
-  fun closeImagePreview() {
-    val session = imagePreview ?: return
-    imagePreviewJob?.cancel()
-    session.preparation.cancel()
-    session.phase = SessionPhase.CANCELLED
-    imagePreviewJob = contentScope.launch {
-      session.progress.animateTo(
-        0f,
-        tween(if (settings.reduceMotion) 90 else 320, easing = FastOutSlowInEasing),
-      )
-      delay(16)
-      if (imagePreview === session) imagePreview = null
-    }
-  }
-  BackHandler(enabled = imagePreview != null, onBack = ::closeImagePreview)
   BackHandler(enabled = deleteCandidate != null) { deleteCandidate = null }
   BackHandler(
-    enabled = displayedReplyRoot != null && imagePreview == null && deleteCandidate == null
+    enabled = displayedReplyRoot != null && deleteCandidate == null
   ) {
     if (!replyClosing) replyDismissRequested = true
   }
@@ -737,6 +712,7 @@ internal fun VideoContent(
                     onDanmakuSmartBlockingChange = { value ->
                       onSettingsChange { it.copy(danmakuSmartBlocking = value) }
                     },
+                    danmakuComposerEnabled = danmakuComposerEnabled,
                     onComposeDanmaku = {
                       showDanmakuComposer = !showDanmakuComposer
                       if (showDanmakuComposer) onControlsVisible(true)
@@ -771,6 +747,12 @@ internal fun VideoContent(
                     onProgressScrubChanged = onProgressScrubChanged,
                     onSwitchQuality = onSwitchQuality,
                     onSwitchPremiumAudio = onSwitchPremiumAudio,
+                    subtitleState = subtitleState,
+                    onSelectSubtitle = onSelectSubtitle,
+                    subtitleStyle = settings.subtitleStyle,
+                    onSubtitleStyleChange = { style ->
+                      onSettingsChange { it.copy(subtitleStyle = style) }
+                    },
                     modifier = Modifier.fillMaxSize(),
                   )
                 }
@@ -836,7 +818,9 @@ internal fun VideoContent(
             }
           }
 
-          if (bangumiPage != null) {
+          if (deferAuxiliaryContent) {
+            Spacer(Modifier.weight(1f))
+          } else if (bangumiPage != null) {
             BangumiLowerPanel(
               page = bangumiPage,
               onPosterBoundsChanged = onBangumiPosterBoundsChanged,
@@ -844,6 +828,8 @@ internal fun VideoContent(
               onEpisodeSelected = onBangumiEpisodeSelected,
               onSeasonSelected = onBangumiSeasonSelected,
               panelSlideProgress = panelSlideProgress,
+              glassBackdrop = glassBackdrop,
+              foregroundColor = pageForegroundColor,
               modifier = Modifier.weight(1f),
             )
           } else {
@@ -864,6 +850,7 @@ internal fun VideoContent(
                   "推荐视频",
                   style = MaterialTheme.typography.titleMedium,
                   fontWeight = FontWeight.Bold,
+                  color = pageForegroundColor,
                   modifier = Modifier.padding(horizontal = 12.dp),
                 )
                 Spacer(Modifier.height(4.dp))
@@ -888,6 +875,7 @@ internal fun VideoContent(
                           cardWidth = pageLayout.recommendationCardWidth,
                           compactHorizontal = pageLayout.compactHorizontalRecommendations,
                           compactHeight = pageLayout.compactRecommendationCardHeight,
+                          showDuration = true,
                         )
                       }
                     }
@@ -910,9 +898,17 @@ internal fun VideoContent(
         }
       },
       secondary = {
-
-        // ── RIGHT: Comments ─────────────────────────────────────────────────
-        Box(
+        if (deferCommentContent) {
+          // Preserve the pane's real constraint-derived geometry for the player target without
+          // mounting or drawing comments while the shared cover owns the frame budget.
+          Box(
+            Modifier.fillMaxSize().onGloballyPositioned {
+              commentExpandedBounds = it.boundsInRoot()
+            }
+          )
+        } else {
+          // ── RIGHT: Comments ───────────────────────────────────────────────
+          Box(
           modifier =
             Modifier.fillMaxSize()
               .onGloballyPositioned { commentExpandedBounds = it.boundsInRoot() }
@@ -920,10 +916,12 @@ internal fun VideoContent(
               .graphicsLayer {
                 val progress = panelSlideProgress().coerceIn(0f, 1f)
                 alpha = progress
+                compositingStrategy = CompositingStrategy.ModulateAlpha
               }
               .pointerInput(item.id, displayedReplyRoot?.rpid) {
                 if (displayedReplyRoot != null) return@pointerInput
-                val thresholdPx = 24.dp.toPx()
+                val collapseThresholdPx = 24.dp.toPx()
+                val restoreThresholdPx = 32.dp.toPx()
                 awaitPointerEventScope {
                   var tracking = false
                   var handled = false
@@ -939,7 +937,9 @@ internal fun VideoContent(
                       }
                       tracking && change.pressed -> {
                         travelY += change.position.y - change.previousPosition.y
-                        if (!handled && kotlin.math.abs(travelY) >= thresholdPx) {
+                        val crossedThreshold =
+                          travelY <= -collapseThresholdPx || travelY >= restoreThresholdPx
+                        if (!handled && crossedThreshold) {
                           keepCommentChromeHiddenAtTop = travelY < 0f
                           commentChromeVisibility =
                             commentChromeAfterViewportSwipe(
@@ -1001,12 +1001,16 @@ internal fun VideoContent(
                   VideoActionPanel(
                     info = videoInfo,
                     engagement = videoEngagement,
+                    loggedIn = currentAccountMid > 0L,
                     favoriteFolders = favoriteFolders,
                     favoriteFoldersLoading = favoriteFoldersLoading,
                     onLike = onLikeVideo,
                     onCoin = onCoinVideo,
                     onFavorite = onFavoriteVideo,
                     onLoadFavoriteFolders = onLoadFavoriteFolders,
+                    onLogin = onLogin,
+                    glassBackdrop = glassBackdrop,
+                    foregroundColor = pageForegroundColor,
                   )
                   Spacer(Modifier.height(8.dp))
                 }
@@ -1039,6 +1043,7 @@ internal fun VideoContent(
                   commentCount = commentTotalCount,
                   commentSort = commentSort,
                   onCommentSort = onCommentSort,
+                  foregroundColor = pageForegroundColor,
                 )
               }
               Box(
@@ -1123,7 +1128,7 @@ internal fun VideoContent(
                                 onLikeComment,
                                 videoInfo?.uploaderMid ?: item.uploaderMid,
                                 onCommentProfileClick,
-                                ::openImagePreview,
+                                onCommentImagePreview,
                                 { comment, bounds ->
                                   replySourceBounds = bounds
                                   onOpenReplies(comment)
@@ -1196,6 +1201,7 @@ internal fun VideoContent(
                 expanded = floatingActionsExpanded,
                 info = videoInfo,
                 engagement = videoEngagement,
+                loggedIn = currentAccountMid > 0L,
                 favoriteFolders = favoriteFolders,
                 favoriteFoldersLoading = favoriteFoldersLoading,
                 reduceMotion = settings.reduceMotion,
@@ -1204,6 +1210,9 @@ internal fun VideoContent(
                 onCoin = onCoinVideo,
                 onFavorite = onFavoriteVideo,
                 onLoadFavoriteFolders = onLoadFavoriteFolders,
+                onLogin = onLogin,
+                glassBackdrop = glassBackdrop,
+                foregroundColor = pageForegroundColor,
                 modifier = Modifier.fillMaxSize().zIndex(25f),
               )
             }
@@ -1227,7 +1236,7 @@ internal fun VideoContent(
                 onLike = onLikeComment,
                 uploaderMid = currentUploaderMid,
                 onProfileClick = onCommentProfileClick,
-                onImagePreview = ::openImagePreview,
+                onImagePreview = onCommentImagePreview,
                 onReply = { root, target ->
                   replyTargetRoot = root
                   replyTarget = target
@@ -1271,6 +1280,7 @@ internal fun VideoContent(
               )
             }
           }
+        }
         }
       },
     )
@@ -1325,14 +1335,6 @@ internal fun VideoContent(
               .zIndex(20f)
               .onGloballyPositioned { commentComposerBounds = it.boundsInRoot() }
           },
-      )
-    }
-    imagePreview?.let { session ->
-      CommentImagePreviewOverlay(
-        session = session,
-        rootBounds = contentBounds,
-        onDismiss = ::closeImagePreview,
-        modifier = Modifier.fillMaxSize().zIndex(30f),
       )
     }
   }
@@ -1419,8 +1421,10 @@ internal fun commentChromeAfterObservedScroll(
     isAtTop -> CommentChromeVisibility()
     scrolling && direction > 0 ->
       CommentChromeVisibility(showDockedActions = false, showSortControls = false)
-    scrolling && direction < 0 ->
-      CommentChromeVisibility(showDockedActions = false, showSortControls = true)
+    // Downward list jitter, fling settling and overscroll rebound can all report a one-pixel
+    // reverse movement. Restoring is therefore owned by the viewport gesture detector, which
+    // requires a deliberate 32dp downward drag before changing the chrome.
+    scrolling && direction < 0 -> currentVisibility
     else -> currentVisibility
   }
 
@@ -1429,6 +1433,7 @@ private fun FloatingVideoActions(
   expanded: Boolean,
   info: VideoInfo?,
   engagement: VideoEngagement,
+  loggedIn: Boolean,
   favoriteFolders: List<FavoriteFolder>,
   favoriteFoldersLoading: Boolean,
   reduceMotion: Boolean,
@@ -1437,6 +1442,9 @@ private fun FloatingVideoActions(
   onCoin: (Int, Boolean) -> Unit,
   onFavorite: (List<Long>, List<Long>) -> Unit,
   onLoadFavoriteFolders: () -> Unit,
+  onLogin: () -> Unit,
+  glassBackdrop: PlaybackPageGlassBackdrop,
+  foregroundColor: Color,
   modifier: Modifier = Modifier,
 ) {
   val quietInteraction = remember { MutableInteractionSource() }
@@ -1470,25 +1478,54 @@ private fun FloatingVideoActions(
           animationSpec = tween(shortDuration),
         ) + fadeOut(tween(shortDuration)),
     ) {
-      Surface(
-        modifier = Modifier.width(40.dp).height(28.dp).clickable { onExpandedChange(true) },
-        shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = .94f),
-        contentColor = MaterialTheme.colorScheme.primary,
-        tonalElevation = 3.dp,
-        shadowElevation = 5.dp,
-        border =
-          androidx.compose.foundation.BorderStroke(
-            1.dp,
-            MaterialTheme.colorScheme.outlineVariant,
-          ),
+      Box(
+        modifier =
+          Modifier.size(48.dp)
+            .clickable(
+              onClickLabel = "展开点赞、投币和收藏",
+              role = Role.Button,
+              onClick = { onExpandedChange(true) },
+            ),
+        contentAlignment = Alignment.Center,
       ) {
-        Box(contentAlignment = Alignment.Center) {
-          Icon(
-            Icons.Default.ArrowDropDown,
-            contentDescription = "展开点赞、投币和收藏",
-            modifier = Modifier.size(19.dp),
-          )
+        PlaybackPageGlassSurface(
+          backdrop = glassBackdrop,
+          modifier = Modifier.width(44.dp).height(32.dp),
+          shape = RoundedCornerShape(16.dp),
+          containerColor = MaterialTheme.colorScheme.surface.copy(alpha = .20f),
+          fallbackColor = MaterialTheme.colorScheme.surface.copy(alpha = .90f),
+          border =
+            androidx.compose.foundation.BorderStroke(
+              1.dp,
+              MaterialTheme.colorScheme.outlineVariant,
+            ),
+        ) {
+          Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Canvas(Modifier.size(width = 20.dp, height = 12.dp)) {
+              val triangle =
+                Path().apply {
+                  // Keep every edge inset from the pixel boundary so antialiasing cannot clip
+                  // one side and make the small indicator appear tilted.
+                  moveTo(size.width * .12f, size.height * .18f)
+                  lineTo(size.width * .88f, size.height * .18f)
+                  lineTo(size.width * .5f, size.height * .84f)
+                  close()
+                }
+              val outlineColor =
+                if (foregroundColor.luminance() > .5f) Color.Black.copy(alpha = .58f)
+                else Color.White.copy(alpha = .74f)
+              drawPath(
+                path = triangle,
+                color = outlineColor,
+                style =
+                  androidx.compose.ui.graphics.drawscope.Stroke(
+                    width = 2.2.dp.toPx(),
+                    join = androidx.compose.ui.graphics.StrokeJoin.Round,
+                  ),
+              )
+              drawPath(triangle, foregroundColor)
+            }
+          }
         }
       }
     }
@@ -1520,12 +1557,16 @@ private fun FloatingVideoActions(
         VideoActionPanel(
           info = info,
           engagement = engagement,
+          loggedIn = loggedIn,
           favoriteFolders = favoriteFolders,
           favoriteFoldersLoading = favoriteFoldersLoading,
           onLike = onLike,
           onCoin = onCoin,
           onFavorite = onFavorite,
           onLoadFavoriteFolders = onLoadFavoriteFolders,
+          onLogin = onLogin,
+          glassBackdrop = glassBackdrop,
+          foregroundColor = foregroundColor,
         )
       }
     }
@@ -1537,10 +1578,12 @@ private fun CommentSectionHeader(
   commentCount: Long,
   commentSort: CommentSort,
   onCommentSort: (CommentSort) -> Unit,
+  foregroundColor: Color,
 ) {
   Surface(
-    color = MaterialTheme.colorScheme.background,
-    tonalElevation = 3.dp,
+    color = Color.Transparent,
+    contentColor = foregroundColor,
+    tonalElevation = 0.dp,
   ) {
     Row(
       modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
@@ -1554,6 +1597,7 @@ private fun CommentSectionHeader(
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
         modifier = Modifier.weight(1f),
+        color = foregroundColor,
       )
       CommentSortControls(
         commentSort = commentSort,
@@ -1573,6 +1617,13 @@ private fun CommentSortControls(
       selected = commentSort == sort,
       onClick = { onCommentSort(sort) },
       label = { Text(sort.label, maxLines = 1) },
+      colors =
+        FilterChipDefaults.filterChipColors(
+          containerColor = MaterialTheme.colorScheme.surface.copy(alpha = .30f),
+          labelColor = MaterialTheme.colorScheme.onBackground,
+          selectedContainerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = .76f),
+          selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        ),
     )
   }
 }

@@ -26,4 +26,12 @@ class PlaybackPageResolutionTest {
     assertEquals(102L, selected?.cid)
     assertEquals(75L, selected?.durationSeconds)
   }
+
+  @Test
+  fun retainedSecondPageCidRestoresSecondPage() {
+    val selected = resolvePlaybackPage(requestedPage = null, defaultCid = 102L, pages = pages)
+
+    assertEquals(102L, selected?.cid)
+    assertEquals("第二集", selected?.part)
+  }
 }

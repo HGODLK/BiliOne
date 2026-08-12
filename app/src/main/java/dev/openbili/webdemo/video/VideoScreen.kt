@@ -59,6 +59,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.ThumbUp
 import androidx.compose.material3.AlertDialog
@@ -90,17 +92,23 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.Layout
@@ -131,7 +139,9 @@ import androidx.core.view.WindowInsetsControllerCompat
 import coil3.compose.AsyncImage
 import dev.openbili.webdemo.BuildConfig
 import dev.openbili.webdemo.PlayerState
+import dev.openbili.webdemo.PlayerSubtitleState
 import dev.openbili.webdemo.WebViewConfigurator
+import dev.openbili.webdemo.subtitleStateForMedia
 import dev.openbili.webdemo.api.ArticleItem
 import dev.openbili.webdemo.api.BiliEmote
 import dev.openbili.webdemo.api.BiliEmotePackage
@@ -149,9 +159,16 @@ import dev.openbili.webdemo.api.PremiumAudioMode
 import dev.openbili.webdemo.api.VideoEngagement
 import dev.openbili.webdemo.api.VideoInfo
 import dev.openbili.webdemo.api.VideoPage
+import dev.openbili.webdemo.api.VideoStream
+import dev.openbili.webdemo.api.remainingVideoCoins
+import dev.openbili.webdemo.api.videoCoinLimit
 import dev.openbili.webdemo.feed.CoverImage
 import dev.openbili.webdemo.feed.FeedItem
 import dev.openbili.webdemo.feed.PlaybackCoverRegistry
+import dev.openbili.webdemo.offline.OfflineCacheChooserDialog
+import dev.openbili.webdemo.offline.OfflineMediaKind
+import dev.openbili.webdemo.offline.OfflineMediaManager
+import dev.openbili.webdemo.offline.OfflineMediaRequest
 import dev.openbili.webdemo.settings.AppSettings
 import dev.openbili.webdemo.ui.AvatarImage
 import dev.openbili.webdemo.ui.SessionPhase
@@ -160,8 +177,14 @@ import dev.openbili.webdemo.ui.TransitionPreparationBarrier
 import dev.openbili.webdemo.ui.TransitionPreparationResult
 import dev.openbili.webdemo.ui.TransitionReadySignal
 import dev.openbili.webdemo.ui.VideoCardGradient
+import dev.openbili.webdemo.ui.LocalVideoCardContentColors
 import dev.openbili.webdemo.ui.VideoShapeTokens
+import dev.openbili.webdemo.ui.CrossfadeBackgroundImage
+import dev.openbili.webdemo.ui.rememberBackgroundLuminanceProfile
 import dev.openbili.webdemo.ui.navigationBringIntoViewTarget
+import dev.openbili.webdemo.ui.rememberStaticBackgroundModel
+import dev.openbili.webdemo.ui.videoBackgroundForeground
+import dev.openbili.webdemo.ui.videoBackgroundScrim
 import dev.openbili.webdemo.ui.rememberNavigationBringIntoViewRequester
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -194,8 +217,12 @@ fun VideoScreen(
   favoriteFolders: List<FavoriteFolder>,
   favoriteFoldersLoading: Boolean,
   showCoverUntilFirstFrame: Boolean,
+  renderedVideoId: String?,
+  renderedVideoFrameCount: Int,
+  playbackCoverFrameGateReady: Boolean,
   onlineViewerText: String?,
   playerState: PlayerState,
+  subtitleState: PlayerSubtitleState,
   danmaku: List<DanmakuItem>,
   danmakuPaused: Boolean,
   commentItems: List<CommentItem>,
@@ -205,7 +232,10 @@ fun VideoScreen(
   commentSort: CommentSort,
   commentsRefreshing: Boolean,
   pageContentLoading: Boolean,
+  deferAuxiliaryContent: Boolean = false,
+  deferCommentContent: Boolean = deferAuxiliaryContent,
   currentAccountMid: Long,
+  currentAccountVipActive: Boolean = false,
   hiddenCommentAvatarRpid: Long?,
   commentNavigationTarget: CommentNavigationTarget?,
   replyRoot: CommentItem?,
@@ -227,10 +257,13 @@ fun VideoScreen(
   playbackEnded: Boolean,
   playbackSpeed: Float,
   showDanmaku: Boolean,
+  danmakuComposerEnabled: Boolean,
   isFullscreen: Boolean,
   isPlaybackPageForeground: Boolean = true,
   pageExitAlpha: () -> Float = { 1f },
+  retainBackgroundDuringPageExit: Boolean = false,
   playerControlsVisible: Boolean,
+  onPlayerControlsVisibilityChanged: (Boolean) -> Unit,
   settings: AppSettings,
   onSettingsChange: ((AppSettings) -> AppSettings) -> Unit,
   onFullscreenChanged: (Boolean) -> Unit,
@@ -289,6 +322,7 @@ fun VideoScreen(
   onMentionQuery: (String) -> Unit,
   onSwitchQuality: (Int) -> Unit,
   onSwitchPremiumAudio: (PremiumAudioMode) -> Unit,
+  onSelectSubtitle: (String?) -> Unit,
   playerView: @Composable (Modifier, Float, Boolean) -> Unit,
   panelSlideProgress: () -> Float = { 1f },
   bangumiPage: BangumiPageUi? = null,
@@ -317,9 +351,9 @@ fun VideoScreen(
     }
   }
 
-  DisposableEffect(view, isPlaying, settings.keepScreenOn) {
+  DisposableEffect(view, isPlaybackPageForeground, settings.keepScreenOn) {
     val previous = view.keepScreenOn
-    view.keepScreenOn = settings.keepScreenOn && isPlaying
+    view.keepScreenOn = settings.keepScreenOn && isPlaybackPageForeground
     onDispose { view.keepScreenOn = previous }
   }
 
@@ -343,6 +377,7 @@ fun VideoScreen(
   var showVideoSelection by remember(item.id) { mutableStateOf(false) }
   var showBangumiEpisodeSelection by remember { mutableStateOf(false) }
   var showBangumiInfo by remember(bangumiPage?.sourceCard?.id) { mutableStateOf(false) }
+  var showOfflineCacheChooser by remember(item.id) { mutableStateOf(false) }
   var resumeAfterBangumiInfo by
     remember(bangumiPage?.sourceCard?.id) { mutableStateOf(false) }
   val collectionEpisodes = videoInfo?.collection?.episodes.orEmpty()
@@ -355,6 +390,92 @@ fun VideoScreen(
       videoInfo?.pages?.getOrNull(currentPageIndex + 1)
     else null
   val nextBangumiEpisode = bangumiPage?.nextPlayableEpisode()
+  val cachePlayData = (playerState as? PlayerState.Ready)?.playData
+  val cacheStreams =
+    cachePlayData?.let { data ->
+      (listOfNotNull(data.streams.getOrNull(data.currentStreamIndex)) + data.streams)
+        .distinctBy(VideoStream::id)
+    }.orEmpty()
+  val offlineMediaManager = remember(view.context) { OfflineMediaManager.get(view.context) }
+  val cacheTargets =
+    remember(videoInfo, bangumiPage, currentAccountMid, currentCid) {
+      if (bangumiPage != null) {
+        val season = bangumiPage.season
+        bangumiPage.playableEpisodes().mapIndexed { index, episode ->
+          OfflineMediaRequest(
+            kind = OfflineMediaKind.BANGUMI,
+            accountMid = currentAccountMid,
+            title = season?.title ?: bangumiPage.sourceCard.title,
+            partTitle = episode.displayTitle(bangumiPage.sourceCard.kind),
+            coverUrl =
+              episode.coverUrl.ifBlank {
+                season?.coverUrl?.takeIf(String::isNotBlank) ?: bangumiPage.sourceCard.coverUrl
+              },
+            bvid = episode.bvid,
+            aid = episode.aid,
+            cid = episode.cid,
+            pageNumber = index + 1,
+            durationMs = episode.durationSeconds * 1_000L,
+            seasonId = season?.seasonId ?: 0L,
+            episodeId = episode.id,
+            qualityId = 0,
+            requiresVip = true,
+          )
+        }
+      } else {
+        videoInfo?.let { info ->
+          val collection = info.collection
+          if (collection != null && collection.episodes.isNotEmpty()) {
+            collection.episodes.mapIndexed { index, episode ->
+              OfflineMediaRequest(
+                kind = OfflineMediaKind.VIDEO,
+                accountMid = currentAccountMid,
+                title = collection.title.ifBlank { info.title },
+                partTitle = episode.title,
+                coverUrl = episode.coverUrl.ifBlank { info.coverUrl.ifBlank { item.coverUrl } },
+                bvid = episode.bvid,
+                aid = episode.aid,
+                cid = episode.cid,
+                pageNumber = index + 1,
+                durationMs = episode.durationSeconds * 1_000L,
+                collectionId = collection.id,
+                qualityId = 0,
+              )
+            }
+          } else {
+            info.pages.ifEmpty {
+              listOf(
+                VideoPage(
+                  page = 1,
+                  cid = info.cid,
+                  part = info.title,
+                  durationSeconds = info.durationSeconds,
+                )
+              )
+            }.map { page ->
+              OfflineMediaRequest(
+                kind = OfflineMediaKind.VIDEO,
+                accountMid = currentAccountMid,
+                title = info.title,
+                partTitle = page.part,
+                coverUrl = info.coverUrl.ifBlank { item.coverUrl },
+                bvid = info.bvid,
+                aid = info.aid,
+                cid = page.cid,
+                pageNumber = page.page,
+                durationMs = page.durationSeconds * 1_000L,
+                qualityId = 0,
+              )
+            }
+          }
+        }.orEmpty()
+      }
+    }
+  val existingOfflineTargetIds =
+    remember(showOfflineCacheChooser, cacheTargets) {
+      if (showOfflineCacheChooser) offlineMediaManager.entries().mapTo(mutableSetOf()) { it.id }
+      else emptySet()
+    }
   val nextPlaybackTarget =
     when {
       nextBangumiEpisode != null ->
@@ -409,6 +530,7 @@ fun VideoScreen(
   var controlsVisible by remember { mutableStateOf(true) }
   var controlsMenuOpen by remember { mutableStateOf(false) }
   var fullscreenProgressScrubbing by remember { mutableStateOf(false) }
+  var fullscreenControlsLocked by remember { mutableStateOf(false) }
   var embeddedDanmakuComposerVisible by remember { mutableStateOf(false) }
   var embeddedProgressScrubbing by remember { mutableStateOf(false) }
   var gestureFeedback by remember { mutableStateOf<GestureIndicator?>(null) }
@@ -416,8 +538,22 @@ fun VideoScreen(
   var gestureFeedbackVersion by remember { mutableIntStateOf(0) }
   var gestureSeekPreviewMs by remember { mutableStateOf<Long?>(null) }
   var showDanmakuComposer by remember(item.id) { mutableStateOf(false) }
+  LaunchedEffect(danmakuComposerEnabled) {
+    if (!danmakuComposerEnabled) showDanmakuComposer = false
+  }
+  val currentSubtitleState =
+    subtitleStateForMedia(
+      state = subtitleState,
+      mediaId = item.id,
+      cid = currentCid,
+      bvid = videoInfo?.bvid,
+      aid = videoInfo?.aid ?: 0L,
+    )
   val recommendationScrollStates = remember { mutableMapOf<String, LazyListState>() }
   val commentScrollStates = remember { mutableMapOf<String, LazyListState>() }
+  LaunchedEffect(controlsVisible) {
+    onPlayerControlsVisibilityChanged(controlsVisible)
+  }
   val commentChromeStates = remember { mutableMapOf<String, CommentChromeState>() }
   var commentNavigationSessionId by remember(item.id) { mutableStateOf(0L) }
   LaunchedEffect(commentNavigationTarget?.requestId) {
@@ -565,12 +701,66 @@ fun VideoScreen(
   var trackEmbeddedPlayerBounds by remember { mutableStateOf(true) }
   var embeddedGestureResetKey by remember { mutableIntStateOf(0) }
   var fullscreenForegroundBounds by remember { mutableStateOf(Rect.Zero) }
+  var videoScreenBounds by remember(item.id) { mutableStateOf(Rect.Zero) }
+  val pageBackgroundLayer = rememberGraphicsLayer()
+  var pageBackgroundBounds by remember(item.id) { mutableStateOf(Rect.Zero) }
+  var commentImagePreview by remember(item.id) {
+    mutableStateOf<CommentImagePreviewSession?>(null)
+  }
+  var commentImagePreviewJob by remember(item.id) {
+    mutableStateOf<kotlinx.coroutines.Job?>(null)
+  }
   val embeddedPlayerHandoffAlpha =
     remember {
       { (1f - fullscreenProgress.value).coerceIn(0f, 1f) }
     }
   val transitionScope = rememberCoroutineScope()
   val transitionDuration = if (settings.reduceMotion) 100 else 360
+  fun openCommentImagePreview(image: CommentImage, bounds: Rect) {
+    if (bounds.width <= 0f || bounds.height <= 0f || commentImagePreview != null) return
+    val session = CommentImagePreviewSession(image, bounds)
+    commentImagePreview = session
+    commentImagePreviewJob?.cancel()
+    commentImagePreviewJob = transitionScope.launch {
+      session.progress.snapTo(0f)
+      val preparationResult = session.preparation.await()
+      if (
+        preparationResult == TransitionPreparationResult.CANCELLED ||
+          commentImagePreview !== session
+      ) {
+        return@launch
+      }
+      session.preparationTimedOut = preparationResult == TransitionPreparationResult.TIMED_OUT
+      session.phase = SessionPhase.READY
+      withFrameNanos {}
+      session.phase = SessionPhase.FLYING
+      session.progress.animateTo(
+        1f,
+        tween(if (settings.reduceMotion) 110 else 380, easing = FastOutSlowInEasing),
+      )
+      session.phase = SessionPhase.COMPLETED
+    }
+  }
+  fun closeCommentImagePreview() {
+    val session = commentImagePreview ?: return
+    commentImagePreviewJob?.cancel()
+    session.preparation.cancel()
+    session.phase = SessionPhase.CANCELLED
+    commentImagePreviewJob = transitionScope.launch {
+      session.progress.animateTo(
+        0f,
+        tween(if (settings.reduceMotion) 90 else 320, easing = FastOutSlowInEasing),
+      )
+      kotlinx.coroutines.delay(16)
+      if (commentImagePreview === session) commentImagePreview = null
+    }
+  }
+  DisposableEffect(item.id) {
+    onDispose {
+      commentImagePreviewJob?.cancel()
+      commentImagePreview?.preparation?.cancel()
+    }
+  }
   val autoNextKey = nextPlaybackTarget?.key
   var autoNextSeconds by
     remember(item.id, currentCid, autoNextKey, settings.autoNextCountdownSeconds) {
@@ -650,6 +840,8 @@ fun VideoScreen(
     onFullscreenTransitionChanged(true)
     onFullscreenChanged(true)
     transitionScope.launch {
+      // Let the host hide the independent danmaku Surface before the boundary starts moving.
+      withFrameNanos {}
       fullscreenProgress.animateTo(
         1f,
         tween(transitionDuration, easing = FastOutSlowInEasing),
@@ -661,11 +853,14 @@ fun VideoScreen(
   fun exitFullscreenAnimated() {
     if (fullscreenTransitionBusy || !fullscreenLayerVisible) return
     showDanmakuComposer = false
+    fullscreenControlsLocked = false
     fullscreenTransitionBusy = true
     onFullscreenTransitionChanged(true)
     onFullscreenChanged(false)
     transitionScope.launch {
       showVideoInfo = false
+      // SurfaceView visibility is applied during traversal; animate only on the following frame.
+      withFrameNanos {}
       fullscreenProgress.animateTo(
         0f,
         tween(if (settings.reduceMotion) 100 else 300, easing = FastOutSlowInEasing),
@@ -715,6 +910,7 @@ fun VideoScreen(
     controlsVisible,
     controlsHeldVisible,
     isPlaying,
+    fullscreenControlsLocked,
     settings.controlsTimeoutSeconds,
   ) {
     if (controlsVisible && isPlaying && !controlsHeldVisible) {
@@ -799,11 +995,16 @@ fun VideoScreen(
       ) {
         if (playerState is PlayerState.Ready) {
           PlayerGestureLayer(
-              enabledBrightness = settings.brightnessGesture && !isHdrPlayback,
-              enabledVolume = settings.volumeGesture,
-              enabledSeek = settings.horizontalSeekGesture,
-              enabledFullscreenToggle = settings.twoFingerFullscreenGesture,
-              enabledTwoFingerSeek = settings.twoFingerSeekGesture,
+              enabledBrightness =
+                !fullscreenControlsLocked && settings.brightnessGesture && !isHdrPlayback,
+              enabledVolume = !fullscreenControlsLocked && settings.volumeGesture,
+              enabledSeek = !fullscreenControlsLocked && settings.horizontalSeekGesture,
+              enabledFullscreenToggle =
+                !fullscreenControlsLocked && settings.twoFingerFullscreenGesture,
+              enabledTwoFingerSeek =
+                !fullscreenControlsLocked && settings.twoFingerSeekGesture,
+              enabledDoubleTap = !fullscreenControlsLocked,
+              enabledTemporarySpeed = !fullscreenControlsLocked,
               positionProvider = playerPositionProvider,
               durationMs = durationMs,
               onSeek = onSeek,
@@ -823,8 +1024,10 @@ fun VideoScreen(
               },
               onSeekCancel = onSeekCancel,
               onToggleControls = { controlsVisible = !controlsVisible },
-              onDoubleTap = onTogglePlayPause,
-              onTemporarySpeedChanged = onTemporarySpeedChanged,
+              onDoubleTap = { if (!fullscreenControlsLocked) onTogglePlayPause() },
+              onTemporarySpeedChanged = { active ->
+                if (!active || !fullscreenControlsLocked) onTemporarySpeedChanged(active)
+              },
               isFullscreen = true,
               onFullscreenChanged = { enter -> if (!enter) exitFullscreenAnimated() },
               seekEdgeInset = 40.dp,
@@ -851,6 +1054,7 @@ fun VideoScreen(
           !isPlaying &&
             !isBuffering &&
             !playbackEnded &&
+            !fullscreenControlsLocked &&
             playerState is PlayerState.Ready &&
             fullscreenLayerVisible
         ) {
@@ -866,7 +1070,7 @@ fun VideoScreen(
           modifier = Modifier.fillMaxSize().zIndex(3f),
         ) {
           val readyState = playerState as? PlayerState.Ready
-          if (readyState != null)
+          if (readyState != null && !fullscreenControlsLocked)
             ModernPlayerControls(
               playData = readyState.playData,
               premiumAudioVisible = premiumAudioVisible,
@@ -886,6 +1090,7 @@ fun VideoScreen(
               onDanmakuSmartBlockingChange = { value ->
                 onSettingsChange { it.copy(danmakuSmartBlocking = value) }
               },
+              danmakuComposerEnabled = danmakuComposerEnabled,
               onComposeDanmaku = {
                 showDanmakuComposer = !showDanmakuComposer
                 if (showDanmakuComposer) controlsVisible = true
@@ -923,9 +1128,16 @@ fun VideoScreen(
               },
               onSwitchQuality = onSwitchQuality,
               onSwitchPremiumAudio = onSwitchPremiumAudio,
+              subtitleState = currentSubtitleState,
+              onSelectSubtitle = onSelectSubtitle,
+              subtitleStyle = settings.subtitleStyle,
+              onSubtitleStyleChange = { style ->
+                onSettingsChange { it.copy(subtitleStyle = style) }
+              },
               modifier = Modifier.fillMaxSize(),
               fullscreenTitle =
                 bangumiPage?.currentEpisodeTitle()?.takeIf(String::isNotBlank) ?: item.title,
+              onlineViewerText = onlineViewerText,
               onOpenSelection =
                 when {
                   (bangumiPage?.playableEpisodes()?.size ?: 0) > 1 -> {
@@ -938,6 +1150,40 @@ fun VideoScreen(
                   else -> null
                 },
             )
+        }
+        FadingVisibility(
+          visible =
+            controlsVisible && playerState is PlayerState.Ready && !playbackEnded,
+          modifier = Modifier.fillMaxSize().zIndex(4.5f),
+        ) {
+          Box(Modifier.fillMaxSize()) {
+            FullscreenLockButton(
+              locked = fullscreenControlsLocked,
+              onClick = {
+                fullscreenControlsLocked = !fullscreenControlsLocked
+                controlsMenuOpen = false
+                showDanmakuComposer = false
+                gestureSeekPreviewMs = null
+                gestureFeedbackVisible = false
+                onTemporarySpeedChanged(false)
+                controlsVisible = true
+              },
+              modifier = Modifier.align(Alignment.CenterStart).padding(start = 28.dp),
+            )
+            FullscreenLockButton(
+              locked = fullscreenControlsLocked,
+              onClick = {
+                fullscreenControlsLocked = !fullscreenControlsLocked
+                controlsMenuOpen = false
+                showDanmakuComposer = false
+                gestureSeekPreviewMs = null
+                gestureFeedbackVisible = false
+                onTemporarySpeedChanged(false)
+                controlsVisible = true
+              },
+              modifier = Modifier.align(Alignment.CenterEnd).padding(end = 28.dp),
+            )
+          }
         }
         AnimatedVisibility(
           visible = gestureFeedbackVisible,
@@ -1049,14 +1295,165 @@ fun VideoScreen(
   }
 
   val videoPageBackground = MaterialTheme.colorScheme.background
+  val hasCustomPageBackground = settings.videoBackgroundUri.isNotBlank()
+  val currentPlaybackCover =
+    resolvePlaybackCoverUrl(
+      currentEpisodeCoverUrl = bangumiPage?.currentEpisodeCoverUrl().orEmpty(),
+      videoInfo = videoInfo,
+      currentCid = currentCid,
+      fallbackItemCoverUrl = item.coverUrl,
+    )
+  // Keep the last presented artwork for the lifetime of the playback screen. Recommendation,
+  // collection, part and back-stack switches replace [item] in the same slot; keying this state
+  // by media id cleared the old background before the new renderer had produced a frame.
+  var committedPlaybackCoverBackground by remember { mutableStateOf("") }
+  LaunchedEffect(
+    hasCustomPageBackground,
+    settings.useVideoCoverBackground,
+    playbackCoverFrameGateReady,
+    renderedVideoId,
+    renderedVideoFrameCount,
+    currentPlaybackCover,
+  ) {
+    when {
+      hasCustomPageBackground || !settings.useVideoCoverBackground ->
+        committedPlaybackCoverBackground = ""
+      playbackCoverFrameGateReady &&
+        renderedVideoId == item.id &&
+        renderedVideoFrameCount >= 3 &&
+        currentPlaybackCover.isNotBlank() ->
+        committedPlaybackCoverBackground = currentPlaybackCover
+    }
+  }
+  val usePlaybackCoverBackground =
+    !hasCustomPageBackground &&
+      settings.useVideoCoverBackground &&
+      committedPlaybackCoverBackground.isNotBlank()
+  val effectivePageBackgroundSource =
+    if (hasCustomPageBackground) settings.videoBackgroundUri
+    else if (usePlaybackCoverBackground) committedPlaybackCoverBackground
+    else ""
+  val effectivePageBackgroundBlurred =
+    usePlaybackCoverBackground || (hasCustomPageBackground && settings.videoBackgroundBlur)
+  val hasImagePageBackground = effectivePageBackgroundSource.isNotBlank()
+  val darkVideoPage = videoPageBackground.luminance() < .5f
+  val backgroundModel =
+    rememberStaticBackgroundModel(
+      source = effectivePageBackgroundSource,
+      blurred = effectivePageBackgroundBlurred,
+    )
+  val backgroundRevealAlpha by
+    animateFloatAsState(
+      targetValue = if (backgroundModel != null) 1f else 0f,
+      animationSpec = tween(if (settings.reduceMotion) 90 else 560),
+      label = "videoBackgroundReveal",
+    )
+  val backgroundLuminance = rememberBackgroundLuminanceProfile(backgroundModel)
+  val targetHeaderForeground =
+    videoBackgroundForeground(
+      luminance = backgroundLuminance?.top,
+      darkMode = darkVideoPage,
+      fallback = MaterialTheme.colorScheme.onBackground,
+    )
+  val pageHeaderForeground by
+    animateColorAsState(
+      targetValue = targetHeaderForeground,
+      animationSpec = tween(if (settings.reduceMotion) 90 else 220),
+      label = "videoHeaderForeground",
+    )
+  val pageContentForeground by
+    animateColorAsState(
+      targetValue =
+        videoBackgroundForeground(
+          luminance = backgroundLuminance?.middle,
+          darkMode = darkVideoPage,
+          fallback = MaterialTheme.colorScheme.onBackground,
+        ),
+      animationSpec = tween(if (settings.reduceMotion) 90 else 220),
+      label = "videoContentForeground",
+    )
+  val backgroundScrim = videoBackgroundScrim(backgroundLuminance, darkVideoPage)
   val embeddedPortalRadiusPx = with(LocalDensity.current) { VideoShapeTokens.CornerRadius.toPx() }
-  Scaffold(
-    modifier =
-      Modifier.graphicsLayer { alpha = pageExitAlpha().coerceIn(0f, 1f) }
-        .drawBehind {
+  Box(
+    Modifier.fillMaxSize()
+      .onGloballyPositioned { videoScreenBounds = it.boundsInRoot() }
+      .graphicsLayer {
+        alpha = if (retainBackgroundDuringPageExit) 1f else pageExitAlpha().coerceIn(0f, 1f)
+      }
+  ) {
+  Box(
+    Modifier.matchParentSize()
+      .onGloballyPositioned { pageBackgroundBounds = it.boundsInRoot() }
+      .drawWithContent {
+        pageBackgroundLayer.record { this@drawWithContent.drawContent() }
+        drawLayer(pageBackgroundLayer)
+      }
+  ) {
+    Box(Modifier.matchParentSize().drawBehind {
+        val bounds = embeddedPlayerBounds
+        if (!fullscreenLayerVisible && bounds.width > 0f && bounds.height > 0f) {
+          val backgroundOutsidePlayer =
+            Path().apply {
+              fillType = PathFillType.EvenOdd
+              addRect(Rect(0f, 0f, size.width, size.height))
+              addRoundRect(
+                RoundRect(
+                  bounds.left,
+                  bounds.top,
+                  bounds.right,
+                  bounds.bottom,
+                  embeddedPortalRadiusPx,
+                  embeddedPortalRadiusPx,
+                )
+              )
+            }
+          drawPath(backgroundOutsidePlayer, videoPageBackground)
+        } else {
+          drawRect(videoPageBackground)
+        }
+      })
+    if (hasImagePageBackground && backgroundModel != null) {
+      CrossfadeBackgroundImage(
+        model = backgroundModel,
+        modifier =
+          Modifier.matchParentSize()
+            .drawWithContent {
+              val bounds = embeddedPlayerBounds
+              if (!fullscreenLayerVisible && bounds.width > 0f && bounds.height > 0f) {
+                val imageOutsidePlayer =
+                  Path().apply {
+                    fillType = PathFillType.EvenOdd
+                    addRect(Rect(0f, 0f, size.width, size.height))
+                    addRoundRect(
+                      RoundRect(
+                        bounds.left,
+                        bounds.top,
+                        bounds.right,
+                        bounds.bottom,
+                        embeddedPortalRadiusPx,
+                        embeddedPortalRadiusPx,
+                      )
+                    )
+                  }
+                clipPath(imageOutsidePlayer) { this@drawWithContent.drawContent() }
+              } else {
+                drawContent()
+              }
+            }
+            .graphicsLayer {
+              alpha =
+                backgroundRevealAlpha *
+                  if (effectivePageBackgroundBlurred) 1f
+                  else 1f - settings.videoBackgroundTransparency.coerceIn(0f, 1f)
+            },
+        contentScale = ContentScale.Crop,
+        transitionMillis = if (settings.reduceMotion) 90 else 520,
+      )
+      Box(
+        Modifier.matchParentSize().graphicsLayer { alpha = backgroundRevealAlpha }.drawBehind {
           val bounds = embeddedPlayerBounds
           if (!fullscreenLayerVisible && bounds.width > 0f && bounds.height > 0f) {
-            val backgroundOutsidePlayer =
+            val scrimOutsidePlayer =
               Path().apply {
                 fillType = PathFillType.EvenOdd
                 addRect(Rect(0f, 0f, size.width, size.height))
@@ -1071,9 +1468,23 @@ fun VideoScreen(
                   )
                 )
               }
-            drawPath(backgroundOutsidePlayer, videoPageBackground)
-          } else drawRect(videoPageBackground)
-        },
+            clipPath(scrimOutsidePlayer) { drawRect(backgroundScrim) }
+          } else {
+            drawRect(backgroundScrim)
+          }
+        }
+      )
+    }
+  }
+  val playbackPageGlass = PlaybackPageGlassBackdrop(pageBackgroundLayer, pageBackgroundBounds)
+  Scaffold(
+    modifier =
+      Modifier.fillMaxSize().graphicsLayer {
+        // A child-to-parent return reuses this VideoScreen slot. Fade only the child chrome and
+        // keep its already-decoded backdrop visible until the parent is restored; otherwise the
+        // home layer underneath is exposed as a one-frame white flash.
+        alpha = if (retainBackgroundDuringPageExit) pageExitAlpha().coerceIn(0f, 1f) else 1f
+      },
     containerColor = Color.Transparent,
     topBar = {
       if (bangumiPage != null) {
@@ -1084,6 +1495,9 @@ fun VideoScreen(
           onFollow = onBangumiFollow,
           onRate = onBangumiRate,
           panelSlideProgress = panelSlideProgress,
+          showDeviceStatus = settings.showPlaybackDeviceStatus,
+          foregroundColor = pageHeaderForeground,
+          glassBackdrop = playbackPageGlass,
         )
       } else {
         VideoHeader(
@@ -1115,6 +1529,9 @@ fun VideoScreen(
           onLogin = { leaveHdrPlaybackPage(); onLogin() },
           onShowInfo = { showVideoInfo = true },
           panelSlideProgress = panelSlideProgress,
+          showDeviceStatus = settings.showPlaybackDeviceStatus,
+          foregroundColor = pageHeaderForeground,
+          glassBackdrop = playbackPageGlass,
         )
       }
     },
@@ -1142,6 +1559,10 @@ fun VideoScreen(
           commentSort = commentSort,
           commentsRefreshing = commentsRefreshing,
           pageContentLoading = pageContentLoading,
+          pageForegroundColor = pageContentForeground,
+          glassBackdrop = playbackPageGlass,
+          deferAuxiliaryContent = deferAuxiliaryContent,
+          deferCommentContent = deferCommentContent,
           currentAccountMid = currentAccountMid,
           hiddenCommentAvatarRpid = hiddenCommentAvatarRpid,
           commentNavigationTarget = commentNavigationTarget,
@@ -1187,6 +1608,10 @@ fun VideoScreen(
           onCoinVideo = onCoinVideo,
           onFavoriteVideo = onFavoriteVideo,
           onLoadFavoriteFolders = onLoadFavoriteFolders,
+          onLogin = {
+            leaveHdrPlaybackPage()
+            onLogin()
+          },
           onOpenReplies = onOpenReplies,
           onLoadMoreReplies = onLoadMoreReplies,
           onRefreshReplies = onRefreshReplies,
@@ -1230,10 +1655,14 @@ fun VideoScreen(
           onSwitchQuality = onSwitchQuality,
           premiumAudioVisible = premiumAudioVisible,
           commentImageEnabled = commentImageEnabled,
+          onCommentImagePreview = ::openCommentImagePreview,
           onSwitchPremiumAudio = onSwitchPremiumAudio,
+          subtitleState = currentSubtitleState,
+          onSelectSubtitle = onSelectSubtitle,
           currentPositionMs = currentPositionMs,
           playerPositionProvider = playerPositionProvider,
           showDanmaku = showDanmaku,
+          danmakuComposerEnabled = danmakuComposerEnabled,
           onRecommendationClick = ::openRecommendation,
           onRecommendationLongClick = onRecommendationLongClick,
           onArticleClick = { article, bounds ->
@@ -1269,7 +1698,7 @@ fun VideoScreen(
             modifier = Modifier.align(Alignment.Center),
             shape = RoundedCornerShape(24.dp),
             tonalElevation = 8.dp,
-            shadowElevation = 12.dp,
+            shadowElevation = 0.dp,
           ) {
             PlayerErrorActions(
               error = playerState,
@@ -1299,6 +1728,11 @@ fun VideoScreen(
       onlineViewerText = onlineViewerText,
       description = description,
       onDismiss = { showVideoInfo = false },
+      onCacheClick =
+        {
+          showVideoInfo = false
+          showOfflineCacheChooser = true
+        }.takeUnless { OfflineMediaManager.isOfflineUri(item.videoUrl) },
     )
   }
   if (showVideoSelection && videoInfo != null && bangumiPage == null) {
@@ -1334,6 +1768,62 @@ fun VideoScreen(
         if (resumeAfterBangumiInfo) onTogglePlayPause()
         resumeAfterBangumiInfo = false
       },
+      onCacheClick = {
+        showBangumiInfo = false
+        showOfflineCacheChooser = true
+      },
+    )
+  }
+  if (showOfflineCacheChooser) {
+    OfflineCacheChooserDialog(
+      title = bangumiPage?.season?.title ?: videoInfo?.title ?: item.title,
+      targets = cacheTargets,
+      streams = cacheStreams,
+      existingTargetIds = existingOfflineTargetIds,
+      premiumAvailable = currentAccountVipActive,
+      onDismiss = {
+        showOfflineCacheChooser = false
+        if (resumeAfterBangumiInfo) onTogglePlayPause()
+        resumeAfterBangumiInfo = false
+      },
+      onConfirm = { requests ->
+        val added = requests.count(offlineMediaManager::enqueue)
+        val message =
+          if (added > 0) "已加入 $added 个缓存任务"
+          else "所选内容已经在缓存列表中"
+        Toast.makeText(view.context, message, Toast.LENGTH_SHORT).show()
+        showOfflineCacheChooser = false
+        if (resumeAfterBangumiInfo) onTogglePlayPause()
+        resumeAfterBangumiInfo = false
+      },
+    )
+  }
+  commentImagePreview?.let { session ->
+    CommentImagePreviewOverlay(
+      session = session,
+      rootBounds = videoScreenBounds,
+      onDismiss = ::closeCommentImagePreview,
+      modifier = Modifier.fillMaxSize().zIndex(100f),
+    )
+  }
+  }
+}
+
+@Composable
+private fun FullscreenLockButton(
+  locked: Boolean,
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  androidx.compose.material3.IconButton(
+    onClick = onClick,
+    modifier = modifier.size(48.dp),
+  ) {
+    Icon(
+      imageVector = if (locked) Icons.Default.Lock else Icons.Default.LockOpen,
+      contentDescription = if (locked) "解锁播放器控制" else "锁定播放器控制",
+      modifier = Modifier.size(24.dp),
+      tint = Color.White,
     )
   }
 }
@@ -2081,21 +2571,58 @@ internal fun CommentLoadingSkeleton(modifier: Modifier = Modifier) {
   }
 }
 
+internal data class VideoActionPanelGlassColors(
+  val container: Color,
+  val fallback: Color,
+  val border: Color,
+)
+
+internal fun videoActionPanelGlassColors(foregroundColor: Color): VideoActionPanelGlassColors {
+  val usesLightForeground = foregroundColor.luminance() >= .5f
+  return if (usesLightForeground) {
+    VideoActionPanelGlassColors(
+      container = Color.Black.copy(alpha = .58f),
+      fallback = Color.Black.copy(alpha = .76f),
+      border = Color.White.copy(alpha = .30f),
+    )
+  } else {
+    VideoActionPanelGlassColors(
+      container = Color.White.copy(alpha = .72f),
+      fallback = Color.White.copy(alpha = .92f),
+      border = Color.Black.copy(alpha = .22f),
+    )
+  }
+}
+
 @Composable
 internal fun VideoActionPanel(
   info: VideoInfo?,
   engagement: VideoEngagement,
+  loggedIn: Boolean,
   favoriteFolders: List<FavoriteFolder>,
   favoriteFoldersLoading: Boolean,
   onLike: (Boolean) -> Unit,
   onCoin: (Int, Boolean) -> Unit,
   onFavorite: (List<Long>, List<Long>) -> Unit,
   onLoadFavoriteFolders: () -> Unit,
+  onLogin: () -> Unit,
+  glassBackdrop: PlaybackPageGlassBackdrop = PlaybackPageGlassBackdrop(),
+  foregroundColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
   modifier: Modifier = Modifier,
 ) {
   var showCoinDialog by remember(info?.aid) { mutableStateOf(false) }
   var showFavoriteDialog by remember(info?.aid) { mutableStateOf(false) }
+  var favoriteDefaultPending by remember(info?.aid) { mutableStateOf(false) }
   var showCoinBurst by remember(info?.aid) { mutableStateOf(false) }
+  val orderedFavoriteFolders =
+    remember(favoriteFolders) { prioritizeVideoFavoriteFolders(favoriteFolders) }
+  val glassColors = remember(foregroundColor) { videoActionPanelGlassColors(foregroundColor) }
+  LaunchedEffect(favoriteDefaultPending, favoriteFoldersLoading, orderedFavoriteFolders) {
+    if (!favoriteDefaultPending || favoriteFoldersLoading) return@LaunchedEffect
+    val defaultFolder = orderedFavoriteFolders.firstOrNull() ?: return@LaunchedEffect
+    favoriteDefaultPending = false
+    if (!defaultFolder.favorited) onFavorite(listOf(defaultFolder.id), emptyList())
+  }
   LaunchedEffect(showCoinBurst) {
     if (showCoinBurst) {
       delay(720)
@@ -2110,14 +2637,17 @@ internal fun VideoActionPanel(
       remember(density) {
         AlignedCardPopupPositionProvider(with(density) { 8.dp.roundToPx() })
       }
-    Surface(
+    PlaybackPageGlassSurface(
+      backdrop = glassBackdrop,
       modifier = Modifier.fillMaxWidth(),
       shape = VideoShapeTokens.Card,
-      color = MaterialTheme.colorScheme.surface,
-      tonalElevation = 2.dp,
-      shadowElevation = 4.dp,
+      containerColor = glassColors.container,
+      fallbackColor = glassColors.fallback,
       border =
-        androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        androidx.compose.foundation.BorderStroke(
+          1.dp,
+          glassColors.border,
+        ),
     ) {
       Row(
         modifier = Modifier.fillMaxWidth().padding(8.dp),
@@ -2133,10 +2663,14 @@ internal fun VideoActionPanel(
           },
           label = "点赞",
           count = info?.likeCount,
-          active = engagement.liked,
-          onClick = { onLike(!engagement.liked) },
-          enabled = info?.aid?.let { it > 0 } == true,
+          active = engagement.loaded && engagement.liked,
+          onClick = {
+            if (loggedIn) onLike(!engagement.liked) else onLogin()
+          },
+          enabled =
+            info?.aid?.let { it > 0 } == true && (!loggedIn || engagement.loaded),
           compact = compactActions,
+          foregroundColor = foregroundColor,
           modifier = Modifier.weight(1f),
         )
         Box(Modifier.weight(1f)) {
@@ -2149,10 +2683,14 @@ internal fun VideoActionPanel(
             },
             label = "投币",
             count = info?.coinCount,
-            active = engagement.coins > 0,
-            onClick = { showCoinDialog = true },
-            enabled = info?.aid?.let { it > 0 } == true,
+            active = engagement.loaded && engagement.coins > 0,
+            onClick = {
+              if (loggedIn) showCoinDialog = true else onLogin()
+            },
+            enabled =
+              info?.aid?.let { it > 0 } == true && (!loggedIn || engagement.loaded),
             compact = compactActions,
+            foregroundColor = foregroundColor,
             modifier = Modifier.fillMaxWidth(),
           )
           if (showCoinBurst) CoinBurst(Modifier.align(Alignment.Center))
@@ -2167,13 +2705,28 @@ internal fun VideoActionPanel(
           },
           label = "收藏",
           count = info?.favoriteCount,
-          active = engagement.favorited,
+          active = engagement.loaded && engagement.favorited,
           onClick = {
-            showFavoriteDialog = true
-            onLoadFavoriteFolders()
+            if (!loggedIn) {
+              onLogin()
+            } else {
+              showFavoriteDialog = true
+              val defaultFolder = orderedFavoriteFolders.firstOrNull()
+              if (defaultFolder == null) {
+                favoriteDefaultPending = true
+                onLoadFavoriteFolders()
+              } else {
+                favoriteDefaultPending = false
+                if (!defaultFolder.favorited) {
+                  onFavorite(listOf(defaultFolder.id), emptyList())
+                }
+              }
+            }
           },
-          enabled = info?.aid?.let { it > 0 } == true,
+          enabled =
+            info?.aid?.let { it > 0 } == true && (!loggedIn || engagement.loaded),
           compact = compactActions,
+          foregroundColor = foregroundColor,
           modifier = Modifier.weight(1f),
         )
       }
@@ -2182,6 +2735,7 @@ internal fun VideoActionPanel(
       CoinDialog(
         alreadyCoined = engagement.coins,
         alreadyLiked = engagement.liked,
+        copyright = info?.copyright ?: 0,
         width = alignedMenuWidth,
         positionProvider = menuPositionProvider,
         onDismiss = { showCoinDialog = false },
@@ -2193,7 +2747,7 @@ internal fun VideoActionPanel(
     }
     if (showFavoriteDialog) {
       FavoriteFolderDialog(
-        folders = favoriteFolders,
+        folders = orderedFavoriteFolders,
         loading = favoriteFoldersLoading,
         width = alignedMenuWidth,
         positionProvider = menuPositionProvider,
@@ -2202,6 +2756,24 @@ internal fun VideoActionPanel(
           onFavorite(addIds, removeIds)
         },
       )
+    }
+  }
+}
+
+internal fun prioritizeVideoFavoriteFolders(
+  folders: List<FavoriteFolder>
+): List<FavoriteFolder> {
+  if (folders.size <= 1) return folders
+  val defaultFolder =
+    folders.firstOrNull { it.title.trim() == "默认收藏夹" }
+      ?: folders.first()
+  val musicFolder =
+    folders.firstOrNull { it.id != defaultFolder.id && it.title.trim() == "音乐" }
+  return buildList(folders.size) {
+    add(defaultFolder)
+    musicFolder?.let(::add)
+    folders.forEach { folder ->
+      if (folder.id != defaultFolder.id && folder.id != musicFolder?.id) add(folder)
     }
   }
 }
@@ -2236,12 +2808,13 @@ private fun VideoActionButton(
   onClick: () -> Unit,
   enabled: Boolean,
   compact: Boolean,
+  foregroundColor: Color,
   modifier: Modifier = Modifier,
 ) {
   val actionPink = Color(0xFFFF5C8A)
   val iconColor by
     animateColorAsState(
-      targetValue = if (active) actionPink else MaterialTheme.colorScheme.onSurfaceVariant,
+      targetValue = if (active) actionPink else foregroundColor.copy(alpha = .86f),
       label = "videoActionIconColor",
     )
   Surface(
@@ -2250,8 +2823,10 @@ private fun VideoActionButton(
         .heightIn(min = if (compact) 72.dp else 68.dp)
         .clickable(enabled = enabled, onClick = onClick),
     shape = RoundedCornerShape(14.dp),
-    color = if (active) actionPink.copy(alpha = .13f) else MaterialTheme.colorScheme.surfaceVariant,
-    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+    color =
+      if (active) actionPink.copy(alpha = .13f)
+      else foregroundColor.copy(alpha = .08f),
+    contentColor = foregroundColor,
   ) {
     Column(
       modifier = Modifier.padding(horizontal = 6.dp, vertical = 7.dp),
@@ -2357,13 +2932,18 @@ private fun CoinBurst(modifier: Modifier = Modifier) {
 private fun CoinDialog(
   alreadyCoined: Int,
   alreadyLiked: Boolean,
+  copyright: Int,
   width: Dp,
   positionProvider: PopupPositionProvider,
   onDismiss: () -> Unit,
   onConfirm: (Int, Boolean) -> Unit,
 ) {
-  val remaining = (2 - alreadyCoined).coerceAtLeast(0)
-  var count by remember(alreadyCoined) { mutableIntStateOf(remaining.coerceIn(1, 2)) }
+  val coinLimit = videoCoinLimit(copyright)
+  val remaining = remainingVideoCoins(copyright, alreadyCoined)
+  var count by
+    remember(alreadyCoined, coinLimit) {
+      mutableIntStateOf(remaining.coerceIn(1, coinLimit))
+    }
   var alsoLike by remember(alreadyLiked) { mutableStateOf(!alreadyLiked) }
   var exiting by remember { mutableStateOf(false) }
   var pendingConfirm by remember { mutableStateOf<Pair<Int, Boolean>?>(null) }
@@ -2407,7 +2987,11 @@ private fun CoinDialog(
       ) {
         Text("给视频投币", style = MaterialTheme.typography.titleLarge)
         Text(
-          if (remaining == 0) "这个视频已经投满 2 枚硬币" else "本视频已投 $alreadyCoined 枚，还可以投 $remaining 枚",
+          if (remaining == 0) {
+            "这个视频已经投满 $coinLimit 枚硬币"
+          } else {
+            "本视频已投 $alreadyCoined 枚，还可以投 $remaining 枚"
+          },
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         if (remaining > 0) {
@@ -2647,6 +3231,7 @@ internal fun RecommendationCard(
   cardWidth: Dp = 232.dp,
   compactHorizontal: Boolean = false,
   compactHeight: Dp = 68.dp,
+  showDuration: Boolean = false,
 ) {
   var coverBounds by remember { mutableStateOf(Rect.Zero) }
   val bringIntoViewRequester = rememberNavigationBringIntoViewRequester()
@@ -2661,6 +3246,7 @@ internal fun RecommendationCard(
     )
   val compact = cardWidth < 210.dp
   val compactCoverWidth = (compactHeight - 12.dp) * (16f / 9f)
+  val duration = item.duration?.takeIf(String::isNotBlank)
   Surface(
     modifier =
       Modifier.width(cardWidth)
@@ -2686,7 +3272,7 @@ internal fun RecommendationCard(
     color = if (overlayStyle) Color(0xFF171A1F) else MaterialTheme.colorScheme.surface,
     contentColor = if (overlayStyle) Color.White else MaterialTheme.colorScheme.onSurface,
     tonalElevation = if (overlayStyle) 0.dp else 2.dp,
-    shadowElevation = if (overlayStyle) 0.dp else if (pressed) 0.dp else 2.dp,
+    shadowElevation = 0.dp,
     border =
       if (overlayStyle) null
       else
@@ -2701,6 +3287,7 @@ internal fun RecommendationCard(
       modifier = Modifier.fillMaxWidth(),
       overlayStyle = overlayStyle,
     ) {
+      val cardContentColors = LocalVideoCardContentColors.current
       if (compactHorizontal) {
         Row(
           Modifier.fillMaxSize().padding(6.dp),
@@ -2737,18 +3324,38 @@ internal fun RecommendationCard(
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
               if (!item.uploaderFace.isNullOrBlank()) {
-                RecommendationAvatar(item.uploaderFace, 18.dp, overlayStyle, item.id)
+                if (showDuration && duration != null) {
+                  Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    RecommendationAvatar(item.uploaderFace, 18.dp, item.id)
+                    Text(
+                      text = duration,
+                      style = MaterialTheme.typography.labelSmall,
+                      color = cardContentColors.secondary,
+                      maxLines = 1,
+                    )
+                  }
+                } else {
+                  RecommendationAvatar(item.uploaderFace, 18.dp, item.id)
+                }
                 Spacer(Modifier.width(5.dp))
               }
               Text(
                 text = item.uploader.orEmpty(),
+                modifier = Modifier.weight(1f),
                 style = MaterialTheme.typography.labelSmall,
-                color =
-                  if (overlayStyle) Color.White.copy(alpha = .74f)
-                  else MaterialTheme.colorScheme.onSurfaceVariant,
+                color = cardContentColors.secondary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
               )
+              if (showDuration && duration != null && item.uploaderFace.isNullOrBlank()) {
+                Spacer(Modifier.width(6.dp))
+                Text(
+                  text = duration,
+                  style = MaterialTheme.typography.labelSmall,
+                  color = cardContentColors.secondary,
+                  maxLines = 1,
+                )
+              }
             }
           }
         }
@@ -2795,19 +3402,26 @@ internal fun RecommendationCard(
           ) {
             if (!item.uploaderFace.isNullOrBlank()) {
               val avatarSize = if (compact) 22.dp else 26.dp
-              RecommendationAvatar(item.uploaderFace, avatarSize, overlayStyle, item.id)
+              RecommendationAvatar(item.uploaderFace, avatarSize, item.id)
               Spacer(Modifier.width(if (compact) 7.dp else 8.dp))
             }
             Text(
               text = item.uploader.orEmpty(),
               modifier = Modifier.weight(1f),
               style = MaterialTheme.typography.labelSmall,
-              color =
-                if (overlayStyle) Color.White.copy(alpha = .74f)
-                else MaterialTheme.colorScheme.onSurfaceVariant,
+              color = cardContentColors.secondary,
               maxLines = 1,
               overflow = TextOverflow.Ellipsis,
             )
+            if (showDuration && duration != null) {
+              Spacer(Modifier.width(if (compact) 6.dp else 8.dp))
+              Text(
+                text = duration,
+                style = MaterialTheme.typography.labelSmall,
+                color = cardContentColors.secondary,
+                maxLines = 1,
+              )
+            }
           }
         }
       }
@@ -2819,16 +3433,15 @@ internal fun RecommendationCard(
 private fun RecommendationAvatar(
   imageUrl: String?,
   size: Dp,
-  overlayStyle: Boolean,
   loadKey: String,
 ) {
+  val cardContentColors = LocalVideoCardContentColors.current
   Box(
     modifier =
       Modifier.requiredSize(size)
         .clip(CircleShape)
         .background(
-          if (overlayStyle) Color.White.copy(alpha = .12f)
-          else MaterialTheme.colorScheme.surfaceVariant
+          cardContentColors.primary.copy(alpha = .12f)
         )
   ) {
     AvatarImage(

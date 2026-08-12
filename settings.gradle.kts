@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "BiliWebDemo"
 include(":app")
+include(":baselineprofile")

@@ -31,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
@@ -77,15 +78,21 @@ internal fun PlaybackHeader(
   onShowInfo: () -> Unit,
   onOpenSelection: (() -> Unit)? = null,
   panelSlideProgress: () -> Float = { 1f },
+  showDeviceStatus: Boolean = true,
+  foregroundColor: Color? = null,
+  glassBackdrop: PlaybackPageGlassBackdrop = PlaybackPageGlassBackdrop(),
 ) {
   var ownerBounds by remember(model.stableId) { mutableStateOf(Rect.Zero) }
+  val resolvedForeground = foregroundColor ?: MaterialTheme.colorScheme.onBackground
+  val secondaryForeground = resolvedForeground.copy(alpha = .72f)
   Surface(
     modifier =
       Modifier.fillMaxWidth().height(94.dp).graphicsLayer {
         alpha = panelSlideProgress().coerceIn(0f, 1f)
       },
-    color = MaterialTheme.colorScheme.background,
-    tonalElevation = 2.dp,
+    color = Color.Transparent,
+    contentColor = resolvedForeground,
+    tonalElevation = 0.dp,
   ) {
     Row(
       modifier = Modifier.fillMaxSize().padding(end = 18.dp),
@@ -115,27 +122,33 @@ internal fun PlaybackHeader(
             overflow = TextOverflow.Ellipsis,
           )
           if (model.selectionTitle != null && onOpenSelection != null) {
-            Surface(
+            PlaybackPageGlassSurface(
+              backdrop = glassBackdrop,
               modifier =
                 Modifier.padding(start = 10.dp)
                   .widthIn(min = 138.dp, max = 210.dp)
                   .clickable(onClick = onOpenSelection),
               shape = RoundedCornerShape(13.dp),
-              color = MaterialTheme.colorScheme.primaryContainer,
-              contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+              containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = .24f),
+              fallbackColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = .84f),
             ) {
               Column(
-                Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 5.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
               ) {
                 Text(
                   model.selectionTitle,
                   style = MaterialTheme.typography.labelMedium,
                   fontWeight = FontWeight.Bold,
+                  color = resolvedForeground,
                   maxLines = 1,
                   overflow = TextOverflow.Ellipsis,
                 )
-                Text(model.selectionProgress, style = MaterialTheme.typography.labelSmall)
+                Text(
+                  model.selectionProgress,
+                  style = MaterialTheme.typography.labelSmall,
+                  color = secondaryForeground,
+                )
               }
             }
           }
@@ -143,7 +156,7 @@ internal fun PlaybackHeader(
             Icons.Default.Info,
             contentDescription = "查看完整信息",
             modifier = Modifier.padding(start = 10.dp).size(18.dp),
-            tint = MaterialTheme.colorScheme.primary,
+            tint = resolvedForeground,
           )
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -182,7 +195,7 @@ internal fun PlaybackHeader(
                   )
                 },
             style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.primary,
+            color = resolvedForeground,
             maxLines = 1,
           )
           if (showFollowButton) {
@@ -203,7 +216,7 @@ internal fun PlaybackHeader(
           Text(
             text = "  ·  ",
             style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = secondaryForeground,
           )
           BiliRichText(
             text = model.description.ifBlank { "暂无简介" },
@@ -211,7 +224,7 @@ internal fun PlaybackHeader(
             modifier = Modifier.weight(1f),
             style =
               MaterialTheme.typography.labelMedium.copy(
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = secondaryForeground
               ),
             maxLines = 1,
           )
@@ -219,12 +232,22 @@ internal fun PlaybackHeader(
             text = model.metadata,
             modifier = Modifier.padding(start = 16.dp),
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = secondaryForeground,
             maxLines = 1,
           )
         }
       }
-      DeviceStatusCluster()
+      if (showDeviceStatus) {
+        PlaybackPageGlassSurface(
+          backdrop = glassBackdrop,
+          shape = CircleShape,
+        ) {
+          DeviceStatusCluster(
+            containerColor = Color.Transparent,
+            contentColor = resolvedForeground,
+          )
+        }
+      }
     }
   }
 }

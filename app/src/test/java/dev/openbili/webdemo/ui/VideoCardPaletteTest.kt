@@ -36,4 +36,25 @@ class VideoCardPaletteTest {
     assertTrue(start.red > dominantColors.first().red)
     assertTrue(start.blue < surface.blue)
   }
+
+  @Test
+  fun adaptiveContentKeepsSmallTextReadableOnLightGradient() {
+    val start = Color(0xFFE5D6C5)
+    val end = Color(0xFFBFD5DF)
+
+    val colors = videoCardContentColors(start, end)
+
+    assertTrue(videoCardContrastRatio(colors.primary, start) >= 4.5f)
+    assertTrue(videoCardContrastRatio(colors.primary, end) >= 4.5f)
+    assertTrue(videoCardContrastRatio(colors.secondary, start) >= 4.5f)
+    assertTrue(videoCardContrastRatio(colors.secondary, end) >= 4.5f)
+  }
+
+  @Test
+  fun adaptiveContentSwitchesToLightTextOnDarkGradient() {
+    val colors = videoCardContentColors(Color(0xFF17202A), Color(0xFF2C2038))
+
+    assertEquals(Color.White, colors.primary)
+    assertTrue(videoCardContrastRatio(colors.secondary, Color(0xFF17202A)) >= 4.5f)
+  }
 }

@@ -6,8 +6,10 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
@@ -15,6 +17,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -26,7 +29,9 @@ import coil3.BitmapImage
 import coil3.imageLoader
 import coil3.request.ImageRequest
 import dev.openbili.webdemo.feed.CoverImageRequestFactory
+import dev.openbili.webdemo.feed.LoadedFeedImageRegistry
 import dev.openbili.webdemo.feed.LocalFeedImageLoadPolicy
+import dev.openbili.webdemo.feed.LocalLimitImageLoadingSpeed
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -37,7 +42,18 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 
 private val videoPaletteLoadSemaphore = Semaphore(2)
+private val priorityVideoPaletteLoadSemaphore = Semaphore(4)
 private const val VIDEO_PALETTE_START_DELAY_MS = 700L
+
+internal data class VideoCardContentColors(
+  val primary: Color,
+  val secondary: Color,
+)
+
+internal val LocalVideoCardContentColors =
+  staticCompositionLocalOf {
+    VideoCardContentColors(primary = Color.Black, secondary = Color.Black)
+  }
 
 private object VideoCoverPaletteCache {
   private val values = ConcurrentHashMap<String, List<Color>>()
@@ -55,21 +71,29 @@ fun VideoCardGradient(
   modifier: Modifier = Modifier,
   loadKey: String = coverUrl.orEmpty(),
   overlayStyle: Boolean = false,
+  backgroundAlpha: Float = 1f,
   allowDynamicPalette: Boolean = true,
   dynamicPaletteAllowed: State<Boolean>? = null,
+  prioritizePaletteLoad: Boolean = false,
   paletteRequestWidth: Int = 672,
   paletteRequestHeight: Int = 378,
   content: @Composable () -> Unit,
 ) {
   val context = LocalContext.current
   val imageLoadPolicy = LocalFeedImageLoadPolicy.current
+  val limitLoadingSpeed = LocalLimitImageLoadingSpeed.current
   val normalizedUrl = coverUrl.orEmpty()
   val paletteLoadAllowed = imageLoadPolicy.permits(loadKey)
   var dominantColors by
     remember(normalizedUrl) {
       mutableStateOf(VideoCoverPaletteCache.get(normalizedUrl))
     }
-  LaunchedEffect(normalizedUrl, allowDynamicPalette, paletteLoadAllowed) {
+  LaunchedEffect(
+    normalizedUrl,
+    allowDynamicPalette,
+    paletteLoadAllowed,
+    limitLoadingSpeed,
+  ) {
     if (
       !allowDynamicPalette ||
         !paletteLoadAllowed ||
@@ -78,20 +102,32 @@ fun VideoCardGradient(
     ) {
       return@LaunchedEffect
     }
-    // Do not compete with the first visible cover decodes. The gradient still appears shortly
-    // after the card settles. Observing scroll state from this coroutine avoids recomposing every
-    // visible card when a gesture starts or ends.
-    delay(VIDEO_PALETTE_START_DELAY_MS)
-    dynamicPaletteAllowed?.let { allowed -> snapshotFlow { allowed.value }.first { it } }
+    if (limitLoadingSpeed) {
+      // The opt-in limiter preserves the old conservative scheduling for slower devices.
+      delay(VIDEO_PALETTE_START_DELAY_MS)
+      dynamicPaletteAllowed?.let { allowed -> snapshotFlow { allowed.value }.first { it } }
+    }
+    // Prefer the exact bitmap decoded by CoverImage. This synchronizes the visual reveal and
+    // avoids a second Coil decode on the normal, unrestricted path.
+    val sharedBitmap =
+      LoadedFeedImageRegistry.bitmap(normalizedUrl)
+        ?: if (limitLoadingSpeed) {
+          LoadedFeedImageRegistry.awaitBitmap(normalizedUrl, timeoutMs = 180L)
+        } else null
+    val paletteSemaphore =
+      if (prioritizePaletteLoad && !limitLoadingSpeed) priorityVideoPaletteLoadSemaphore
+      else videoPaletteLoadSemaphore
     val colors =
-      videoPaletteLoadSemaphore
+      paletteSemaphore
       .withPermit {
-        loadVideoCoverThemeColors(
-          context,
-          normalizedUrl,
-          paletteRequestWidth,
-          paletteRequestHeight,
-        )
+        sharedBitmap?.let { bitmap ->
+          withContext(Dispatchers.Default) { extractVideoCoverDominantColors(bitmap) }
+        } ?: loadVideoCoverThemeColors(
+            context,
+            normalizedUrl,
+            paletteRequestWidth,
+            paletteRequestHeight,
+          )
       }
     if (colors != null) {
       VideoCoverPaletteCache.put(normalizedUrl, colors)
@@ -105,9 +141,80 @@ fun VideoCardGradient(
     remember(dominantColors, surface) {
       videoCardGradientColors(dominantColors.orEmpty(), surface)
     }
-  val start by animateColorAsState(targetColors.first, tween(320), label = "videoCardGradientStart")
-  val end by animateColorAsState(targetColors.second, tween(320), label = "videoCardGradientEnd")
-  Box(modifier.background(Brush.horizontalGradient(listOf(start, end)))) { content() }
+  val paletteAnimationMillis = if (limitLoadingSpeed) 320 else 180
+  val start by
+    animateColorAsState(
+      targetColors.first,
+      tween(paletteAnimationMillis),
+      label = "videoCardGradientStart",
+    )
+  val end by
+    animateColorAsState(
+      targetColors.second,
+      tween(paletteAnimationMillis),
+      label = "videoCardGradientEnd",
+    )
+  val contentColors = videoCardContentColors(start, end)
+  Box(
+    modifier.background(
+      Brush.horizontalGradient(
+        listOf(
+          start.copy(alpha = backgroundAlpha.coerceIn(0f, 1f)),
+          end.copy(alpha = backgroundAlpha.coerceIn(0f, 1f)),
+        )
+      )
+    )
+  ) {
+    CompositionLocalProvider(
+      LocalContentColor provides contentColors.primary,
+      LocalVideoCardContentColors provides contentColors,
+    ) {
+      content()
+    }
+  }
+}
+
+internal fun videoCardContentColors(start: Color, end: Color): VideoCardContentColors {
+  val middle = lerp(start, end, .5f)
+  val backgrounds = listOf(start, middle, end)
+  fun minimumContrast(foreground: Color): Float =
+    backgrounds.minOf { background -> videoCardContrastRatio(foreground, background) }
+
+  val primary =
+    if (minimumContrast(Color.Black) >= minimumContrast(Color.White)) Color.Black else Color.White
+  val secondaryCandidate = lerp(primary, middle, .12f)
+  val secondary =
+    if (minimumContrast(secondaryCandidate) >= 4.5f) secondaryCandidate else primary
+  return VideoCardContentColors(primary = primary, secondary = secondary)
+}
+
+internal fun videoCardContrastRatio(first: Color, second: Color): Float {
+  val firstLuminance = first.luminance()
+  val secondLuminance = second.luminance()
+  val lighter = maxOf(firstLuminance, secondLuminance)
+  val darker = minOf(firstLuminance, secondLuminance)
+  return (lighter + .05f) / (darker + .05f)
+}
+
+/** Loads the same two dominant cover colors used by video cards for non-card ambient artwork. */
+@Composable
+internal fun rememberVideoCoverThemeColors(coverUrl: String): List<Color> {
+  val context = LocalContext.current
+  var colors by
+    remember(coverUrl) { mutableStateOf(VideoCoverPaletteCache.get(coverUrl).orEmpty()) }
+  LaunchedEffect(coverUrl) {
+    if (coverUrl.isBlank() || colors.isNotEmpty()) return@LaunchedEffect
+    val sharedBitmap = LoadedFeedImageRegistry.bitmap(coverUrl)
+    val loaded =
+      sharedBitmap?.let { bitmap ->
+        withContext(Dispatchers.Default) { extractVideoCoverDominantColors(bitmap) }
+      } ?: loadVideoCoverThemeColors(context, coverUrl, 672, 378)
+    if (!loaded.isNullOrEmpty()) {
+      VideoCoverPaletteCache.put(coverUrl, loaded)
+      colors = loaded
+    }
+  }
+  return colors
 }
 
 private suspend fun loadVideoCoverThemeColors(
@@ -230,12 +337,12 @@ internal fun videoColorDistance(first: Color, second: Color): Float {
 }
 
 private fun readableVideoCardColor(color: Color, surface: Color, darkTheme: Boolean): Color {
-  var result = lerp(color, surface, if (darkTheme) .76f else .55f)
+  var result = lerp(color, surface, if (darkTheme) .68f else .44f)
   if (darkTheme) {
-    while (result.luminance() > .10f) result = lerp(result, surface, .22f)
+    while (result.luminance() > .13f) result = lerp(result, surface, .18f)
     while (result.luminance() < .038f) result = lerp(result, Color.White, .05f)
   } else {
-    while (result.luminance() < .30f) result = lerp(result, Color.White, .14f)
+    while (result.luminance() < .26f) result = lerp(result, Color.White, .12f)
   }
   return result
 }
@@ -243,8 +350,8 @@ private fun readableVideoCardColor(color: Color, surface: Color, darkTheme: Bool
 internal fun adjacentVideoColor(color: Color): Color {
   val hsv = FloatArray(3)
   android.graphics.Color.colorToHSV(color.toArgb(), hsv)
-  hsv[0] = (hsv[0] + 16f) % 360f
-  hsv[1] = hsv[1].coerceIn(.22f, .78f)
+  hsv[0] = (hsv[0] + 24f) % 360f
+  hsv[1] = hsv[1].coerceIn(.28f, .82f)
   hsv[2] = hsv[2].coerceIn(.34f, .88f)
   return Color(android.graphics.Color.HSVToColor(hsv))
 }

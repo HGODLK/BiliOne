@@ -2,7 +2,6 @@ package dev.openbili.webdemo
 
 import android.content.Context
 import kotlin.math.max
-import kotlin.math.min
 
 /** Persistent playback positions used when the remote history is late or unavailable. */
 internal object PlaybackProgressStore {
@@ -10,7 +9,6 @@ internal object PlaybackProgressStore {
   private const val POSITION_SUFFIX = ":position"
   private const val DURATION_SUFFIX = ":duration"
   private const val UPDATED_SUFFIX = ":updated"
-  private const val FINISHED_TOLERANCE_MS = 5_000L
   private const val RETENTION_MS = 3L * 24L * 60L * 60L * 1000L
 
   fun save(
@@ -54,10 +52,10 @@ internal object PlaybackProgressStore {
     val position = positionMs.coerceAtLeast(0L)
     if (durationMs <= 0L) return position
 
-    // Reopening a completed video should start from the beginning instead of seeking to its end.
-    val finishedThreshold =
-      min(durationMs - FINISHED_TOLERANCE_MS, durationMs * 98L / 100L).coerceAtLeast(0L)
-    return if (position >= finishedThreshold) 0L else position.coerceAtMost(durationMs)
+    // Near-end is still a valid exit position. Actual playback completion is tracked separately by
+    // the page cache, so treating the last 2% as completed here loses both local and server resume
+    // progress when a user backs out before the media really ends.
+    return position.coerceAtMost(durationMs)
   }
 
   private fun key(aid: Long, cid: Long) = "$aid:$cid"

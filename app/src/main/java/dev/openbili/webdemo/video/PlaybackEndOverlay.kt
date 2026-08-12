@@ -278,6 +278,7 @@ internal fun PlaybackEndedForeground(
             onLongClick = { onRecommendationLongClick(item) },
             coverVisible = item.id != hiddenCoverItemId,
             overlayStyle = true,
+            showDuration = true,
           )
         }
       }
@@ -292,7 +293,7 @@ internal fun PlaybackEndedForeground(
           containerColor = Color(0xFFFF5C8A),
           contentColor = Color.White,
         ),
-      elevation = ButtonDefaults.buttonElevation(defaultElevation = 6.dp, pressedElevation = 2.dp),
+      elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp, pressedElevation = 0.dp),
       contentPadding = PaddingValues(horizontal = 24.dp, vertical = 10.dp),
     ) {
       Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(22.dp))
