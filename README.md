@@ -10,11 +10,11 @@ BiliOne 是独立开发的非官方、非商业、开源的第三方客户端，
 
 大屏横屏是 BiliOne 的核心设计目标，所有页面按窗口尺寸自适应，横屏、分屏、自由窗口都能获得完整的浏览与观看体验。
 
-![首页推荐信息流，支持多列卡片网格与分区标签](docs/screenshots/home.jpg)
+![音乐播放页，视频画面与实时频谱](docs/screenshots/music.jpg)
 
 ![个人空间，左侧导航与投稿内容一目了然](docs/screenshots/profile.jpg)
 
-![音乐播放页，视频画面与实时频谱](docs/screenshots/music.jpg)
+![首页推荐信息流，支持多列卡片网格与分区标签](docs/screenshots/home.jpg)
 
 ![番剧「本期推荐」，大屏 Hero 与推荐卡片](docs/screenshots/bangumi.jpg)
 
