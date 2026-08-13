@@ -320,6 +320,7 @@ fun VideoScreen(
   onLogin: () -> Unit,
   onCommentProfileClick: (Long, CommentItem, CommentProfileAnchor) -> Unit,
   onMentionQuery: (String) -> Unit,
+  onCommentImagePreviewActiveChanged: (Boolean) -> Unit = {},
   onSwitchQuality: (Int) -> Unit,
   onSwitchPremiumAudio: (PremiumAudioMode) -> Unit,
   onSelectSubtitle: (String?) -> Unit,
@@ -759,7 +760,13 @@ fun VideoScreen(
     onDispose {
       commentImagePreviewJob?.cancel()
       commentImagePreview?.preparation?.cancel()
+      // If the page is torn down while the preview is still open, clear the suppression flag so
+      // a later video does not start with danmaku hidden.
+      onCommentImagePreviewActiveChanged(false)
     }
+  }
+  LaunchedEffect(commentImagePreview != null) {
+    onCommentImagePreviewActiveChanged(commentImagePreview != null)
   }
   val autoNextKey = nextPlaybackTarget?.key
   var autoNextSeconds by
@@ -1901,7 +1908,56 @@ internal fun commentImagePanLimit(
   scale: Float,
 ): Float = maxOf(0f, (imageSize * scale - viewportSize) / 2f)
 
-internal fun isLongCommentImage(width: Int, height: Int): Boolean = width > 0 && height >= width * 2
+internal fun isLongCommentImage(width: Int, height: Int): Boolean =
+  width > 0 && height.toLong() * 2L >= width.toLong() * 5L
+
+internal data class CommentImageThumbnailSpec(
+  val url: String,
+  val widthPx: Int,
+  val heightPx: Int,
+)
+
+private const val COMMENT_IMAGE_THUMBNAIL_MAX_EDGE_PX = 480
+
+internal fun commentImageThumbnailSpec(
+  rawUrl: String,
+  imageWidth: Int,
+  imageHeight: Int,
+  targetWidthPx: Int,
+  targetHeightPx: Int,
+  crop: Boolean,
+): CommentImageThumbnailSpec {
+  val boundedTargetWidth = targetWidthPx.coerceIn(1, COMMENT_IMAGE_THUMBNAIL_MAX_EDGE_PX)
+  val boundedTargetHeight = targetHeightPx.coerceIn(1, COMMENT_IMAGE_THUMBNAIL_MAX_EDGE_PX)
+  val validImageSize = imageWidth > 0 && imageHeight > 0
+  val width =
+    if (!crop && validImageSize) {
+      minOf(
+          boundedTargetWidth.toFloat(),
+          boundedTargetHeight.toFloat() * imageWidth / imageHeight,
+        )
+        .toInt()
+        .coerceAtLeast(1)
+    } else {
+      boundedTargetWidth
+    }
+  val height =
+    if (!crop && validImageSize) {
+      (width.toFloat() * imageHeight / imageWidth).toInt().coerceIn(1, boundedTargetHeight)
+    } else {
+      boundedTargetHeight
+    }
+  val originalUrl = fullResolutionCommentImageUrl(rawUrl)
+  val host = runCatching { java.net.URI(originalUrl).host.orEmpty() }.getOrDefault("")
+  if (host != "hdslb.com" && !host.endsWith(".hdslb.com")) {
+    return CommentImageThumbnailSpec(originalUrl, width, height)
+  }
+  val base = originalUrl.substringBefore('?')
+  val query = originalUrl.substringAfter('?', "")
+  val suffix = if (crop) "@${width}w_${height}h_1c.webp" else "@${width}w.webp"
+  val url = base + suffix + if (query.isBlank()) "" else "?$query"
+  return CommentImageThumbnailSpec(url, width, height)
+}
 
 internal fun fullResolutionCommentImageUrl(url: String): String {
   val host = runCatching { java.net.URI(url).host.orEmpty() }.getOrDefault("")
@@ -1998,14 +2054,7 @@ internal fun CommentImagePreviewOverlay(
   val context = LocalContext.current
   val density = LocalDensity.current
   val scope = rememberCoroutineScope()
-  val previewImageUrl =
-    remember(session.image) {
-      if (isLongCommentImage(session.image.width, session.image.height)) {
-        fullResolutionCommentImageUrl(session.image.url)
-      } else {
-        session.image.url
-      }
-    }
+  val previewImageUrl = remember(session.image) { fullResolutionCommentImageUrl(session.image.url) }
   var zoomScale by remember(session) { mutableStateOf(1f) }
   var panOffset by remember(session) { mutableStateOf(Offset.Zero) }
   var confirmSave by remember(session) { mutableStateOf(false) }
@@ -2606,7 +2655,6 @@ internal fun VideoActionPanel(
   onFavorite: (List<Long>, List<Long>) -> Unit,
   onLoadFavoriteFolders: () -> Unit,
   onLogin: () -> Unit,
-  glassBackdrop: PlaybackPageGlassBackdrop = PlaybackPageGlassBackdrop(),
   foregroundColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
   modifier: Modifier = Modifier,
 ) {
@@ -2637,12 +2685,11 @@ internal fun VideoActionPanel(
       remember(density) {
         AlignedCardPopupPositionProvider(with(density) { 8.dp.roundToPx() })
       }
-    PlaybackPageGlassSurface(
-      backdrop = glassBackdrop,
+    Surface(
       modifier = Modifier.fillMaxWidth(),
       shape = VideoShapeTokens.Card,
-      containerColor = glassColors.container,
-      fallbackColor = glassColors.fallback,
+      color = glassColors.fallback,
+      contentColor = foregroundColor,
       border =
         androidx.compose.foundation.BorderStroke(
           1.dp,

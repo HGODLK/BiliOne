@@ -69,7 +69,7 @@ fun PressableVideoCard(
     shape = shape,
     color = MaterialTheme.colorScheme.surface,
     tonalElevation = 2.dp,
-    shadowElevation = if (pressed) 1.dp else 4.dp,
+    shadowElevation = 0.dp,
     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     content = content,
   )

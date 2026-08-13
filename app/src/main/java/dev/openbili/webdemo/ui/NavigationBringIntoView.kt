@@ -4,6 +4,7 @@ import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
@@ -12,8 +13,11 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.withTimeoutOrNull
 
 val NavigationCardBottomClearance = 112.dp
+val LocalNavigationTopClearance = compositionLocalOf { 0.dp }
+internal const val NAVIGATION_BRING_INTO_VIEW_TIMEOUT_MS = 360L
 
 internal fun navigationBringIntoViewRect(
   width: Int,
@@ -44,21 +48,25 @@ class NavigationBringIntoViewRequester internal constructor(
   }
 
   suspend fun bringIntoView() {
-    val requestedRect =
-      navigationBringIntoViewRect(
-        width = targetSize.width,
-        height = targetSize.height,
-        topClearancePx = topClearancePx,
-        bottomClearancePx = bottomClearancePx,
-      )
-    if (requestedRect == null) delegate.bringIntoView()
-    else delegate.bringIntoView(requestedRect)
+    // Relocation can remain suspended when a parent is being replaced by a transition. Navigation
+    // may prefer the safe viewport, but it must still start if that parent never responds.
+    withTimeoutOrNull(NAVIGATION_BRING_INTO_VIEW_TIMEOUT_MS) {
+      val requestedRect =
+        navigationBringIntoViewRect(
+          width = targetSize.width,
+          height = targetSize.height,
+          topClearancePx = topClearancePx,
+          bottomClearancePx = bottomClearancePx,
+        )
+      if (requestedRect == null) delegate.bringIntoView()
+      else delegate.bringIntoView(requestedRect)
+    }
   }
 }
 
 @Composable
 fun rememberNavigationBringIntoViewRequester(
-  topClearance: Dp = 0.dp,
+  topClearance: Dp = LocalNavigationTopClearance.current,
   bottomClearance: Dp = NavigationCardBottomClearance,
 ): NavigationBringIntoViewRequester {
   val density = LocalDensity.current

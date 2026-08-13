@@ -142,7 +142,7 @@ internal fun PlayerGestureLayer(
           }
         },
       )
-      .pointerInput(Unit) {
+      .pointerInput(enabledDoubleTap, enabledTemporarySpeed) {
         var tapGeneration = pointerGate.generation
         detectTapGestures(
           onPress = {
@@ -260,9 +260,13 @@ internal fun PlayerGestureLayer(
             mode =
               when {
                 enabledSeek && absX > absY * 1.35f -> PlayerDragMode.SEEK
-                absY > absX * 1.2f && start.x / size.width < .36f && enabledBrightness ->
+                absY > absX * 1.2f &&
+                  playerVerticalGestureMode(start.x, size.width.toFloat(), enabledBrightness, enabledVolume) ==
+                    PlayerDragMode.BRIGHTNESS ->
                   PlayerDragMode.BRIGHTNESS
-                absY > absX * 1.2f && start.x / size.width > .64f && enabledVolume ->
+                absY > absX * 1.2f &&
+                  playerVerticalGestureMode(start.x, size.width.toFloat(), enabledBrightness, enabledVolume) ==
+                    PlayerDragMode.VOLUME ->
                   PlayerDragMode.VOLUME
                 else -> return@detectDragGestures
               }
@@ -356,6 +360,19 @@ internal enum class PlayerDragMode {
   BRIGHTNESS,
   VOLUME,
 }
+
+internal fun playerVerticalGestureMode(
+  startX: Float,
+  playerWidth: Float,
+  brightnessEnabled: Boolean,
+  volumeEnabled: Boolean,
+): PlayerDragMode =
+  when {
+    playerWidth <= 0f -> PlayerDragMode.UNDECIDED
+    startX < playerWidth / 2f && brightnessEnabled -> PlayerDragMode.BRIGHTNESS
+    startX >= playerWidth / 2f && volumeEnabled -> PlayerDragMode.VOLUME
+    else -> PlayerDragMode.UNDECIDED
+  }
 
 @Composable
 internal fun GestureIndicatorOverlay(

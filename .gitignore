@@ -12,3 +12,10 @@ captures/
 /artifacts/
 *.apk
 *.aab
+/字体/*.7z
+
+# 内部代理文档与构建产物：只保留本地，不进版本库
+/Agent.md
+/Agent111.md
+/app/src/release/baselineProfiles/
+/app/src/release/generated/

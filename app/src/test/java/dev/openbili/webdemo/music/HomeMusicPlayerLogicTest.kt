@@ -1,17 +1,19 @@
 package dev.openbili.webdemo.music
 
-import dev.openbili.webdemo.hiResAudioDecoderRank
 import androidx.media3.common.Player
+import androidx.media3.common.C
 import dev.openbili.webdemo.api.FavoriteFolder
 import dev.openbili.webdemo.api.FeedCard
 import dev.openbili.webdemo.api.VideoStream
+import dev.openbili.webdemo.hiResAudioDecoderRank
+import dev.openbili.webdemo.settings.PreferredResolutionMode
 import dev.openbili.webdemo.ui.formatMusicDuration
+import kotlin.math.PI
+import kotlin.math.sin
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.math.PI
-import kotlin.math.sin
 
 class HomeMusicPlayerLogicTest {
   @Test
@@ -27,6 +29,41 @@ class HomeMusicPlayerLogicTest {
     assertNull(findMusicFavoriteFolder(listOf(FavoriteFolder(4L, "我的音乐", 1))))
     assertEquals(3L, findMusicFavoriteFolder(folders, preferredFolderId = 3L)?.id)
     assertNull(findMusicFavoriteFolder(folders, preferredFolderId = 99L))
+  }
+
+  @Test
+  fun firstMusicEntryRequiresAnExplicitFolderChoice() {
+    val folders = listOf(FavoriteFolder(2L, "音乐", 5))
+
+    assertNull(
+      resolveMusicFavoriteFolder(
+        folders = folders,
+        preferredFolderId = 0L,
+        folderSelectionConfigured = false,
+      )
+    )
+    assertEquals(
+      2L,
+      resolveMusicFavoriteFolder(
+          folders = folders,
+          preferredFolderId = 0L,
+          folderSelectionConfigured = true,
+        )
+        ?.id,
+    )
+  }
+
+  @Test
+  fun deletedSelectedMusicFolderReturnsToFolderChoice() {
+    val remainingFolders = listOf(FavoriteFolder(7L, "其他收藏", 3))
+
+    assertNull(
+      resolveMusicFavoriteFolder(
+        folders = remainingFolders,
+        preferredFolderId = 99L,
+        folderSelectionConfigured = true,
+      )
+    )
   }
 
   @Test
@@ -109,27 +146,64 @@ class HomeMusicPlayerLogicTest {
   }
 
   @Test
-  fun musicPlaybackPinsExact720Stream() {
+  fun vipMusicPlaybackDefaultsTo1080P60Then1080PPlus() {
     val streams =
       listOf(
+        stream(id = 120, height = 2160),
+        stream(id = 116, height = 1080),
+        stream(id = 112, height = 1080),
+        stream(id = 80, height = 1080),
+        stream(id = 64, height = 720),
+      )
+
+    assertEquals(
+      1,
+      selectMusicStreamIndex(streams, PreferredResolutionMode.ULTRA_HIGH, vipActive = true),
+    )
+    val without60Fps = streams.filterNot { it.id == 116 }
+    assertEquals(
+      112,
+      without60Fps[
+          selectMusicStreamIndex(
+            without60Fps,
+            PreferredResolutionMode.ULTRA_HIGH,
+            vipActive = true,
+          )]
+        .id,
+    )
+  }
+
+  @Test
+  fun nonVipMusicPlaybackIsCappedAtRegular1080P() {
+    val streams =
+      listOf(
+        stream(id = 116, height = 1080),
+        stream(id = 112, height = 1080),
         stream(id = 80, height = 1080),
         stream(id = 64, height = 720),
         stream(id = 32, height = 480),
       )
 
-    assertEquals(1, selectMusic720StreamIndex(streams))
+    assertEquals(
+      2,
+      selectMusicStreamIndex(streams, PreferredResolutionMode.ULTRA_HIGH, vipActive = false),
+    )
   }
 
   @Test
-  fun musicPlaybackFallsBackToHighestTierNotAbove720() {
+  fun musicPlaybackRespectsLowerConfiguredQuality() {
     val streams =
       listOf(
+        stream(id = 116, height = 1080),
         stream(id = 80, height = 1080),
-        stream(id = 48, height = 720),
+        stream(id = 64, height = 720),
         stream(id = 32, height = 480),
       )
 
-    assertEquals(1, selectMusic720StreamIndex(streams))
+    assertEquals(
+      2,
+      selectMusicStreamIndex(streams, PreferredResolutionMode.MEDIUM, vipActive = true),
+    )
   }
 
   @Test
@@ -274,6 +348,97 @@ class HomeMusicPlayerLogicTest {
     assertTrue(muted.all { it == 0f })
     assertTrue(quiet > 0f)
     assertTrue(loud > quiet)
+  }
+
+  @Test
+  fun spectrumFrameWaitsUntilPlaybackReachesItsPcmTimestamp() {
+    assertEquals(240L + MUSIC_SPECTRUM_OUTPUT_LATENCY_MS, musicSpectrumFrameWaitMillis(1_240_000L, 1_000L))
+    assertEquals(560L, musicSpectrumFrameWaitMillis(1_240_000L, 1_000L, outputLatencyMs = 320L))
+    assertEquals(MUSIC_SPECTRUM_OUTPUT_LATENCY_MS, musicSpectrumFrameWaitMillis(1_000_000L, 1_000L))
+    assertEquals(MUSIC_SPECTRUM_OUTPUT_LATENCY_MS, musicSpectrumFrameWaitMillis(C.TIME_UNSET, 1_000L))
+    assertEquals(MUSIC_SPECTRUM_OUTPUT_LATENCY_MS, musicSpectrumFrameWaitMillis(8_000_000L, 1_000L))
+    assertEquals(MUSIC_SPECTRUM_OUTPUT_LATENCY_MS - 100L, musicSpectrumFrameWaitMillis(C.TIME_UNSET, 1_000L, elapsedSinceCaptureMs = 100L))
+    assertEquals(
+      320L + MUSIC_SPECTRUM_OUTPUT_LATENCY_MS,
+      musicSpectrumFrameWaitMillis(
+        presentationTimeUs = 1_240_000L,
+        playbackPositionMs = 1_000L,
+        audioSinkPositionUs = 920_000L,
+      ),
+    )
+    assertEquals(
+      0L,
+      musicSpectrumFrameWaitMillis(
+        presentationTimeUs = 1_240_000L,
+        playbackPositionMs = 1_240L,
+        elapsedSinceCaptureMs = 440L,
+        audioSinkPositionUs = 920_000L,
+      ),
+    )
+  }
+
+  @Test
+  fun softKneeFadesGainInAndOutAroundTheNoiseFloor() {
+    assertEquals(0.0, musicSpectrumLevelGain(0.0), 0.0)
+    // Inside the knee (1e-5 .. 3e-5) the gain is a small non-zero fraction, not a hard 0/1.
+    assertTrue(musicSpectrumLevelGain(0.000_02) > 0.0)
+    assertTrue(musicSpectrumLevelGain(0.000_02) < musicSpectrumLevelGain(0.001))
+    assertEquals(1.0, musicSoftKnee(0.001), 0.0)
+    assertEquals(0.0, musicSoftKnee(0.0), 0.0)
+  }
+
+  @Test
+  fun peakHoldDecaysSlowlyButNeverBelowCurrent() {
+    val held =
+      advanceMusicPeak(current = 0.2f, peak = 0.9f, elapsedMillis = 100.0, holdMillis = 500.0)
+    assertTrue(held > 0.2f)
+    assertTrue(held < 0.9f)
+    assertEquals(
+      0.2f,
+      advanceMusicPeak(current = 0.2f, peak = 0.05f, elapsedMillis = 1.0, holdMillis = 500.0),
+      0.0f,
+    )
+  }
+
+  @Test
+  fun beatTrackerSpikesOnOnsetAndDecaysAfterward() {
+    val tracker = MusicBeatTracker()
+    repeat(50) { tracker.next(0.01f) }
+    assertEquals(1.0f, tracker.next(0.01f), 0.0001f)
+    val onBeat = tracker.next(0.9f)
+    assertTrue(onBeat > 1.1f)
+    var boost = onBeat
+    repeat(20) { boost = tracker.next(0.01f) }
+    assertTrue(boost < onBeat)
+    assertTrue(boost >= 1.0f)
+  }
+
+  @Test
+  fun outputLatencyEstimateClimbsFastAndRelaxesSlowly() {
+    val climbed =
+      advanceOutputLatencyEstimate(
+        estimateMs = 220L,
+        observedLeadMs = 400L,
+        minMs = 60L,
+        maxMs = 1_000L,
+      )
+    assertTrue(climbed > 220L && climbed < 400L)
+    val relaxed =
+      advanceOutputLatencyEstimate(
+        estimateMs = 400L,
+        observedLeadMs = 100L,
+        minMs = 60L,
+        maxMs = 1_000L,
+      )
+    assertTrue(relaxed < 400L && relaxed > 100L)
+    assertEquals(
+      60L,
+      advanceOutputLatencyEstimate(estimateMs = 60L, observedLeadMs = 10L, minMs = 60L, maxMs = 1_000L),
+    )
+    assertEquals(
+      1_000L,
+      advanceOutputLatencyEstimate(estimateMs = 990L, observedLeadMs = 2_000L, minMs = 60L, maxMs = 1_000L),
+    )
   }
 
   private fun stream(id: Int, height: Int): VideoStream =

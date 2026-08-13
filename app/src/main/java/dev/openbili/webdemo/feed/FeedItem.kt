@@ -13,4 +13,6 @@ data class FeedItem(
   val danmakuCount: Long = 0,
   val publishedAt: Long = 0,
   val description: String = "",
+  val favoriteResourceId: Long = 0L,
+  val favoriteResourceType: Int = 0,
 )

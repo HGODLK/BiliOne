@@ -39,8 +39,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -107,6 +109,8 @@ import dev.openbili.webdemo.settings.AppSettings
 import dev.openbili.webdemo.ui.BackdropGlassSurface
 import dev.openbili.webdemo.ui.FollowButton
 import dev.openbili.webdemo.ui.NavigationCardBottomClearance
+import dev.openbili.webdemo.ui.OfficialVerificationIcon
+import dev.openbili.webdemo.ui.OfficialVerificationIconSize
 import dev.openbili.webdemo.ui.PressableVideoCard
 import dev.openbili.webdemo.ui.PullRefreshContainer
 import dev.openbili.webdemo.ui.VideoCardGradient
@@ -144,6 +148,18 @@ internal fun filterProfileBangumi(
     ProfileBangumiFilter.BANGUMI -> cards.filter { it.kind == SpaceContentKind.BANGUMI }
     ProfileBangumiFilter.DRAMA -> cards.filter { it.kind == SpaceContentKind.DRAMA }
   }
+
+internal fun promoteProfileBangumiCard(
+  cards: List<SpaceContentCard>,
+  cardId: String,
+): List<SpaceContentCard> {
+  val index = cards.indexOfFirst { it.id == cardId }
+  if (index <= 0) return cards
+  return buildList(cards.size) {
+    add(cards[index])
+    cards.forEachIndexed { itemIndex, card -> if (itemIndex != index) add(card) }
+  }
+}
 
 internal data class ProfileBangumiPagingState(
   val page: Int = 0,
@@ -260,8 +276,9 @@ fun ProfileScreen(
   onPrivateMessagesSelected: (Long, String, String) -> Unit,
   privateMessageContent: @Composable () -> Unit,
   onLogin: () -> Unit,
-  onAuthorizeProfileIp: () -> Unit,
   hiddenCoverItemId: String? = null,
+  bangumiReturnRequestToken: Long = 0L,
+  bangumiReturnCardId: String? = null,
   onVideoBoundsChanged: (FeedItem, Rect) -> Unit = { _, _ -> },
   onAvatarBoundsChanged: (Rect) -> Unit = {},
   avatarVisible: Boolean = true,
@@ -276,6 +293,9 @@ fun ProfileScreen(
   BackHandler(enabled = backHandlingEnabled, onBack = onBack)
   var section by rememberSaveable(profile?.mid) { mutableStateOf(ProfileSection.POSTS) }
   var contentSearchQuery by rememberSaveable(profile?.mid) { mutableStateOf("") }
+  val postGridState = rememberLazyGridState()
+  var previousPostSearchQuery by
+    rememberSaveable(profile?.mid) { mutableStateOf(contentSearchQuery) }
   var extraCards by remember(profile?.mid) { mutableStateOf<List<SpaceContentCard>>(emptyList()) }
   var extraRefreshGeneration by remember(profile?.mid) { mutableStateOf(0) }
   var bangumiPaging by remember(profile?.mid) { mutableStateOf(ProfileBangumiPagingState()) }
@@ -303,6 +323,20 @@ fun ProfileScreen(
         }
       }
     }
+
+  LaunchedEffect(bangumiReturnRequestToken, bangumiReturnCardId, extraCards) {
+    val cardId = bangumiReturnCardId ?: return@LaunchedEffect
+    if (bangumiReturnRequestToken <= 0L) return@LaunchedEffect
+    val promoted = promoteProfileBangumiCard(extraCards, cardId)
+    if (promoted !== extraCards) extraCards = promoted
+  }
+
+  LaunchedEffect(contentSearchQuery) {
+    if (contentSearchQuery != previousPostSearchQuery) {
+      previousPostSearchQuery = contentSearchQuery
+      postGridState.scrollToItem(0)
+    }
+  }
 
   LaunchedEffect(showPrivateMessages) {
     if (!showPrivateMessages && section == ProfileSection.PRIVATE_MESSAGES) {
@@ -472,7 +506,6 @@ fun ProfileScreen(
             onSelectFollowingGroup = onSelectFollowingGroup,
             onUnfollow = onUnfollow,
             onLogin = onLogin,
-            onAuthorizeProfileIp = onAuthorizeProfileIp,
             onAvatarBoundsChanged = onAvatarBoundsChanged,
             avatarVisible = avatarVisible,
             chromeVisible = headerChromeVisible,
@@ -532,7 +565,7 @@ fun ProfileScreen(
                 onVideoBoundsChanged,
                 emptyMessage =
                   if (contentSearchQuery.isBlank()) "暂无公开投稿" else "没有找到相关投稿",
-                searchQuery = contentSearchQuery,
+                state = postGridState,
                 onScrollStarted = {
                   if (!transitionRunning) {
                     headerInfoState =
@@ -599,6 +632,8 @@ fun ProfileScreen(
                 onBangumiClick = onBangumiClick,
                 onVideoLongClick = onVideoLongClick,
                 hiddenCoverItemId = hiddenCoverItemId,
+                bangumiReturnRequestToken = bangumiReturnRequestToken,
+                bangumiReturnCardId = bangumiReturnCardId,
                 onVideoBoundsChanged = onVideoBoundsChanged,
                 onScrollStarted = {
                   if (!transitionRunning) {
@@ -716,7 +751,6 @@ private fun ProfileHeader(
   onSelectFollowingGroup: (Long) -> Unit,
   onUnfollow: () -> Unit,
   onLogin: () -> Unit,
-  onAuthorizeProfileIp: () -> Unit,
   onAvatarBoundsChanged: (Rect) -> Unit,
   avatarVisible: Boolean,
   chromeVisible: Boolean,
@@ -768,7 +802,7 @@ private fun ProfileHeader(
     shape = RoundedCornerShape(24.dp),
     color = MaterialTheme.colorScheme.surface,
     tonalElevation = 2.dp,
-    shadowElevation = 4.dp,
+    shadowElevation = 0.dp,
     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
   ) {
     Box {
@@ -856,7 +890,15 @@ private fun ProfileHeader(
           )
         val capsuleHeight by
           animateDpAsState(
-            targetValue = if (infoRequested) 166.dp else 116.dp,
+            targetValue =
+              when {
+                infoRequested -> 174.dp
+                profile?.let {
+                  it.officialVerification.verified ||
+                    (profileIpAuthorized && it.ipLocation.isNotBlank())
+                } == true -> 136.dp
+                else -> 116.dp
+              },
             animationSpec =
               spring(
                 dampingRatio = Spring.DampingRatioNoBouncy,
@@ -915,6 +957,12 @@ private fun ProfileHeader(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
               ) {
+                profile?.let {
+                  OfficialVerificationIcon(
+                    verification = it.officialVerification,
+                    modifier = Modifier.size(OfficialVerificationIconSize),
+                  )
+                }
                 Text(
                   profile?.name ?: placeholderName ?: "正在加载…",
                   modifier = Modifier.weight(1f),
@@ -947,27 +995,21 @@ private fun ProfileHeader(
               }
               if (profile != null) {
                 val displaySignature = formatProfileSignature(profile.signature)
+                val identityLine = profileIdentityLine(profile, profileIpAuthorized)
+                if (identityLine.isNotBlank()) {
+                  Text(
+                    identityLine,
+                    color = Color.White.copy(alpha = .9f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                  )
+                }
                 Text(
                   "${profile.followingCount} 关注  ·  ${formatProfileFollowerCount(profile.followerCount)} 粉丝  ·  UID ${profile.mid}",
                   color = Color.White.copy(alpha = .82f),
                   maxLines = 1,
                   overflow = TextOverflow.Ellipsis,
                 )
-                if (profile.ipLocation.isNotBlank()) {
-                  Text(
-                    "IP属地：${profile.ipLocation}",
-                    modifier = Modifier.padding(top = 2.dp),
-                    color = Color.White.copy(alpha = .78f),
-                  )
-                } else if (loggedIn && !profileIpAuthorized && infoRequested) {
-                  TextButton(
-                    onClick = onAuthorizeProfileIp,
-                    enabled = !interactionLocked,
-                    contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
-                  ) {
-                    Text("授权显示 IP 属地", color = Color.White.copy(alpha = .86f))
-                  }
-                }
                 if (displaySignature.isNotBlank())
                   BiliRichText(
                     text = displaySignature,
@@ -1019,6 +1061,25 @@ private fun ProfileHeader(
     }
   }
 }
+
+internal fun profileIdentityLine(profile: SpaceProfile, profileIpAuthorized: Boolean): String =
+  buildList {
+      if (profile.officialVerification.verified) {
+        add(
+          buildString {
+            append(if (profile.officialVerification.type == 0) "个人认证" else "机构认证")
+            profile.officialVerification.description.takeIf(String::isNotBlank)?.let {
+              append("：")
+              append(it)
+            }
+          }
+        )
+      }
+      if (profileIpAuthorized && profile.ipLocation.isNotBlank()) {
+        add("IP属地：${profile.ipLocation}")
+      }
+    }
+    .joinToString(" · ")
 
 internal fun formatProfileFollowerCount(count: Long): String {
   if (count < 10_000L) return count.toString()
@@ -1083,7 +1144,7 @@ private fun ProfileVideoGrid(
   hiddenCoverItemId: String?,
   onVideoBoundsChanged: (FeedItem, Rect) -> Unit,
   emptyMessage: String,
-  searchQuery: String,
+  state: LazyGridState,
   onScrollStarted: () -> Unit,
 ) {
   if (videos.isEmpty()) {
@@ -1100,9 +1161,7 @@ private fun ProfileVideoGrid(
     }
     return
   }
-  val state = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
   val imageLoadPolicy = rememberGridFeedImageLoadPolicy(state)
-  LaunchedEffect(searchQuery) { state.scrollToItem(0) }
   val nearEnd by remember {
     derivedStateOf {
       val last = state.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
@@ -1192,6 +1251,8 @@ private fun ProfileBangumiGrid(
   onBangumiClick: (SpaceContentCard, Rect) -> Unit,
   onVideoLongClick: (FeedItem) -> Unit,
   hiddenCoverItemId: String?,
+  bangumiReturnRequestToken: Long,
+  bangumiReturnCardId: String?,
   onVideoBoundsChanged: (FeedItem, Rect) -> Unit,
   onScrollStarted: () -> Unit,
 ) {
@@ -1217,6 +1278,12 @@ private fun ProfileBangumiGrid(
       ProfileBangumiFilter.BANGUMI -> bangumiError
       ProfileBangumiFilter.DRAMA -> dramaError
     }
+  LaunchedEffect(bangumiReturnRequestToken, bangumiReturnCardId, filteredCards) {
+    val cardId = bangumiReturnCardId ?: return@LaunchedEffect
+    if (bangumiReturnRequestToken <= 0L) return@LaunchedEffect
+    val targetIndex = filteredCards.indexOfFirst { it.id == cardId }
+    if (targetIndex >= 0) state.scrollToItem(targetIndex + 1)
+  }
   val nearEnd by
     remember {
       derivedStateOf {

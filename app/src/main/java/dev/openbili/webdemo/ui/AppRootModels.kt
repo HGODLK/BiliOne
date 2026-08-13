@@ -98,6 +98,8 @@ internal data class StackFrame(
   val inPlaceSelectionChanged: Boolean = false,
   val rootFeedScrollAnchor: FeedScrollAnchor? = null,
   val sourceWasPlaybackEndRecommendation: Boolean = false,
+  val rootVideoOrigin: VideoOrigin = VideoOrigin.OTHER,
+  val sourceAnchorKey: String? = null,
 )
 
 internal data class ProfileVideoKey(val profileEntryId: Long, val itemId: String)
@@ -135,7 +137,24 @@ internal fun List<ProfileStackEntry>.retainReturnTransitionsFor(
 internal data class SuspendedArticleVideo(
   val item: FeedItem,
   val stack: List<StackFrame>,
+  /** Article frames already retained below the video before a comment link opened a new article. */
+  val retainedArticleDepth: Int,
+  val wasPlaying: Boolean,
+  val playerWasReady: Boolean,
 )
+
+internal fun shouldShowArticleFrame(
+  showVideo: Boolean,
+  returningVideoToArticle: Boolean,
+  retainedArticleDepth: Int?,
+  frameIndex: Int,
+): Boolean =
+  retainedArticleDepth?.let { frameIndex >= it } ?: (!showVideo || returningVideoToArticle)
+
+internal fun isReturningToSuspendedVideo(
+  retainedArticleDepth: Int?,
+  remainingArticleDepth: Int,
+): Boolean = retainedArticleDepth != null && retainedArticleDepth == remainingArticleDepth
 
 internal data class ProfilePageEntry(
   val mid: Long,
@@ -258,6 +277,7 @@ internal data class VideoPageEntry(
   val qualityIndex: Int,
   val dataReady: Boolean,
   val playbackEnded: Boolean = false,
+  val engagementAccountMid: Long = 0L,
 )
 
 internal data class VideoExitPrelude(
@@ -272,6 +292,12 @@ internal data class VideoExitPrelude(
 ) {
   var transitionBitmap by mutableStateOf<Bitmap?>(null)
 }
+
+internal data class ProfileBangumiReturnRequest(
+  val token: Long,
+  val profileEntryId: Long,
+  val cardId: String,
+)
 
 internal enum class TransitionKind {
   ENTER_ROOT,
@@ -305,12 +331,82 @@ internal fun shouldDisplayCardTransitionOverlay(
   return phase != SessionPhase.READY || !exit
 }
 
+internal fun shouldSuppressDanmakuForCardTransition(
+  kind: TransitionKind?,
+  phase: SessionPhase?,
+): Boolean =
+  when (kind) {
+    TransitionKind.EXIT_ROOT,
+    TransitionKind.EXIT_RECOMMENDATION,
+    TransitionKind.EXIT_PROFILE -> true
+    TransitionKind.ENTER_RECOMMENDATION ->
+      phase != null && shouldDisplayCardTransitionOverlay(kind, phase)
+    else -> false
+  }
+
 internal fun shouldHideVideoPageBehindExitCover(
   kind: TransitionKind?,
   phase: SessionPhase?,
 ): Boolean =
   kind == TransitionKind.EXIT_ROOT &&
     phase in setOf(SessionPhase.FLYING, SessionPhase.REVEALING_BACKGROUND)
+
+internal fun shouldUseRootVideoEntryBackdrop(kind: TransitionKind?): Boolean =
+  kind == TransitionKind.ENTER_ROOT
+
+internal fun shouldUseProfileBangumiTransitionTarget(
+  sourceProfileEntryId: Long,
+  kind: TransitionKind?,
+  phase: SessionPhase?,
+): Boolean =
+  sourceProfileEntryId > 0L &&
+    kind == TransitionKind.ENTER_PROFILE &&
+    phase in setOf(SessionPhase.PREPARING, SessionPhase.READY, SessionPhase.FLYING)
+
+internal fun rootVideoEntryContentAlpha(
+  phase: SessionPhase?,
+  backgroundRevealProgress: Float = 1f,
+): Float =
+  when (phase) {
+    SessionPhase.REVEALING_BACKGROUND -> {
+      val progress = backgroundRevealProgress.coerceIn(0f, 1f)
+      progress * progress * (3f - 2f * progress)
+    }
+    SessionPhase.WAITING_FIRST_FRAME,
+    SessionPhase.REVEALING,
+    SessionPhase.COMPLETED -> 1f
+    else -> 0f
+  }
+
+internal fun shouldDeferVideoAuxiliaryContent(
+  preparingRootEnter: Boolean,
+  kind: TransitionKind?,
+  phase: SessionPhase?,
+): Boolean {
+  if (preparingRootEnter) return true
+  val entering =
+    when (kind) {
+      TransitionKind.ENTER_ROOT,
+      TransitionKind.ENTER_PROFILE -> true
+      else -> false
+    }
+  val coverFlying =
+    when (phase) {
+      SessionPhase.PREPARING,
+      SessionPhase.READY,
+      SessionPhase.FLYING -> true
+      else -> false
+    }
+  return entering && coverFlying
+}
+
+internal fun shouldDeferVideoCommentContent(
+  deferAllAuxiliaryContent: Boolean,
+  kind: TransitionKind?,
+  deferRootEnterComments: Boolean,
+): Boolean =
+  deferAllAuxiliaryContent ||
+    (kind == TransitionKind.ENTER_ROOT && deferRootEnterComments)
 
 internal class CardTransitionSession(
   val token: Long,
@@ -335,6 +431,10 @@ internal class CardTransitionSession(
   var transitionBitmap by mutableStateOf<Bitmap?>(null)
   val preparation = TransitionPreparationBarrier(requiredSignals)
   var phase by mutableStateOf(SessionPhase.PREPARING)
+  // Root entry mounts the lower recommendation pane first, then the comment pane on the next
+  // frame. Recommendation-to-recommendation navigation never enables this flag, so its retained
+  // parent/child panel choreography is left untouched.
+  var deferRootEnterComments by mutableStateOf(kind == TransitionKind.ENTER_ROOT)
   var reverseRequested by mutableStateOf(false)
   var backgroundStarted by mutableStateOf(false)
   var timedOut by mutableStateOf(false)

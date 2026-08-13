@@ -9,9 +9,9 @@ import android.view.HapticFeedbackConstants
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -22,12 +22,13 @@ import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -44,7 +45,6 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -75,6 +75,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -90,25 +91,28 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
-import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.rememberGraphicsLayer
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
@@ -125,31 +129,42 @@ import androidx.compose.ui.zIndex
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.ui.AspectRatioFrameLayout
 import dev.openbili.webdemo.R
 import dev.openbili.webdemo.api.PremiumAudioMode
 import dev.openbili.webdemo.feed.CoverImage
 import dev.openbili.webdemo.feed.CoverImageRequestFactory
+import dev.openbili.webdemo.feed.LocalCoverImageLoadingEnabled
 import dev.openbili.webdemo.feed.FeedItem
 import dev.openbili.webdemo.music.HomeMusicPlayerViewModel
 import dev.openbili.webdemo.music.HomeMusicUiState
-import dev.openbili.webdemo.music.MusicPlaybackProgressState
+import dev.openbili.webdemo.music.MusicFavoriteFolderTitle
 import dev.openbili.webdemo.music.MusicLibraryStatus
 import dev.openbili.webdemo.music.MusicPlaybackOrder
-import dev.openbili.webdemo.music.MusicFavoriteFolderTitle
+import dev.openbili.webdemo.music.MUSIC_SPECTRUM_PEAK_HOLD_MS
+import dev.openbili.webdemo.music.MusicPlaybackProgressState
+import dev.openbili.webdemo.music.advanceMusicPeak
 import dev.openbili.webdemo.settings.AppSettings
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
-import kotlinx.coroutines.launch
+import kotlin.math.abs
+import kotlin.math.exp
+import kotlin.math.roundToInt
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 private val MusicPaneShape = RoundedCornerShape(24.dp)
+private const val MUSIC_PAGE_PLAYBACK_START_DELAY_MS = 1_000L
+private const val MUSIC_PAGE_ENTRY_PREPARE_TIMEOUT_MS = 1_500L
 
 @Composable
 internal fun HomeMusicPlayerScreen(
   accountMid: Long,
+  vipActive: Boolean,
   settings: AppSettings,
   viewModel: HomeMusicPlayerViewModel,
   entryBackdropLayer: androidx.compose.ui.graphics.layer.GraphicsLayer,
@@ -158,6 +173,9 @@ internal fun HomeMusicPlayerScreen(
   entryUnderlayBounds: Rect,
   onDismissed: () -> Unit,
   onLoginClick: (Rect) -> Unit,
+  onFavoriteFolderSelected: (Long) -> Unit,
+  onExitStarted: () -> Unit = {},
+  onEntrySettled: () -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   val state by viewModel.screenState.collectAsState()
@@ -168,8 +186,8 @@ internal fun HomeMusicPlayerScreen(
     hostView.keepScreenOn = true
     onDispose { hostView.keepScreenOn = previous }
   }
-  LaunchedEffect(accountMid, settings.musicFavoriteFolderId) {
-    viewModel.open(accountMid, settings.musicFavoriteFolderId)
+  LaunchedEffect(settings.musicPreferredResolutionMode, vipActive) {
+    viewModel.configureVideoQuality(settings.musicPreferredResolutionMode, vipActive)
   }
   LaunchedEffect(
     settings.unlockDolbyAtmos,
@@ -207,6 +225,7 @@ internal fun HomeMusicPlayerScreen(
     val pageOffset = remember { Animatable(0f) }
     var pageReady by remember { mutableStateOf(false) }
     var settling by remember { mutableStateOf(false) }
+    var entryAnimationInProgress by remember { mutableStateOf(true) }
     val backgroundLayer = rememberGraphicsLayer()
     var backgroundBounds by remember { mutableStateOf(Rect.Zero) }
     var ambientBounds by remember { mutableStateOf(Rect.Zero) }
@@ -224,13 +243,16 @@ internal fun HomeMusicPlayerScreen(
     var menuDragStartProgress by remember { mutableFloatStateOf(0f) }
     val menuAnimationJob = remember { arrayOfNulls<Job>(1) }
     val effectiveMenuProgress =
-      if (wideLayout && menuDragging) menuDragProgress else if (wideLayout) menuProgress.value else 0f
+      if (wideLayout && menuDragging) menuDragProgress
+      else if (wideLayout) menuProgress.value else 0f
     val menuSettledHidden by
       remember(wideLayout) {
         derivedStateOf { wideLayout && !menuDragging && menuProgress.value >= .999f }
       }
     val spectrumColors =
-      rememberVideoCoverThemeColors(state.currentItem?.coverUrl.orEmpty())
+      rememberVideoCoverThemeColors(
+        if (entryAnimationInProgress) "" else state.currentItem?.coverUrl.orEmpty()
+      )
     val musicBackgroundSource =
       if (settings.useHomeBackgroundForMusic && settings.homeBackgroundUri.isNotBlank()) {
         settings.homeBackgroundUri
@@ -238,7 +260,10 @@ internal fun HomeMusicPlayerScreen(
         state.currentItem?.coverUrl.orEmpty()
       }
     val musicBackgroundModel =
-      rememberStaticBackgroundModel(source = musicBackgroundSource, blurred = true)
+      rememberStaticBackgroundModel(
+        source = musicBackgroundSource,
+        blurred = true,
+      )
     var displayedMusicBackgroundModel by remember { mutableStateOf<Any?>(null) }
     val libraryResolvedWithoutTrack =
       accountMid <= 0L ||
@@ -250,6 +275,7 @@ internal fun HomeMusicPlayerScreen(
         (state.libraryStatus == MusicLibraryStatus.READY && state.currentItem == null)
     val entryBridgeReleaseReady =
       displayedMusicBackgroundModel != null || libraryResolvedWithoutTrack
+    val latestEntryBridgeReleaseReady by rememberUpdatedState(entryBridgeReleaseReady)
     val entryBridgeAlpha = remember { Animatable(1f) }
     LaunchedEffect(entryBridgeReleaseReady) {
       if (entryBridgeReleaseReady) {
@@ -292,6 +318,10 @@ internal fun HomeMusicPlayerScreen(
     suspend fun settlePage(dismiss: Boolean) {
       if (settling) return
       settling = true
+      if (dismiss) {
+        onExitStarted()
+        viewModel.holdPreparedExitForTransition()
+      }
       pageOffset.animateTo(
         targetValue = if (dismiss) -screenHeightPx else 0f,
         animationSpec = tween(if (settings.reduceMotion) 90 else 240),
@@ -304,10 +334,27 @@ internal fun HomeMusicPlayerScreen(
     }
 
     LaunchedEffect(screenHeightPx) {
+      viewModel.holdPreparedEntryForTransition()
       pageOffset.snapTo(-screenHeightPx)
       pageReady = true
+      // Load the blurred background, surface, palette and covers while the page is still off-screen,
+      // then slide in only once the background is actually displayed. This removes the decode + View
+      // creation burst that previously landed on the slide's final frame.
+      entryAnimationInProgress = false
+      withTimeoutOrNull(MUSIC_PAGE_ENTRY_PREPARE_TIMEOUT_MS) {
+        while (!latestEntryBridgeReleaseReady) withFrameNanos {}
+      }
       withFrameNanos {}
+      // The page is fully on screen now. Release the entry input lock so touches work again,
+      // independent of playback preparation which still runs during the delay below.
+      onEntrySettled()
       pageOffset.animateTo(0f, tween(if (settings.reduceMotion) 90 else 260))
+      delay(MUSIC_PAGE_PLAYBACK_START_DELAY_MS)
+      viewModel.open(
+        accountMid = accountMid,
+        folderSelectionId = settings.musicFavoriteFolderId,
+        folderSelectionConfigured = settings.musicFavoriteFolderConfigured,
+      )
     }
     BackHandler(enabled = pageReady && !settling) {
       scope.launch { settlePage(dismiss = true) }
@@ -337,17 +384,16 @@ internal fun HomeMusicPlayerScreen(
       if (!menuSettledHidden || spectrumExitInProgress) return
       spectrumTouchAnimationJob[0]?.cancel()
       spectrumExitInProgress = true
-      spectrumTouchAnimationJob[0] =
-        scope.launch {
-          try {
-            // First collapse the responsive bars into their baseline, then remove the baseline.
-            // Keeping these sequential makes a down event feel intentional without delaying drag.
-            spectrumReveal.animateTo(0f, tween(if (settings.reduceMotion) 45 else 90))
-            spectrumLineReveal.animateTo(0f, tween(if (settings.reduceMotion) 35 else 65))
-          } finally {
-            spectrumExitInProgress = false
-          }
+      spectrumTouchAnimationJob[0] = scope.launch {
+        try {
+          // First collapse the responsive bars into their baseline, then remove the baseline.
+          // Keeping these sequential makes a down event feel intentional without delaying drag.
+          spectrumReveal.animateTo(0f, tween(if (settings.reduceMotion) 45 else 90))
+          spectrumLineReveal.animateTo(0f, tween(if (settings.reduceMotion) 35 else 65))
+        } finally {
+          spectrumExitInProgress = false
         }
+      }
     }
 
     val hiddenMenuTouchGesture =
@@ -382,11 +428,10 @@ internal fun HomeMusicPlayerScreen(
           onHorizontalDrag = { change, amount ->
             change.consume()
             menuDragProgress =
-              (
-                  menuDragProgress +
-                    amount / (menuWidthPx + 30.dp.toPx()).coerceAtLeast(1f)
-                )
-                .coerceIn(0f, 1f)
+              (menuDragProgress + amount / (menuWidthPx + 30.dp.toPx()).coerceAtLeast(1f)).coerceIn(
+                0f,
+                1f,
+              )
           },
           onDragEnd = {
             val target =
@@ -395,23 +440,21 @@ internal fun HomeMusicPlayerScreen(
               } else {
                 if (menuDragProgress <= .84f) 0f else 1f
               }
-            menuAnimationJob[0] =
-              scope.launch {
-                menuProgress.snapTo(menuDragProgress)
-                menuDragging = false
-                menuProgress.animateTo(target, tween(if (settings.reduceMotion) 80 else 220))
-              }
+            menuAnimationJob[0] = scope.launch {
+              menuProgress.snapTo(menuDragProgress)
+              menuDragging = false
+              menuProgress.animateTo(target, tween(if (settings.reduceMotion) 80 else 220))
+            }
           },
           onDragCancel = {
-            menuAnimationJob[0] =
-              scope.launch {
-                menuProgress.snapTo(menuDragProgress)
-                menuDragging = false
-                menuProgress.animateTo(
-                  if (menuDragStartProgress >= .5f) 1f else 0f,
-                  tween(if (settings.reduceMotion) 80 else 180),
-                )
-              }
+            menuAnimationJob[0] = scope.launch {
+              menuProgress.snapTo(menuDragProgress)
+              menuDragging = false
+              menuProgress.animateTo(
+                if (menuDragStartProgress >= .5f) 1f else 0f,
+                tween(if (settings.reduceMotion) 80 else 180),
+              )
+            }
           },
         )
       }
@@ -438,10 +481,7 @@ internal fun HomeMusicPlayerScreen(
         .background(MaterialTheme.colorScheme.background)
     ) {
       if (entryBridgeAlpha.value > .001f) {
-        Canvas(
-          Modifier.fillMaxSize()
-            .graphicsLayer { alpha = entryBridgeAlpha.value }
-        ) {
+        Canvas(Modifier.fillMaxSize().graphicsLayer { alpha = entryBridgeAlpha.value }) {
           // These are the exact layers already drawn by HomeHubScreen in the preceding frame.
           // Drawing both into the music page makes the bridge part of this page's RenderNode,
           // rather than relying on a transparent hole revealing the live page underneath.
@@ -453,40 +493,38 @@ internal fun HomeMusicPlayerScreen(
           }
         }
       }
-      Box(
-        Modifier.fillMaxSize()
+      CompositionLocalProvider(
+        LocalCoverImageLoadingEnabled provides !entryAnimationInProgress,
+      ) {
+        Box(
+          Modifier.fillMaxSize()
           .onGloballyPositioned { backgroundBounds = it.boundsInRoot() }
           .drawWithContent {
             backgroundLayer.record { this@drawWithContent.drawContent() }
             drawLayer(backgroundLayer)
           }
-      ) {
-        if (musicBackgroundModel != null) {
-          CrossfadeBackgroundImage(
-            model = musicBackgroundModel,
-            modifier = Modifier.fillMaxSize(),
-            contentScale = ContentScale.Crop,
-            transitionMillis = if (settings.reduceMotion) 90 else 320,
-            onDisplayed = { displayedMusicBackgroundModel = it },
-          )
+        ) {
+          if (musicBackgroundModel != null && !entryAnimationInProgress) {
+            CrossfadeBackgroundImage(
+              model = musicBackgroundModel,
+              modifier = Modifier.fillMaxSize(),
+              contentScale = ContentScale.Crop,
+              transitionMillis = if (settings.reduceMotion) 90 else 320,
+              onDisplayed = { displayedMusicBackgroundModel = it },
+            )
+          }
         }
-      }
 
-      Box(
-        Modifier.fillMaxSize()
-          .onGloballyPositioned { ambientBounds = it.boundsInRoot() }
-      ) {
+        Box(Modifier.fillMaxSize().onGloballyPositioned { ambientBounds = it.boundsInRoot() }) {
         val spectrumShouldRender =
-          spectrumExitInProgress || (menuSettledHidden && !hiddenMenuPointerPressed)
+          !settling && (spectrumExitInProgress || (menuSettledHidden && !hiddenMenuPointerPressed))
         MusicAmbientLayer(
           state = state,
-          spectrumState = viewModel.spectrumState,
+          spectrumTargets = viewModel.spectrumTargets,
           menuHideProgress = effectiveMenuProgress,
           spectrumEnabled = spectrumShouldRender,
-          lineReveal =
-            if (spectrumShouldRender) spectrumLineReveal.value else 0f,
-          spectrumReveal =
-            if (spectrumShouldRender) spectrumReveal.value else 0f,
+          lineReveal = if (spectrumShouldRender) spectrumLineReveal.value else 0f,
+          spectrumReveal = if (spectrumShouldRender) spectrumReveal.value else 0f,
           paletteColors = spectrumColors,
           clockColor = playerForeground,
           playerBounds = musicPlayerBounds,
@@ -496,7 +534,7 @@ internal fun HomeMusicPlayerScreen(
         )
       }
 
-      Column(Modifier.fillMaxSize().padding(top = 10.dp)) {
+        Column(Modifier.fillMaxSize().padding(top = 10.dp)) {
         MusicHeader(
           state = state,
           wideLayout = wideLayout,
@@ -516,6 +554,7 @@ internal fun HomeMusicPlayerScreen(
             MusicPlayerPane(
               state = state,
               viewModel = viewModel,
+              playbackSurfaceEnabled = !entryAnimationInProgress,
               menuHideProgress = effectiveMenuProgress,
               infoForegroundColor = playerForeground,
               progressBarBounds = musicProgressBounds,
@@ -527,6 +566,7 @@ internal fun HomeMusicPlayerScreen(
                 state = state,
                 viewModel = viewModel,
                 onLoginClick = onLoginClick,
+                onFavoriteFolderSelected = onFavoriteFolderSelected,
                 backdropLayer = backgroundLayer,
                 backdropBounds = backgroundBounds,
                 underlayLayer = null,
@@ -551,6 +591,7 @@ internal fun HomeMusicPlayerScreen(
             MusicPlayerPane(
               state = state,
               viewModel = viewModel,
+              playbackSurfaceEnabled = !entryAnimationInProgress,
               menuHideProgress = 0f,
               infoForegroundColor = playerForeground,
               progressBarBounds = musicProgressBounds,
@@ -561,6 +602,7 @@ internal fun HomeMusicPlayerScreen(
               state = state,
               viewModel = viewModel,
               onLoginClick = onLoginClick,
+              onFavoriteFolderSelected = onFavoriteFolderSelected,
               backdropLayer = backgroundLayer,
               backdropBounds = backgroundBounds,
               underlayLayer = null,
@@ -572,7 +614,7 @@ internal fun HomeMusicPlayerScreen(
         Spacer(Modifier.height(58.dp))
       }
 
-      MusicProgressBar(
+        MusicProgressBar(
         progressState = viewModel.progressState,
         onSeek = viewModel::seekTo,
         modifier =
@@ -587,7 +629,7 @@ internal fun HomeMusicPlayerScreen(
       // screen-interior target for manual swipe-in, including during a partially reversed drag.
       // It deliberately extends well past the system edge-back strip while avoiding the header
       // and bottom progress controls.
-      if (wideLayout && (menuDragging || effectiveMenuProgress > .001f)) {
+        if (wideLayout && (menuDragging || effectiveMenuProgress > .001f)) {
         Box(
           Modifier.align(Alignment.CenterEnd)
             .fillMaxHeight()
@@ -608,6 +650,7 @@ internal fun HomeMusicPlayerScreen(
           }
         )
       }
+      }
     }
   }
 }
@@ -615,7 +658,7 @@ internal fun HomeMusicPlayerScreen(
 @Composable
 private fun MusicAmbientLayer(
   state: HomeMusicUiState,
-  spectrumState: StateFlow<List<Float>>,
+  spectrumTargets: FloatArray,
   menuHideProgress: Float,
   spectrumEnabled: Boolean,
   lineReveal: Float,
@@ -627,7 +670,6 @@ private fun MusicAmbientLayer(
   wideLayout: Boolean,
   modifier: Modifier,
 ) {
-  val spectrumBands by spectrumState.collectAsState()
   var currentTime by remember { mutableStateOf(formatMusicClockWithSeconds()) }
   LaunchedEffect(Unit) {
     while (true) {
@@ -635,51 +677,43 @@ private fun MusicAmbientLayer(
       kotlinx.coroutines.delay(1_000)
     }
   }
-  val renderedSpectrumBands =
-    remember { FloatArray(dev.openbili.webdemo.music.MUSIC_SPECTRUM_BAND_COUNT) }
+  val bandCount = dev.openbili.webdemo.music.MUSIC_SPECTRUM_BAND_COUNT
+  val renderedSpectrumBands = remember { FloatArray(bandCount) }
+  val peakBands = remember { FloatArray(bandCount) }
   var spectrumFrameVersion by remember { mutableIntStateOf(0) }
-  val activeSpectrumBands =
-    if (spectrumEnabled && state.isPlaying) spectrumBands else emptyList()
-  val latestSpectrumTargets by rememberUpdatedState(activeSpectrumBands)
+  val latestIsPlaying by rememberUpdatedState(state.isPlaying)
   LaunchedEffect(spectrumEnabled) {
     if (!spectrumEnabled) {
       renderedSpectrumBands.fill(0f)
+      peakBands.fill(0f)
       spectrumFrameVersion++
       return@LaunchedEffect
     }
-    val bandCount = dev.openbili.webdemo.music.MUSIC_SPECTRUM_BAND_COUNT
-    val starts = FloatArray(bandCount)
-    val targets = FloatArray(bandCount)
-    val transitionStarts = LongArray(bandCount)
-    val transitionDurations = LongArray(bandCount)
-    fun valueAt(index: Int, frameNanos: Long): Float {
-      val duration = transitionDurations[index]
-      if (duration <= 0L) return targets[index]
-      val fraction =
-        ((frameNanos - transitionStarts[index]).toFloat() / duration.toFloat()).coerceIn(0f, 1f)
-      return starts[index] +
-        (targets[index] - starts[index]) * FastOutSlowInEasing.transform(fraction)
-    }
-    // One frame loop owns all bands. It exactly retains the previous 72ms rise / 230ms fall tween
-    // behavior but removes 28 concurrently running Animatables and their per-vsync snapshot work.
-    // Do not impose an artificial cap here: withFrameNanos follows the device's actual display
-    // refresh rate (including 120 Hz adaptive panels), while FFT target updates remain throttled
-    // upstream and the interpolation below keeps the motion continuous between samples.
+    var previousFrameNanos = 0L
+    // Time-constant smoothing responds immediately to each newest FFT target and never restarts a
+    // long tween. A fast attack keeps beats aligned with audio; the shorter release still avoids
+    // visibly jittery bars on 120 Hz panels.
     while (true) {
       withFrameNanos { frameNanos ->
+        val elapsedMillis =
+          if (previousFrameNanos == 0L) 8.33
+          else ((frameNanos - previousFrameNanos) / 1_000_000.0).coerceIn(1.0, 34.0)
+        previousFrameNanos = frameNanos
         repeat(bandCount) { index ->
-          val nextTarget = latestSpectrumTargets.getOrElse(index) { 0f }.coerceIn(0f, 1f)
-          if (nextTarget != targets[index]) {
-            val current = valueAt(index, frameNanos)
-            starts[index] = current
-            targets[index] = nextTarget
-            transitionStarts[index] = frameNanos
-            transitionDurations[index] =
-              (if (nextTarget > current) 72L else 230L) * 1_000_000L
-          }
-        }
-        repeat(bandCount) { index ->
-          renderedSpectrumBands[index] = valueAt(index, frameNanos)
+          val target =
+            if (latestIsPlaying) spectrumTargets.getOrElse(index) { 0f }.coerceIn(0f, 1f) else 0f
+          val current = renderedSpectrumBands[index]
+          val timeConstantMillis = if (target > current) 26.0 else 105.0
+          val blend = (1.0 - exp(-elapsedMillis / timeConstantMillis)).toFloat()
+          val next = current + (target - current) * blend
+          renderedSpectrumBands[index] = if (abs(target - next) < .001f) target else next
+          peakBands[index] =
+            advanceMusicPeak(
+              current = renderedSpectrumBands[index],
+              peak = peakBands[index],
+              elapsedMillis = elapsedMillis,
+              holdMillis = MUSIC_SPECTRUM_PEAK_HOLD_MS,
+            )
         }
         spectrumFrameVersion++
       }
@@ -693,8 +727,7 @@ private fun MusicAmbientLayer(
     val spectrumGlowPadding = 18.dp
     val spectrumContentWidth = maxWidth * .34f
     val spectrumContentHeight = maxHeight * .40f
-    val spectrumEndPadding =
-      (maxWidth * .035f - spectrumGlowPadding).coerceAtLeast(0.dp)
+    val spectrumEndPadding = (maxWidth * .035f - spectrumGlowPadding).coerceAtLeast(0.dp)
     val spectrumTopOffset =
       maxHeight * (.335f - .045f * lineReveal.coerceIn(0f, 1f)) - spectrumGlowPadding
     Canvas(
@@ -741,6 +774,7 @@ private fun MusicAmbientLayer(
         cap = StrokeCap.Round,
       )
       val bands = renderedSpectrumBands
+      val peaks = peakBands
       val spacing = (endX - startX) / bands.size.coerceAtLeast(1)
       val reveal = spectrumReveal.coerceIn(0f, 1f)
       // Observe the in-place band buffer from the draw phase. The version invalidates only this
@@ -782,11 +816,25 @@ private fun MusicAmbientLayer(
           strokeWidth = strokeWidth,
           cap = StrokeCap.Round,
         )
+        val peak = peaks[index]
+        if (peak > amplitude + .02f) {
+          val peakY = baselineY - maximumBarHeight * peak.coerceIn(0f, 1f) * reveal
+          drawLine(
+            color = color.copy(alpha = reveal * .8f),
+            start = Offset(x - strokeWidth * .6f, peakY),
+            end = Offset(x + strokeWidth * .6f, peakY),
+            strokeWidth = strokeWidth * .55f,
+            cap = StrokeCap.Round,
+          )
+        }
       }
     }
 
     if (wideLayout) {
-      val clockTravelX = maxWidth * .145f
+      val clockWidth = 116.dp
+      val spectrumCenterX = maxWidth * (1f - .035f - .34f / 2f)
+      val initialClockCenterX = maxWidth - 30.dp - clockWidth / 2f
+      val clockTravelX = spectrumCenterX - initialClockCenterX
       val initialClockCenterPx = with(density) { 30.dp.toPx() }
       val playerClockTargetPx =
         if (playerBounds.width > 0f && playerBounds.height > 0f && ambientBounds.height > 0f) {
@@ -797,39 +845,111 @@ private fun MusicAmbientLayer(
         }
       val clockTravelY =
         with(density) { (playerClockTargetPx - initialClockCenterPx).coerceAtLeast(0f).toDp() }
-      Row(
+      Box(
         modifier =
           Modifier.align(Alignment.TopEnd)
             .padding(top = 14.dp, end = 30.dp)
+            .width(clockWidth)
             .graphicsLayer {
-              translationX = -clockTravelX.toPx() * progress
+              translationX = clockTravelX.toPx() * progress
               translationY = clockTravelY.toPx() * progress
               scaleX = 1f + 3.1f * progress
               scaleY = 1f + 3.1f * progress
             },
-        verticalAlignment = Alignment.CenterVertically,
+        contentAlignment = Alignment.Center,
       ) {
-        Text(
-          currentTime.take(5),
+        MusicClockText(
+          time = currentTime,
+          secondsReveal = progress,
           color = clockColor.copy(alpha = .92f),
-          style = MaterialTheme.typography.headlineSmall,
-          fontWeight = FontWeight.Medium,
-          maxLines = 1,
         )
-        Box(
-          Modifier.width(48.dp * progress)
-            .graphicsLayer { alpha = progress },
-          contentAlignment = Alignment.CenterStart,
-        ) {
-          Text(
-            currentTime.drop(5),
-            color = clockColor.copy(alpha = .92f),
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Medium,
-            maxLines = 1,
-          )
+      }
+    }
+  }
+}
+
+@Composable
+private fun MusicClockText(
+  time: String,
+  secondsReveal: Float,
+  color: Color,
+) {
+  val style =
+    MaterialTheme.typography.headlineSmall.copy(
+      fontWeight = FontWeight.Medium,
+      fontFeatureSettings = "tnum",
+    )
+  Row(verticalAlignment = Alignment.CenterVertically) {
+    MusicClockCharacters(time.take(5), color, style)
+    Box(
+      Modifier.width(42.dp * secondsReveal.coerceIn(0f, 1f)).graphicsLayer {
+        alpha = secondsReveal.coerceIn(0f, 1f)
+        clip = true
+      },
+      contentAlignment = Alignment.CenterStart,
+    ) {
+      MusicClockCharacters(time.drop(5), color, style)
+    }
+  }
+}
+
+@Composable
+private fun MusicClockCharacters(
+  text: String,
+  color: Color,
+  style: androidx.compose.ui.text.TextStyle,
+) {
+  val slotHeight = 32.dp
+  val digitWidth = 14.dp
+  val colonWidth = 7.dp
+  val totalWidth =
+    remember(text) {
+      text.fold(0.dp) { width, character ->
+        width + if (character == ':') colonWidth else digitWidth
+      }
+    }
+  var visibleText by remember { mutableStateOf(text) }
+  var outgoingText by remember { mutableStateOf(text) }
+  val transition = remember { Animatable(1f) }
+  LaunchedEffect(text) {
+    if (text == visibleText) return@LaunchedEffect
+    outgoingText = visibleText
+    visibleText = text
+    transition.snapTo(0f)
+    transition.animateTo(1f, tween(90))
+    outgoingText = visibleText
+  }
+  val density = LocalDensity.current
+  val textSizePx = with(density) { style.fontSize.toPx() }
+  val paint =
+    remember {
+      android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL)
+        textAlign = android.graphics.Paint.Align.CENTER
+      }
+    }
+  Canvas(Modifier.width(totalWidth).height(slotHeight)) {
+    paint.textSize = textSizePx
+    val metrics = paint.fontMetrics
+    val baseline = ((size.height - metrics.bottom - metrics.top) / 2f).roundToInt().toFloat()
+    var left = 0f
+    visibleText.forEachIndexed { index, newCharacter ->
+      val slotWidth = if (newCharacter == ':') colonWidth.toPx() else digitWidth.toPx()
+      val centerX = (left + slotWidth / 2f).roundToInt().toFloat()
+      val oldCharacter = outgoingText.getOrNull(index) ?: newCharacter
+      fun drawCharacter(character: Char, alpha: Float) {
+        paint.color = color.copy(alpha = color.alpha * alpha.coerceIn(0f, 1f)).toArgb()
+        drawIntoCanvas { canvas ->
+          canvas.nativeCanvas.drawText(character.toString(), centerX, baseline, paint)
         }
       }
+      if (newCharacter == ':' || oldCharacter == newCharacter) {
+        drawCharacter(newCharacter, 1f)
+      } else {
+        drawCharacter(oldCharacter, 1f - transition.value)
+        drawCharacter(newCharacter, transition.value)
+      }
+      left += slotWidth
     }
   }
 }
@@ -1024,6 +1144,7 @@ private fun GlassIconButton(
 private fun MusicPlayerPane(
   state: HomeMusicUiState,
   viewModel: HomeMusicPlayerViewModel,
+  playbackSurfaceEnabled: Boolean,
   menuHideProgress: Float,
   infoForegroundColor: Color,
   progressBarBounds: Rect,
@@ -1052,105 +1173,103 @@ private fun MusicPlayerPane(
         0f
       }
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center) {
-    Column(
-      Modifier.fillMaxWidth().graphicsLayer { translationY = -playerLiftPx }
-    ) {
-      Column(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 5.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-      ) {
-        Text(
-          state.currentItem?.title ?: "从右侧选择一首音乐",
-          color = infoForegroundColor,
-          style = MaterialTheme.typography.titleLarge,
-          fontWeight = FontWeight.Bold,
-          maxLines = 2,
-          overflow = TextOverflow.Ellipsis,
-        )
-        state.currentItem?.uploader?.takeIf(String::isNotBlank)?.let { uploader ->
+      Column(Modifier.fillMaxWidth().graphicsLayer { translationY = -playerLiftPx }) {
+        Column(
+          modifier = Modifier.fillMaxWidth().padding(horizontal = 5.dp),
+          verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
           Text(
-            uploader,
-            color = infoForegroundColor.copy(alpha = .68f),
-            style = MaterialTheme.typography.bodyMedium,
-            maxLines = 1,
+            state.currentItem?.title ?: "从右侧选择一首音乐",
+            color = infoForegroundColor,
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            maxLines = 2,
             overflow = TextOverflow.Ellipsis,
           )
-        }
-      }
-      Spacer(Modifier.height(18.dp))
-      Surface(
-        modifier =
-          Modifier.fillMaxWidth().aspectRatio(16f / 9f)
-            .onGloballyPositioned { onPlayerBoundsChanged(it.boundsInRoot()) },
-        shape = VideoShapeTokens.Player,
-        color = Color.Black.copy(alpha = .44f),
-        border = BorderStroke(.75.dp, Color.White.copy(alpha = .18f)),
-        shadowElevation = 0.dp,
-      ) {
-        Box(Modifier.fillMaxSize()) {
-          state.currentItem?.let { item ->
-            val player = viewModel.preparePlayer()
-            val context = LocalContext.current
-            val transitionCoverModel =
-              remember(context, item.coverUrl) {
-                CoverImageRequestFactory.request(
-                  item.coverUrl,
-                  coil3.request.ImageRequest.Builder(context),
-                  width = 1600,
-                  height = 900,
-                )
-              }
-            AndroidView(
-              factory = { context ->
-                createTexturePlayerView(context, player).apply {
-                  useController = false
-                  isClickable = false
-                  isFocusable = false
-                  resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                  setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
-                }
-              },
-              update = { playerView ->
-                if (playerView.player !== player) playerView.player = player
-                playerView.useController = false
-                playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-              },
-              modifier = Modifier.fillMaxSize().graphicsLayer { alpha = .82f },
-            )
-            val transitionCoverAlpha = remember { Animatable(1f) }
-            var transitionCoverItemId by remember { mutableStateOf<String?>(null) }
-            val coverMustMaskPlayer =
-              transitionCoverItemId != item.id || !state.firstFrameReady
-            LaunchedEffect(item.id, state.firstFrameReady) {
-              if (transitionCoverItemId != item.id) {
-                transitionCoverItemId = item.id
-                transitionCoverAlpha.snapTo(1f)
-              }
-              if (state.firstFrameReady) {
-                transitionCoverAlpha.animateTo(0f, tween(170))
-              } else {
-                transitionCoverAlpha.snapTo(1f)
-              }
-            }
-            // Keep this composable mounted after the first frame. On a track change its
-            // CrossfadeBackgroundImage retains the already-decoded previous cover until the new
-            // one succeeds, so the TextureView can never become the only visible handoff layer.
-            CrossfadeBackgroundImage(
-              model = transitionCoverModel,
-              modifier =
-                Modifier.fillMaxSize().graphicsLayer {
-                  // Item identity changes are applied in composition, before LaunchedEffect gets
-                  // a chance to snap the Animatable. Force full opacity for that first handoff
-                  // frame as well, otherwise a released TextureView can leak through once.
-                  alpha = if (coverMustMaskPlayer) 1f else transitionCoverAlpha.value
-                },
-              contentScale = ContentScale.Crop,
-              transitionMillis = 90,
+          state.currentItem?.uploader?.takeIf(String::isNotBlank)?.let { uploader ->
+            Text(
+              uploader,
+              color = infoForegroundColor.copy(alpha = .68f),
+              style = MaterialTheme.typography.bodyMedium,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
             )
           }
         }
+        Spacer(Modifier.height(18.dp))
+        Surface(
+          modifier =
+            Modifier.fillMaxWidth().aspectRatio(16f / 9f).onGloballyPositioned {
+              onPlayerBoundsChanged(it.boundsInRoot())
+            },
+          shape = VideoShapeTokens.Player,
+          color = Color.Black.copy(alpha = .44f),
+          border = BorderStroke(.75.dp, Color.White.copy(alpha = .18f)),
+          shadowElevation = 0.dp,
+        ) {
+          Box(Modifier.fillMaxSize()) {
+            state.currentItem?.takeIf { playbackSurfaceEnabled }?.let { item ->
+              val player = viewModel.preparePlayer()
+              val context = LocalContext.current
+              val transitionCoverModel =
+                remember(context, item.coverUrl) {
+                  CoverImageRequestFactory.request(
+                    item.coverUrl,
+                    coil3.request.ImageRequest.Builder(context),
+                    width = 1600,
+                    height = 900,
+                  )
+                }
+              AndroidView(
+                factory = { context ->
+                  createTexturePlayerView(context, player).apply {
+                    useController = false
+                    isClickable = false
+                    isFocusable = false
+                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                    setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
+                  }
+                },
+                update = { playerView ->
+                  if (playerView.player !== player) playerView.player = player
+                  playerView.useController = false
+                  playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                },
+                modifier = Modifier.fillMaxSize().graphicsLayer { alpha = .82f },
+              )
+              val transitionCoverAlpha = remember { Animatable(1f) }
+              var transitionCoverItemId by remember { mutableStateOf<String?>(null) }
+              val coverMustMaskPlayer = transitionCoverItemId != item.id || !state.firstFrameReady
+              LaunchedEffect(item.id, state.firstFrameReady) {
+                if (transitionCoverItemId != item.id) {
+                  transitionCoverItemId = item.id
+                  transitionCoverAlpha.snapTo(1f)
+                }
+                if (state.firstFrameReady) {
+                  transitionCoverAlpha.animateTo(0f, tween(170))
+                } else {
+                  transitionCoverAlpha.snapTo(1f)
+                }
+              }
+              // Keep this composable mounted after the first frame. On a track change its
+              // CrossfadeBackgroundImage retains the already-decoded previous cover until the new
+              // one succeeds, so the TextureView can never become the only visible handoff layer.
+              CrossfadeBackgroundImage(
+                model = transitionCoverModel,
+                modifier =
+                  Modifier.fillMaxSize().graphicsLayer {
+                    // Item identity changes are applied in composition, before LaunchedEffect gets
+                    // a chance to snap the Animatable. Force full opacity for that first handoff
+                    // frame as well, otherwise a released TextureView can leak through once.
+                    alpha = if (coverMustMaskPlayer) 1f else transitionCoverAlpha.value
+                  },
+                contentScale = ContentScale.Crop,
+                transitionMillis = 90,
+              )
+            }
+          }
+        }
       }
-    }
       Spacer(Modifier.height(18.dp))
       MusicTransportControls(
         state = state,
@@ -1161,11 +1280,11 @@ private fun MusicPlayerPane(
               if (progress <= .001f) controlsBaseBounds = it.boundsInRoot()
             }
             .graphicsLayer {
-            translationX = controlsTravelX * progress
-            translationY = controlsTravelY * progress
-            scaleX = 1f + .10f * progress
-            scaleY = 1f + .10f * progress
-          },
+              translationX = controlsTravelX * progress
+              translationY = controlsTravelY * progress
+              scaleX = 1f + .10f * progress
+              scaleY = 1f + .10f * progress
+            },
       )
     }
   }
@@ -1190,8 +1309,7 @@ private fun MusicTransportControls(
     MusicControlButton(
       onClick = viewModel::togglePlaybackOrder,
       enabled = state.items.isNotEmpty(),
-      description =
-        if (state.playbackOrder == MusicPlaybackOrder.RANDOM) "随机播放" else "顺序播放",
+      description = if (state.playbackOrder == MusicPlaybackOrder.RANDOM) "随机播放" else "顺序播放",
     ) {
       Icon(
         if (state.playbackOrder == MusicPlaybackOrder.RANDOM) Icons.Default.Shuffle
@@ -1272,16 +1390,15 @@ private fun AdvancedAudioButton(
   Box {
     Surface(
       modifier =
-        Modifier.size(52.dp)
-          .clip(CircleShape)
-          .clickable(
-            enabled = available,
-            onClickLabel = "高级音质",
-          ) { expanded = true },
+        Modifier.size(52.dp).clip(CircleShape).clickable(
+          enabled = available,
+          onClickLabel = "高级音质",
+        ) {
+          expanded = true
+        },
       shape = CircleShape,
       color =
-        if (state.selectedPremiumAudio != null)
-          MaterialTheme.colorScheme.primary.copy(alpha = .34f)
+        if (state.selectedPremiumAudio != null) MaterialTheme.colorScheme.primary.copy(alpha = .34f)
         else Color.Black.copy(alpha = .30f),
       contentColor = if (available) Color.White else Color.White.copy(alpha = .28f),
       border = BorderStroke(.75.dp, Color.White.copy(alpha = if (available) .18f else .08f)),
@@ -1356,6 +1473,7 @@ private fun MusicLibraryPane(
   state: HomeMusicUiState,
   viewModel: HomeMusicPlayerViewModel,
   onLoginClick: (Rect) -> Unit,
+  onFavoriteFolderSelected: (Long) -> Unit,
   backdropLayer: androidx.compose.ui.graphics.layer.GraphicsLayer,
   backdropBounds: Rect,
   underlayLayer: androidx.compose.ui.graphics.layer.GraphicsLayer?,
@@ -1442,22 +1560,13 @@ private fun MusicLibraryPane(
             CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
           }
         MusicLibraryStatus.MISSING ->
-          if (state.folderSelectionId <= 0L) {
-            MusicLibraryMessage(
-              title = "还没有名为“音乐”的个人收藏夹",
-              subtitle = "创建后，把想连续播放的视频收藏进去即可。",
-              action = if (state.creatingFolder) "正在创建" else "创建“音乐”收藏夹",
-              actionEnabled = !state.creatingFolder,
-              onAction = viewModel::createMusicFolder,
-            )
-          } else {
-            MusicLibraryMessage(
-              title = "设置中选择的收藏夹已不可用",
-              subtitle = "请返回设置，重新选择一个个人收藏夹。",
-              action = "重新加载",
-              onAction = viewModel::retryLibrary,
-            )
-          }
+          MusicFolderSetupMessage(
+            state = state,
+            onFolderSelected = onFavoriteFolderSelected,
+            onCreateMusicFolder = {
+              viewModel.createMusicFolder(onCreated = onFavoriteFolderSelected)
+            },
+          )
         MusicLibraryStatus.ERROR ->
           MusicLibraryMessage(
             title = state.libraryError ?: "音乐收藏夹加载失败",
@@ -1493,6 +1602,83 @@ private fun MusicLibraryPane(
 }
 
 @Composable
+private fun MusicFolderSetupMessage(
+  state: HomeMusicUiState,
+  onFolderSelected: (Long) -> Unit,
+  onCreateMusicFolder: () -> Unit,
+) {
+  var folderMenuExpanded by remember { mutableStateOf(false) }
+  val exactMusicFolder =
+    remember(state.availableFolders) {
+      state.availableFolders.firstOrNull { it.title.trim() == MusicFavoriteFolderTitle }
+    }
+  Column(
+    Modifier.fillMaxSize().padding(20.dp),
+    horizontalAlignment = Alignment.CenterHorizontally,
+    verticalArrangement = Arrangement.Center,
+  ) {
+    Text(
+      if (state.folderSelectionConfigured) "原先选择的收藏夹已不可用" else "选择音乐收藏夹",
+      color = MaterialTheme.colorScheme.onSurface,
+      style = MaterialTheme.typography.titleMedium,
+      fontWeight = FontWeight.Bold,
+    )
+    Spacer(Modifier.height(8.dp))
+    Text(
+      "可以选择一个已有的个人收藏夹，或新建私密“音乐”收藏夹。",
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+      style = MaterialTheme.typography.bodyMedium,
+    )
+    Spacer(Modifier.height(16.dp))
+    Box {
+      TextButton(
+        onClick = { folderMenuExpanded = true },
+        enabled = state.availableFolders.isNotEmpty() && !state.creatingFolder,
+      ) {
+        Text(if (state.availableFolders.isEmpty()) "暂无已有收藏夹" else "选择已有收藏夹")
+      }
+      DropdownMenu(
+        expanded = folderMenuExpanded,
+        onDismissRequest = { folderMenuExpanded = false },
+      ) {
+        state.availableFolders.forEach { folder ->
+          DropdownMenuItem(
+            text = {
+              Column {
+                Text(folder.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                  "${folder.mediaCount} 个内容 · ${if (folder.isPublic) "公开" else "私密"}",
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  style = MaterialTheme.typography.bodySmall,
+                )
+              }
+            },
+            onClick = {
+              folderMenuExpanded = false
+              onFolderSelected(folder.id)
+            },
+          )
+        }
+      }
+    }
+    if (exactMusicFolder == null) {
+      Button(
+        onClick = onCreateMusicFolder,
+        enabled = !state.creatingFolder,
+      ) {
+        Text(if (state.creatingFolder) "正在创建" else "创建“音乐”收藏夹")
+      }
+    }
+    Spacer(Modifier.height(14.dp))
+    Text(
+      "之后可随时在“我的 > 设置 > 音乐播放器收藏夹”中修改。",
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+      style = MaterialTheme.typography.bodySmall,
+    )
+  }
+}
+
+@Composable
 private fun MusicTrackList(
   state: HomeMusicUiState,
   viewModel: HomeMusicPlayerViewModel,
@@ -1507,12 +1693,13 @@ private fun MusicTrackList(
       deleteCandidateId = null
     }
   }
-  val loadMore by remember(state.items.size, state.hasMore) {
-    derivedStateOf {
-      val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-      state.hasMore && last >= state.items.lastIndex - 3
+  val loadMore by
+    remember(state.items.size, state.hasMore) {
+      derivedStateOf {
+        val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+        state.hasMore && last >= state.items.lastIndex - 3
+      }
     }
-  }
   LaunchedEffect(loadMore) {
     if (loadMore) viewModel.loadMore()
   }
@@ -1580,7 +1767,7 @@ private fun MusicTrackList(
             color = Color.Transparent,
             border =
               BorderStroke(
-                if (playing) 1.75.dp else .5.dp,
+                if (playing) 2.75.dp else .5.dp,
                 if (playing) MaterialTheme.colorScheme.primary.copy(alpha = .96f)
                 else Color.White.copy(alpha = .12f),
               ),
@@ -1615,9 +1802,7 @@ private fun MusicTrackList(
                     overflow = TextOverflow.Ellipsis,
                   )
                   Text(
-                    listOfNotNull(item.uploader, item.duration)
-                      .joinToString(" · ")
-                      .ifBlank { " " },
+                    listOfNotNull(item.uploader, item.duration).joinToString(" · ").ifBlank { " " },
                     color = Color.White.copy(alpha = .64f),
                     style = MaterialTheme.typography.labelMedium,
                     maxLines = 1,
@@ -1626,6 +1811,21 @@ private fun MusicTrackList(
                 }
               }
             }
+          }
+          if (playing && !deleteSelected) {
+            val highlightShape = RoundedCornerShape(17.dp)
+            Box(
+              Modifier.matchParentSize()
+                .clip(highlightShape)
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = .08f))
+                .border(2.75.dp, MaterialTheme.colorScheme.primary, highlightShape)
+                .padding(3.5.dp)
+                .border(
+                  .9.dp,
+                  Color.White.copy(alpha = .78f),
+                  RoundedCornerShape(13.5.dp),
+                )
+            )
           }
           if (deleteSelected) {
             Row(
@@ -1674,17 +1874,13 @@ private fun MusicTrackList(
     state.currentItem?.let {
       Surface(
         modifier =
-          Modifier.align(Alignment.BottomEnd)
-            .padding(8.dp)
-            .size(42.dp)
-            .clip(CircleShape)
-            .clickable(
-              enabled = !locateCurrentPending,
-              onClickLabel = "定位到当前播放的视频",
-            ) {
-              locateCurrentPending = true
-              if (state.query.isNotBlank()) viewModel.clearQueryForCurrentTrack()
-            },
+          Modifier.align(Alignment.BottomEnd).padding(8.dp).size(42.dp).clip(CircleShape).clickable(
+            enabled = !locateCurrentPending,
+            onClickLabel = "定位到当前播放的视频",
+          ) {
+            locateCurrentPending = true
+            if (state.query.isNotBlank()) viewModel.clearQueryForCurrentTrack()
+          },
         shape = CircleShape,
         color = MaterialTheme.colorScheme.primary.copy(alpha = .88f),
         contentColor = MaterialTheme.colorScheme.onPrimary,
@@ -1867,12 +2063,9 @@ private fun performMusicDeleteVibration(context: Context, fallbackView: android.
     }
   if (vibrator?.hasVibrator() == true) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-      vibrator.vibrate(
-        VibrationEffect.createOneShot(42L, VibrationEffect.DEFAULT_AMPLITUDE)
-      )
+      vibrator.vibrate(VibrationEffect.createOneShot(42L, VibrationEffect.DEFAULT_AMPLITUDE))
     } else {
-      @Suppress("DEPRECATION")
-      vibrator.vibrate(42L)
+      @Suppress("DEPRECATION") vibrator.vibrate(42L)
     }
   } else {
     fallbackView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)

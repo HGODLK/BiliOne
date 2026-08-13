@@ -24,6 +24,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -49,6 +50,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -115,6 +117,11 @@ internal fun BangumiPageUi.currentEpisodeTitle(): String {
     ?: sourceCard.title
 }
 
+internal fun BangumiPageUi.currentEpisodeCoverUrl(): String =
+  playableEpisodes().firstOrNull { it.id == currentEpisodeId }?.coverUrl.orEmpty()
+    .ifBlank { season?.coverUrl.orEmpty() }
+    .ifBlank { sourceCard.coverUrl }
+
 internal fun BangumiPageUi.nextPlayableEpisode(): BangumiEpisode? {
   val episodes = playableEpisodes()
   val currentIndex = episodes.indexOfFirst { it.id == currentEpisodeId }
@@ -133,16 +140,21 @@ internal fun BangumiHeader(
   onFollow: () -> Unit,
   onRate: (Int, String) -> Unit,
   panelSlideProgress: () -> Float,
+  showDeviceStatus: Boolean,
+  foregroundColor: Color? = null,
+  glassBackdrop: PlaybackPageGlassBackdrop = PlaybackPageGlassBackdrop(),
 ) {
   var showShortReview by remember(page.season?.mediaId) { mutableStateOf(false) }
   val title = page.currentEpisodeTitle()
+  val resolvedForeground = foregroundColor ?: MaterialTheme.colorScheme.onBackground
   Surface(
     modifier =
       Modifier.fillMaxWidth().height(76.dp).graphicsLayer {
         alpha = panelSlideProgress().coerceIn(0f, 1f)
       },
-    color = MaterialTheme.colorScheme.background,
-    tonalElevation = 2.dp,
+    color = Color.Transparent,
+    contentColor = resolvedForeground,
+    tonalElevation = 0.dp,
   ) {
     Row(
       Modifier.fillMaxSize().padding(end = 14.dp),
@@ -162,34 +174,67 @@ internal fun BangumiHeader(
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
       )
-      OutlinedButton(
-        onClick = { showShortReview = true },
-        enabled = page.season?.mediaId?.let { it > 0L } == true,
-        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+      val ratingEnabled = page.season?.mediaId?.let { it > 0L } == true
+      PlaybackPageGlassSurface(
+        backdrop = glassBackdrop,
+        modifier =
+          Modifier.clip(RoundedCornerShape(18.dp))
+            .clickable(enabled = ratingEnabled) { showShortReview = true }
+            .graphicsLayer { alpha = if (ratingEnabled) 1f else .42f },
+        shape = RoundedCornerShape(18.dp),
       ) {
-        Icon(Icons.Default.Star, contentDescription = null, modifier = Modifier.size(17.dp))
-        Spacer(Modifier.width(6.dp))
-        Text(
-          page.season?.userRatingScore?.let { "${it / 2} 星" }
-            ?: page.season?.rating?.let { "$it 分" }
-            ?: "短评"
-        )
+        Row(
+          Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Icon(
+            Icons.Default.Star,
+            contentDescription = null,
+            modifier = Modifier.size(17.dp),
+            tint = resolvedForeground,
+          )
+          Spacer(Modifier.width(6.dp))
+          Text(
+            page.season?.userRatingScore?.let { "${it / 2} 星" }
+              ?: page.season?.rating?.let { "$it 分" }
+              ?: "短评",
+            color = resolvedForeground,
+          )
+        }
       }
       Spacer(Modifier.width(8.dp))
-      Button(
-        onClick = onFollow,
-        enabled = !page.followBusy && page.season?.seasonId?.let { it > 0L } == true,
-        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 8.dp),
+      val followEnabled = !page.followBusy && page.season?.seasonId?.let { it > 0L } == true
+      PlaybackPageGlassSurface(
+        backdrop = glassBackdrop,
+        modifier =
+          Modifier.clip(RoundedCornerShape(18.dp))
+            .clickable(enabled = followEnabled, onClick = onFollow)
+            .graphicsLayer { alpha = if (followEnabled) 1f else .42f },
+        shape = RoundedCornerShape(18.dp),
+        containerColor = MaterialTheme.colorScheme.primary.copy(alpha = .28f),
+        fallbackColor = MaterialTheme.colorScheme.primary.copy(alpha = .72f),
       ) {
         Text(
           if (page.followBusy) "处理中…"
           else if (page.season?.followed == true) "已追"
           else if (page.sourceCard.kind == SpaceContentKind.DRAMA) "追剧"
-          else "追番"
+          else "追番",
+          modifier = Modifier.padding(horizontal = 18.dp, vertical = 9.dp),
+          color = resolvedForeground,
         )
       }
       Spacer(Modifier.width(14.dp))
-      DeviceStatusCluster()
+      if (showDeviceStatus) {
+        PlaybackPageGlassSurface(
+          backdrop = glassBackdrop,
+          shape = CircleShape,
+        ) {
+          DeviceStatusCluster(
+            containerColor = Color.Transparent,
+            contentColor = resolvedForeground,
+          )
+        }
+      }
     }
   }
   if (showShortReview) {
@@ -212,6 +257,8 @@ internal fun BangumiLowerPanel(
   onEpisodeSelected: (BangumiEpisode) -> Unit,
   onSeasonSelected: (Long) -> Unit,
   panelSlideProgress: () -> Float,
+  glassBackdrop: PlaybackPageGlassBackdrop = PlaybackPageGlassBackdrop(),
+  foregroundColor: Color = MaterialTheme.colorScheme.onBackground,
   modifier: Modifier = Modifier,
 ) {
   val movie = page.season?.isMoviePage() == true
@@ -224,6 +271,8 @@ internal fun BangumiLowerPanel(
       onPosterBoundsChanged = onPosterBoundsChanged,
       onClick = onOpenDetails,
       panelSlideProgress = panelSlideProgress,
+      glassBackdrop = glassBackdrop,
+      foregroundColor = foregroundColor,
       modifier = Modifier.weight(if (movie) 7f else 5f).fillMaxHeight(),
     )
     BangumiEpisodeCard(
@@ -232,6 +281,8 @@ internal fun BangumiLowerPanel(
       onEpisodeSelected = onEpisodeSelected,
       onSeasonSelected = onSeasonSelected,
       panelSlideProgress = panelSlideProgress,
+      glassBackdrop = glassBackdrop,
+      foregroundColor = foregroundColor,
       modifier = Modifier.weight(if (movie) 2f else 3f).fillMaxHeight(),
     )
   }
@@ -243,6 +294,8 @@ private fun BangumiDetailCard(
   onPosterBoundsChanged: (Rect) -> Unit,
   onClick: () -> Unit,
   panelSlideProgress: () -> Float,
+  glassBackdrop: PlaybackPageGlassBackdrop,
+  foregroundColor: Color,
   modifier: Modifier,
 ) {
   val season = page.season
@@ -250,18 +303,18 @@ private fun BangumiDetailCard(
     modifier = modifier.clickable(onClick = onClick),
     shape = VideoShapeTokens.Card,
     color = Color.Transparent,
+    contentColor = foregroundColor,
     tonalElevation = 0.dp,
     shadowElevation = 0.dp,
   ) {
     Box(Modifier.fillMaxSize()) {
-      Surface(
+      PlaybackPageGlassSurface(
+        backdrop = glassBackdrop,
         modifier =
           Modifier.fillMaxSize().graphicsLayer {
             alpha = panelSlideProgress().coerceIn(0f, 1f)
           },
         shape = VideoShapeTokens.Card,
-        tonalElevation = 2.dp,
-        shadowElevation = 2.dp,
         border = BorderStroke(.75.dp, MaterialTheme.colorScheme.outlineVariant),
       ) {}
       Row(Modifier.fillMaxSize()) {
@@ -288,11 +341,12 @@ private fun BangumiDetailCard(
         Text(
           season?.title ?: page.sourceCard.title,
           style = MaterialTheme.typography.headlineSmall,
+          color = foregroundColor,
           fontWeight = FontWeight.Bold,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )
-        BangumiStatLine(season)
+        BangumiStatLine(season, foregroundColor.copy(alpha = .76f))
         val metadata =
           buildList {
               season?.areas?.takeIf { it.isNotEmpty() }?.joinToString(" / ")?.let(::add)
@@ -308,7 +362,7 @@ private fun BangumiDetailCard(
           Text(
             metadata,
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = foregroundColor.copy(alpha = .76f),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
           )
@@ -320,7 +374,7 @@ private fun BangumiDetailCard(
               ?: if (page.loading) "正在读取番剧资料…" else "暂无简介"
           }",
           style = MaterialTheme.typography.bodyMedium,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          color = foregroundColor.copy(alpha = .76f),
           maxLines = 2,
           overflow = TextOverflow.Ellipsis,
         )
@@ -333,7 +387,7 @@ private fun BangumiDetailCard(
             Text(
               "$it 分",
               style = MaterialTheme.typography.titleLarge,
-              color = MaterialTheme.colorScheme.primary,
+              color = foregroundColor,
               fontWeight = FontWeight.Bold,
             )
           }
@@ -341,14 +395,14 @@ private fun BangumiDetailCard(
             Text(
               "${formatBangumiCount(it)} 人评分",
               style = MaterialTheme.typography.labelMedium,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              color = foregroundColor.copy(alpha = .72f),
             )
           }
           Spacer(Modifier.weight(1f))
           Text(
             "点击查看完整信息",
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.primary,
+            color = foregroundColor.copy(alpha = .82f),
           )
         }
         }
@@ -358,7 +412,10 @@ private fun BangumiDetailCard(
 }
 
 @Composable
-private fun BangumiStatLine(season: BangumiSeason?) {
+private fun BangumiStatLine(
+  season: BangumiSeason?,
+  foregroundColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+) {
   val stats =
     listOfNotNull(
         season?.viewCount?.takeIf { it > 0 }?.let { "${formatBangumiCount(it)} 播放" },
@@ -370,7 +427,7 @@ private fun BangumiStatLine(season: BangumiSeason?) {
     Text(
       stats,
       style = MaterialTheme.typography.bodyMedium,
-      color = MaterialTheme.colorScheme.onSurfaceVariant,
+      color = foregroundColor,
       maxLines = 1,
       overflow = TextOverflow.Ellipsis,
     )
@@ -391,6 +448,8 @@ private fun BangumiEpisodeCard(
   onEpisodeSelected: (BangumiEpisode) -> Unit,
   onSeasonSelected: (Long) -> Unit,
   panelSlideProgress: () -> Float,
+  glassBackdrop: PlaybackPageGlassBackdrop,
+  foregroundColor: Color,
   modifier: Modifier,
 ) {
   var showMenu by remember(page.season?.seasonId) { mutableStateOf(false) }
@@ -399,11 +458,10 @@ private fun BangumiEpisodeCard(
       page.season?.sections?.firstOrNull { it.episodes.isNotEmpty() }?.episodes.orEmpty()
     }
   val showingRelatedInsteadOfMain = page.season != null && page.season.episodes.isEmpty()
-  Surface(
+  PlaybackPageGlassSurface(
+    backdrop = glassBackdrop,
     modifier = modifier.graphicsLayer { alpha = panelSlideProgress().coerceIn(0f, 1f) },
     shape = VideoShapeTokens.Card,
-    tonalElevation = 2.dp,
-    shadowElevation = 2.dp,
     border = BorderStroke(.75.dp, MaterialTheme.colorScheme.outlineVariant),
   ) {
     Row(Modifier.fillMaxSize()) {
@@ -414,18 +472,19 @@ private fun BangumiEpisodeCard(
           else "选集",
           style = MaterialTheme.typography.titleMedium,
           fontWeight = FontWeight.Bold,
+          color = foregroundColor,
         )
         Spacer(Modifier.height(8.dp))
         when {
           page.loading && episodes.isEmpty() ->
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-              Text("正在读取选集…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+              Text("正在读取选集…", color = foregroundColor.copy(alpha = .72f))
             }
           page.error != null && episodes.isEmpty() ->
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
               Text(
                 page.error,
-                color = MaterialTheme.colorScheme.error,
+                color = foregroundColor.copy(alpha = .82f),
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
               )
@@ -442,6 +501,7 @@ private fun BangumiEpisodeCard(
                 BangumiEpisodeNumber(
                   episode = episode,
                   selected = episode.id == page.currentEpisodeId,
+                  foregroundColor = foregroundColor,
                   onClick = { onEpisodeSelected(episode) },
                 )
               }
@@ -450,7 +510,8 @@ private fun BangumiEpisodeCard(
       }
       Surface(
         modifier = Modifier.width(48.dp).fillMaxHeight(),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .72f),
+        color = foregroundColor.copy(alpha = .08f),
+        contentColor = foregroundColor,
       ) {
         Column(
           Modifier.fillMaxSize(),
@@ -458,12 +519,16 @@ private fun BangumiEpisodeCard(
           verticalArrangement = Arrangement.Center,
         ) {
           IconButton(onClick = { showMenu = true }) {
-            Icon(Icons.Default.MoreVert, contentDescription = "季度和花絮")
+            Icon(
+              Icons.Default.MoreVert,
+              contentDescription = "季度和花絮",
+              tint = foregroundColor,
+            )
           }
           Text(
             "更多",
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = foregroundColor.copy(alpha = .76f),
           )
         }
       }
@@ -489,6 +554,7 @@ private fun BangumiEpisodeCard(
 private fun BangumiEpisodeNumber(
   episode: BangumiEpisode,
   selected: Boolean,
+  foregroundColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
   onClick: () -> Unit,
 ) {
   Surface(
@@ -496,11 +562,11 @@ private fun BangumiEpisodeNumber(
       Modifier.fillMaxWidth().aspectRatio(1.35f).clickable(enabled = !selected, onClick = onClick),
     shape = RoundedCornerShape(10.dp),
     color =
-      if (selected) MaterialTheme.colorScheme.primaryContainer
-      else MaterialTheme.colorScheme.surfaceVariant,
+      if (selected) MaterialTheme.colorScheme.primary.copy(alpha = .22f)
+      else foregroundColor.copy(alpha = .08f),
     contentColor =
-      if (selected) MaterialTheme.colorScheme.onPrimaryContainer
-      else MaterialTheme.colorScheme.onSurfaceVariant,
+      if (selected) foregroundColor
+      else foregroundColor.copy(alpha = .82f),
   ) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
       Text(
@@ -528,7 +594,7 @@ internal fun BangumiEpisodeSelectionDialog(
       modifier = Modifier.widthIn(min = 420.dp, max = 680.dp).heightIn(max = 620.dp),
       shape = RoundedCornerShape(24.dp),
       tonalElevation = 8.dp,
-      shadowElevation = 12.dp,
+      shadowElevation = 0.dp,
     ) {
       Column(Modifier.fillMaxWidth().padding(20.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -579,7 +645,7 @@ private fun BangumiEpisodeMenuDialog(
       modifier = Modifier.widthIn(min = 420.dp, max = 620.dp).heightIn(max = 570.dp),
       shape = RoundedCornerShape(24.dp),
       tonalElevation = 8.dp,
-      shadowElevation = 12.dp,
+      shadowElevation = 0.dp,
     ) {
       Column(Modifier.fillMaxWidth().padding(20.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -659,6 +725,7 @@ private fun BangumiEpisodeMenuDialog(
 internal fun BangumiInfoDialog(
   page: BangumiPageUi,
   onDismiss: () -> Unit,
+  onCacheClick: (() -> Unit)? = null,
 ) {
   val season = page.season
   Dialog(
@@ -669,7 +736,7 @@ internal fun BangumiInfoDialog(
       modifier = Modifier.fillMaxWidth(.86f).heightIn(min = 400.dp, max = 620.dp),
       shape = RoundedCornerShape(26.dp),
       tonalElevation = 10.dp,
-      shadowElevation = 14.dp,
+      shadowElevation = 0.dp,
     ) {
       Row(Modifier.fillMaxSize().padding(22.dp), horizontalArrangement = Arrangement.spacedBy(22.dp)) {
         CoverImage(
@@ -694,6 +761,9 @@ internal fun BangumiInfoDialog(
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Bold,
               )
+              if (onCacheClick != null) {
+                TextButton(onClick = onCacheClick) { Text("缓存视频") }
+              }
               TextButton(onClick = onDismiss) { Text("关闭") }
             }
           }
@@ -767,7 +837,7 @@ private fun BangumiShortReviewDialog(
       modifier = Modifier.widthIn(min = 440.dp, max = 580.dp),
       shape = RoundedCornerShape(24.dp),
       tonalElevation = 8.dp,
-      shadowElevation = 12.dp,
+      shadowElevation = 0.dp,
     ) {
       Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text("给《$title》写短评", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)

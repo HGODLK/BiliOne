@@ -2,6 +2,7 @@ package dev.openbili.webdemo.feed
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
@@ -28,28 +29,27 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.LazyListScope
-import androidx.compose.foundation.lazy.items as lazyRowItems
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.items as lazyRowItems
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Headset
 import androidx.compose.material.icons.filled.Leaderboard
 import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.WorkspacePremium
-import androidx.compose.material3.Icon
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -59,6 +59,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -68,20 +69,32 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.layer.GraphicsLayer
+import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import coil3.imageLoader
+import coil3.request.ImageRequest
 import dev.openbili.webdemo.api.PopularPeriod
+import dev.openbili.webdemo.ui.BackdropGlassSurface
+import dev.openbili.webdemo.ui.HomeGlassTokens
 import dev.openbili.webdemo.ui.NavigationCardBottomClearance
 import dev.openbili.webdemo.ui.PullRefreshContainer
 import dev.openbili.webdemo.ui.VideoCardGradient
@@ -89,8 +102,6 @@ import dev.openbili.webdemo.ui.VideoCardReveal
 import dev.openbili.webdemo.ui.VideoShapeTokens
 import dev.openbili.webdemo.ui.navigationBringIntoViewTarget
 import dev.openbili.webdemo.ui.rememberNavigationBringIntoViewRequester
-import coil3.imageLoader
-import coil3.request.ImageRequest
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
@@ -112,6 +123,11 @@ fun PopularFeedScreen(
   hiddenCoverItemId: String? = null,
   backgroundWorkAllowed: Boolean = true,
   coverPrefetchCount: Int = FeedPerformanceConfig.coverPrefetchCount,
+  backdropLayer: GraphicsLayer,
+  onBackdropBoundsChanged: (Rect) -> Unit,
+  underlayLayer: GraphicsLayer,
+  underlayBounds: Rect,
+  topContentPadding: Dp,
 ) {
   val content = state.content
   val context = LocalContext.current
@@ -128,7 +144,13 @@ fun PopularFeedScreen(
         total > 0 && last >= total - 6
       }
     }
-  LaunchedEffect(shouldLoadMore, content, imageLoadPolicy.mode, backgroundWorkAllowed, state.section) {
+  LaunchedEffect(
+    shouldLoadMore,
+    content,
+    imageLoadPolicy.mode,
+    backgroundWorkAllowed,
+    state.section,
+  ) {
     if (
       backgroundWorkAllowed &&
         shouldLoadMore &&
@@ -209,37 +231,92 @@ fun PopularFeedScreen(
     if (!refreshMessage.isNullOrBlank()) onConsumeRefreshMessage()
   }
 
-  Column(Modifier.fillMaxSize()) {
-    PopularSectionBar(selected = state.section, onSection = onSection)
-    PopularContextBar(
-      state = state,
-      onWeeklyPeriod = onWeeklyPeriod,
-      onRankCategory = onRankCategory,
-      onMusicPeriod = onMusicPeriod,
-      onHorizontalRailInteractionChanged = onHorizontalRailInteractionChanged,
-    )
-    PullRefreshContainer(
-      refreshing = state.isRefreshing,
-      onRefresh = onRefresh,
-      modifier = Modifier.fillMaxWidth().weight(1f),
-    ) {
-      when (content) {
-        FeedUiState.Loading -> PopularFeedSkeleton()
-        is FeedUiState.Content ->
-          CompositionLocalProvider(LocalFeedImageLoadPolicy provides imageLoadPolicy) {
-            PopularVideoGrid(
-              items = content.items,
-              section = state.section,
-              isLoadingMore = content.isLoadingMore,
-              gridState = gridState,
-              onItemClick = onItemClick,
-              onItemLongClick = onItemLongClick,
-              hiddenCoverItemId = hiddenCoverItemId,
-            )
+  var contentBackdropBounds by remember { mutableStateOf(Rect.Zero) }
+  var chromeHeightPx by remember { mutableIntStateOf(0) }
+  val density = LocalDensity.current
+  val chromeHeight = with(density) { chromeHeightPx.toDp() }
+  val darkTheme = MaterialTheme.colorScheme.background.luminance() < .5f
+  Box(Modifier.fillMaxSize()) {
+    Box(
+      Modifier.fillMaxSize()
+        .onGloballyPositioned {
+          contentBackdropBounds = it.boundsInRoot()
+          onBackdropBoundsChanged(contentBackdropBounds)
+        }
+        .drawWithContent {
+          if (backgroundWorkAllowed) {
+            backdropLayer.record { this@drawWithContent.drawContent() }
+            drawLayer(backdropLayer)
+          } else {
+            drawContent()
           }
-        is FeedUiState.Empty -> PopularFeedMessage(content.message)
-        is FeedUiState.ExtractionError -> PopularFeedError(content.detail, onRefresh)
-        is FeedUiState.NetworkError -> PopularFeedError(content.detail, onRefresh)
+        }
+    ) {
+      PullRefreshContainer(
+        refreshing = state.isRefreshing,
+        onRefresh = onRefresh,
+        indicatorTopPadding = topContentPadding + chromeHeight + 8.dp,
+        modifier = Modifier.fillMaxSize(),
+      ) {
+        val gridTopPadding = topContentPadding + chromeHeight + 8.dp
+        when (content) {
+          FeedUiState.Loading -> PopularFeedSkeleton(gridTopPadding)
+          is FeedUiState.Content ->
+            CompositionLocalProvider(LocalFeedImageLoadPolicy provides imageLoadPolicy) {
+              PopularVideoGrid(
+                items = content.items,
+                section = state.section,
+                isLoadingMore = content.isLoadingMore,
+                gridState = gridState,
+                onItemClick = onItemClick,
+                onItemLongClick = onItemLongClick,
+                hiddenCoverItemId = hiddenCoverItemId,
+                topContentPadding = gridTopPadding,
+              )
+            }
+          is FeedUiState.Empty -> PopularFeedMessage(content.message)
+          is FeedUiState.ExtractionError -> PopularFeedError(content.detail, onRefresh)
+          is FeedUiState.NetworkError -> PopularFeedError(content.detail, onRefresh)
+        }
+      }
+    }
+    BackdropGlassSurface(
+      backdropLayer = backdropLayer,
+      backdropBounds = contentBackdropBounds,
+      underlayLayer = underlayLayer,
+      underlayBounds = underlayBounds,
+      modifier =
+        Modifier.align(Alignment.TopCenter)
+          .padding(top = topContentPadding)
+          .fillMaxWidth()
+          .onSizeChanged { chromeHeightPx = it.height },
+      shape = RoundedCornerShape(bottomStart = 22.dp, bottomEnd = 22.dp),
+      blurRadius = HomeGlassTokens.BlurRadius,
+      containerColor =
+        MaterialTheme.colorScheme.surface.copy(
+          alpha =
+            if (darkTheme) HomeGlassTokens.DarkContainerAlpha
+            else HomeGlassTokens.LightContainerAlpha
+        ),
+      border =
+        BorderStroke(
+          .75.dp,
+          MaterialTheme.colorScheme.outlineVariant.copy(
+            alpha =
+              if (darkTheme) HomeGlassTokens.DarkBorderAlpha else HomeGlassTokens.LightBorderAlpha
+          ),
+        ),
+      shadowElevation = 0.dp,
+    ) {
+      Column(Modifier.fillMaxWidth()) {
+        PopularSectionBar(selected = state.section, onSection = onSection)
+        PopularContextBar(
+          state = state,
+          onWeeklyPeriod = onWeeklyPeriod,
+          onRankCategory = onRankCategory,
+          onMusicPeriod = onMusicPeriod,
+          onHorizontalRailInteractionChanged = onHorizontalRailInteractionChanged,
+        )
       }
     }
   }
@@ -252,7 +329,7 @@ private fun PopularSectionBar(
 ) {
   Surface(
     modifier = Modifier.fillMaxWidth(),
-    color = MaterialTheme.colorScheme.background,
+    color = Color.Transparent,
   ) {
     Row(
       Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp),
@@ -315,16 +392,12 @@ private data class PopularSectionVisual(
 
 private fun popularSectionVisual(section: PopularSection): PopularSectionVisual =
   when (section) {
-    PopularSection.ALL ->
-      PopularSectionVisual(Icons.Default.LocalFireDepartment, Color(0xFFFF6B78))
-    PopularSection.WEEKLY ->
-      PopularSectionVisual(Icons.Default.CalendarMonth, Color(0xFFFFC83D))
+    PopularSection.ALL -> PopularSectionVisual(Icons.Default.LocalFireDepartment, Color(0xFFFF6B78))
+    PopularSection.WEEKLY -> PopularSectionVisual(Icons.Default.CalendarMonth, Color(0xFFFFC83D))
     PopularSection.PRECIOUS ->
       PopularSectionVisual(Icons.Default.WorkspacePremium, Color(0xFFFF9400))
-    PopularSection.RANKING ->
-      PopularSectionVisual(Icons.Default.Leaderboard, Color(0xFFFF6F9E))
-    PopularSection.MUSIC ->
-      PopularSectionVisual(Icons.Default.Headset, Color(0xFF4098F8))
+    PopularSection.RANKING -> PopularSectionVisual(Icons.Default.Leaderboard, Color(0xFFFF6F9E))
+    PopularSection.MUSIC -> PopularSectionVisual(Icons.Default.Headset, Color(0xFF4098F8))
   }
 
 @Composable
@@ -336,9 +409,7 @@ private fun PopularContextBar(
   onHorizontalRailInteractionChanged: (Boolean) -> Unit,
 ) {
   Column(
-    Modifier.fillMaxWidth()
-      .background(MaterialTheme.colorScheme.background)
-      .padding(start = 20.dp, end = 20.dp, bottom = 8.dp),
+    Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 8.dp),
     verticalArrangement = Arrangement.spacedBy(8.dp),
   ) {
     Text(
@@ -367,7 +438,8 @@ private fun PopularContextBar(
           onPeriod = onMusicPeriod,
           onHorizontalRailInteractionChanged = onHorizontalRailInteractionChanged,
         )
-      PopularSection.ALL, PopularSection.PRECIOUS -> Unit
+      PopularSection.ALL,
+      PopularSection.PRECIOUS -> Unit
     }
   }
 }
@@ -472,6 +544,7 @@ private fun PopularVideoGrid(
   onItemClick: (FeedItem, Rect, FeedScrollAnchor) -> Unit,
   onItemLongClick: (FeedItem) -> Unit,
   hiddenCoverItemId: String?,
+  topContentPadding: Dp,
 ) {
   val flingTracker = remember(gridState) { FeedNavigationFlingTracker() }
   val dynamicPaletteAllowed =
@@ -488,7 +561,7 @@ private fun PopularVideoGrid(
       PaddingValues(
         start = 16.dp,
         end = 16.dp,
-        top = 8.dp,
+        top = topContentPadding,
         bottom = NavigationCardBottomClearance,
       ),
     horizontalArrangement = Arrangement.spacedBy(18.dp),
@@ -519,6 +592,7 @@ private fun PopularVideoGrid(
           gridState = gridState,
           flingTracker = flingTracker,
           dynamicPaletteAllowed = dynamicPaletteAllowed,
+          navigationTopClearance = topContentPadding,
           coverVisible = item.id != hiddenCoverItemId,
           onClick = { bounds, anchor -> onItemClick(item, bounds, anchor) },
           onLongClick = { onItemLongClick(item) },
@@ -548,12 +622,14 @@ private fun PopularVideoCard(
   gridState: LazyGridState,
   flingTracker: FeedNavigationFlingTracker,
   dynamicPaletteAllowed: State<Boolean>,
+  navigationTopClearance: Dp,
   coverVisible: Boolean,
   onClick: (Rect, FeedScrollAnchor) -> Unit,
   onLongClick: () -> Unit,
 ) {
   var coverBounds = remember(item.id) { Rect.Zero }
-  val bringIntoViewRequester = rememberNavigationBringIntoViewRequester()
+  val bringIntoViewRequester =
+    rememberNavigationBringIntoViewRequester(topClearance = navigationTopClearance)
   val scope = rememberCoroutineScope()
   val interactionSource = remember { MutableInteractionSource() }
   val pressed by interactionSource.collectIsPressedAsState()
@@ -589,7 +665,7 @@ private fun PopularVideoCard(
             }
           },
           onLongClick = onLongClick,
-    )
+        )
         .testTag("popular_card"),
     shape = VideoShapeTokens.Card,
     color = Color.Transparent,
@@ -698,8 +774,7 @@ private fun PopularVideoCard(
               modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
               style = MaterialTheme.typography.labelMedium,
               fontWeight = FontWeight.Bold,
-              color =
-                if (topThree) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+              color = if (topThree) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
             )
           }
         }
@@ -709,11 +784,17 @@ private fun PopularVideoCard(
 }
 
 @Composable
-private fun PopularFeedSkeleton() {
+private fun PopularFeedSkeleton(topContentPadding: Dp) {
   LazyVerticalGrid(
     columns = GridCells.Fixed(2),
     modifier = Modifier.fillMaxSize(),
-    contentPadding = PaddingValues(16.dp),
+    contentPadding =
+      PaddingValues(
+        start = 16.dp,
+        top = topContentPadding,
+        end = 16.dp,
+        bottom = 16.dp,
+      ),
     horizontalArrangement = Arrangement.spacedBy(18.dp),
     verticalArrangement = Arrangement.spacedBy(12.dp),
   ) {
@@ -733,11 +814,13 @@ private fun PopularFeedSkeleton() {
           verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
           Box(
-            Modifier.fillMaxWidth().height(16.dp)
+            Modifier.fillMaxWidth()
+              .height(16.dp)
               .background(MaterialTheme.colorScheme.surfaceVariant)
           )
           Box(
-            Modifier.fillMaxWidth(.72f).height(14.dp)
+            Modifier.fillMaxWidth(.72f)
+              .height(14.dp)
               .background(MaterialTheme.colorScheme.surfaceVariant)
           )
         }

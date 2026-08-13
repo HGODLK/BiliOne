@@ -327,11 +327,45 @@ class ArticleAndHistoryParserTest {
   fun historyPgcLabelsKeepTheNativeBangumiCategories() {
     assertEquals("番剧", BiliApi.historyPgcMediaLabel("番剧", ""))
     assertEquals("国创", BiliApi.historyPgcMediaLabel("", "国创"))
+    assertEquals("国创", BiliApi.historyPgcMediaLabel("动画", "国创"))
     assertEquals("港澳台番剧", BiliApi.historyPgcMediaLabel("番剧", "仅限港澳台地区"))
     assertEquals("电影", BiliApi.historyPgcMediaLabel("剧场版", ""))
     assertEquals("电视剧", BiliApi.historyPgcMediaLabel("电视剧", ""))
     assertEquals("纪录片", BiliApi.historyPgcMediaLabel("纪录片", ""))
     assertEquals("综艺", BiliApi.historyPgcMediaLabel("综艺", ""))
+  }
+
+  @Test
+  fun nativeGuochuangHintOverridesGenericAnimationAndStaleSeasonType() {
+    val response =
+      BiliApi.parseHistoryResponse(
+        JSONObject(
+          """
+          {
+            "code": 0,
+            "data": {
+              "has_more": false,
+              "list": [{
+                "title": "记忆管理局",
+                "type_name": "动画",
+                "tag_name": "国创",
+                "view_at": 1700000001,
+                "history": {
+                  "business": "pgc",
+                  "season_id": 73957,
+                  "season_type": 1,
+                  "epid": 4791311
+                }
+              }]
+            }
+          }
+          """
+        )
+      )
+
+    val item = response.items.single() as AccountHistoryItem.Bangumi
+    assertEquals("国创", item.mediaLabel)
+    assertEquals(4, item.bangumi.seasonType)
   }
 
   @Test

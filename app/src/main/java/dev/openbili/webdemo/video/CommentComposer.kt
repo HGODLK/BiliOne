@@ -71,6 +71,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
@@ -86,6 +87,7 @@ import coil3.compose.AsyncImage
 import dev.openbili.webdemo.api.BiliEmote
 import dev.openbili.webdemo.api.BiliEmotePackage
 import dev.openbili.webdemo.api.MentionSuggestion
+import dev.openbili.webdemo.ui.VideoPageSurfaceTokens
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 
@@ -127,6 +129,19 @@ internal fun CommentComposer(
   val effectiveLineCount = maxOf(visualLineCount, text.count { it == '\n' } + 1)
   val longTextMode = text.length >= 48 || effectiveLineCount >= 2
   val detachedMode = detachedByVisualLines
+  val darkPage = MaterialTheme.colorScheme.background.luminance() < .5f
+  val inputDockColor =
+    MaterialTheme.colorScheme.surface.copy(
+      alpha =
+        if (darkPage) VideoPageSurfaceTokens.DarkInputDockAlpha
+        else VideoPageSurfaceTokens.LightInputDockAlpha
+    )
+  val inputFieldColor =
+    MaterialTheme.colorScheme.surfaceVariant.copy(
+      alpha =
+        if (darkPage) VideoPageSurfaceTokens.DarkInputFieldAlpha
+        else VideoPageSurfaceTokens.LightInputFieldAlpha
+    )
   LaunchedEffect(effectiveLineCount, text.length) {
     if (detachedByVisualLines) {
       // The detached editor is much wider than the comment pane, so remeasuring the same text
@@ -217,10 +232,10 @@ internal fun CommentComposer(
       Surface(
         modifier = Modifier.fillMaxSize(),
         shape = RoundedCornerShape(22.dp),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = .92f),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = .94f),
         contentColor = MaterialTheme.colorScheme.onSurface,
         tonalElevation = 2.dp,
-        shadowElevation = 7.dp,
+        shadowElevation = 0.dp,
         border =
           androidx.compose.foundation.BorderStroke(
             .75.dp,
@@ -260,9 +275,9 @@ internal fun CommentComposer(
     Surface(
       modifier = Modifier.fillMaxWidth(),
       shape = RoundedCornerShape(30.dp),
-      color = MaterialTheme.colorScheme.surface.copy(alpha = .92f),
+      color = inputDockColor,
       contentColor = MaterialTheme.colorScheme.onSurface,
-      shadowElevation = 3.dp,
+      shadowElevation = 0.dp,
       border =
         androidx.compose.foundation.BorderStroke(
           0.5.dp,
@@ -302,8 +317,8 @@ internal fun CommentComposer(
               Surface(
                 modifier = Modifier.align(Alignment.TopEnd).offset(x = 6.dp, y = (-6).dp),
                 shape = CircleShape,
-                color = MaterialTheme.colorScheme.surface,
-                shadowElevation = 2.dp,
+              color = MaterialTheme.colorScheme.surface.copy(alpha = .90f),
+                shadowElevation = 0.dp,
               ) {
                 IconButton(onClick = { imageUri = null }, modifier = Modifier.size(26.dp)) {
                   Icon(
@@ -331,7 +346,7 @@ internal fun CommentComposer(
             Surface(
               modifier = Modifier.weight(1f).heightIn(min = inputMinHeight, max = 168.dp),
               shape = RoundedCornerShape(inputCorner),
-              color = MaterialTheme.colorScheme.surfaceVariant,
+              color = inputFieldColor,
             ) {
               CommentTextEditor(
                 state = editorState,
@@ -352,7 +367,7 @@ internal fun CommentComposer(
               modifier =
                 Modifier.weight(1f).height(54.dp).clickable { focusRequester.requestFocus() },
               shape = RoundedCornerShape(27.dp),
-              color = MaterialTheme.colorScheme.surfaceVariant,
+              color = inputFieldColor,
             ) {
               Row(
                 Modifier.fillMaxSize().padding(horizontal = 18.dp),
@@ -373,7 +388,7 @@ internal fun CommentComposer(
           }
           Surface(
             shape = CircleShape,
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .92f),
+            color = inputFieldColor,
             contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
           ) {
             IconButton(
@@ -398,7 +413,7 @@ internal fun CommentComposer(
             shape = CircleShape,
             color =
               if (text.isNotBlank()) MaterialTheme.colorScheme.primary
-              else MaterialTheme.colorScheme.surfaceVariant,
+              else inputFieldColor,
           ) {
             IconButton(
               onClick = {
@@ -443,6 +458,8 @@ internal fun CommentTextEditor(
   enabled: Boolean = true,
   onFocused: () -> Unit = {},
   onLineCountChanged: (Int) -> Unit = {},
+  contentColor: Color = MaterialTheme.colorScheme.onSurface,
+  placeholderColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
   modifier: Modifier = Modifier,
   maxLines: Int,
 ) {
@@ -460,8 +477,7 @@ internal fun CommentTextEditor(
         .onFocusChanged { if (it.isFocused) onFocused() }
         .focusRequester(focusRequester)
         .padding(horizontal = 20.dp, vertical = 16.dp),
-    textStyle =
-      MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+    textStyle = MaterialTheme.typography.bodyLarge.copy(color = contentColor),
     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
     lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = maxLines),
     outputTransformation = outputTransformation,
@@ -473,7 +489,7 @@ internal fun CommentTextEditor(
     decorator = { inner ->
       Box(Modifier.clipToBounds()) {
         if (text.isEmpty() && placeholder.isNotBlank()) {
-          Text(placeholder, color = MaterialTheme.colorScheme.onSurfaceVariant)
+          Text(placeholder, color = placeholderColor)
         }
         inner()
         placements.forEach { placement ->

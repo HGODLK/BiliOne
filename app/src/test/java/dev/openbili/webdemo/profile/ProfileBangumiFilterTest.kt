@@ -31,6 +31,14 @@ class ProfileBangumiFilterTest {
   }
 
   @Test
+  fun watchedBangumiMovesToFrontByStableId() {
+    val reordered = promoteProfileBangumiCard(cards, "drama:2")
+    assertEquals(listOf("drama:2", "bangumi:1"), reordered.map { it.id })
+    assertEquals(cards, promoteProfileBangumiCard(cards, "missing"))
+    assertEquals(cards, promoteProfileBangumiCard(cards, "bangumi:1"))
+  }
+
+  @Test
   fun loadMoreTargetsOnlyKindsThatStillHavePages() {
     assertEquals(
       listOf(1, 2),

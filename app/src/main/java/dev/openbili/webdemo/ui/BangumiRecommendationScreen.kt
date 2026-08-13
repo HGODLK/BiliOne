@@ -1046,6 +1046,9 @@ private fun BangumiUpwardHint(
   transitionProgress: Float,
   modifier: Modifier = Modifier,
 ) {
+  // The adjacent Bangumi root page stays composed for instant tab restoration. Do not keep its
+  // decorative frame clock alive while the hint is completely invisible behind another page.
+  if (visibility <= 0f) return
   val breathing = rememberInfiniteTransition(label = "bangumiUpHint")
   val alpha by
     breathing.animateFloat(
@@ -1403,7 +1406,7 @@ private fun BangumiPreviewPlayer(
       modifier.fillMaxWidth().aspectRatio(16f / 9f),
     shape = VideoShapeTokens.Player,
     color = Color.Black,
-    shadowElevation = 12.dp,
+    shadowElevation = 0.dp,
   ) {
     Box(Modifier.fillMaxSize()) {
       CoverImage(
@@ -1666,7 +1669,7 @@ private fun BangumiCardStack(
             .then(clickModifier),
         shape = VideoShapeTokens.Card,
         color = Color.Black,
-        shadowElevation = if (selected) 14.dp else 5.dp,
+        shadowElevation = 0.dp,
       ) {
         Box(Modifier.fillMaxSize()) {
           CoverImage(

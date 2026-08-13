@@ -8,10 +8,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -31,6 +29,8 @@ import dev.openbili.webdemo.api.BiliEmote
 import dev.openbili.webdemo.api.CommentMention
 import dev.openbili.webdemo.ui.LocalWebLinkHandler
 
+private class TextLayoutResultHolder(var value: TextLayoutResult? = null)
+
 private val richTextWebUrlPattern =
   Regex("https?://[^\\s<>，。！？；：）】》”]+", RegexOption.IGNORE_CASE)
 private val richTextTrailingUrlPunctuation =
@@ -43,6 +43,7 @@ fun BiliRichText(
   mentions: List<CommentMention> = emptyList(),
   onMentionClick: (Long) -> Unit = {},
   onTextClick: () -> Unit = {},
+  onTextLongClick: () -> Unit = {},
   modifier: Modifier = Modifier,
   style: TextStyle? = null,
   maxLines: Int = 6,
@@ -127,34 +128,38 @@ fun BiliRichText(
         }
       }
     }
-  var layoutResult by remember(annotated) { mutableStateOf<TextLayoutResult?>(null) }
+  val layoutResult = remember(annotated) { TextLayoutResultHolder() }
   val latestMentionClick by rememberUpdatedState(onMentionClick)
   val latestWebLinkClick by rememberUpdatedState(localWebLinkHandler)
   val latestTextClick by rememberUpdatedState(onTextClick)
+  val latestTextLongClick by rememberUpdatedState(onTextLongClick)
   val latestOverflowChanged by rememberUpdatedState(onOverflowChanged)
   Text(
     annotated,
     inlineContent = inline,
     modifier =
       modifier.pointerInput(annotated) {
-        detectTapGestures { position ->
-          val offset = layoutResult?.getOffsetForPosition(position)
-          val webUrl =
-            offset?.let { annotated.getStringAnnotations("web", it, it).firstOrNull() }?.item
-          val mid =
-            offset
-              ?.let { annotated.getStringAnnotations("mention", it, it).firstOrNull() }
-              ?.item
-              ?.toLongOrNull()
-          when {
-            webUrl != null -> latestWebLinkClick(webUrl)
-            mid != null -> latestMentionClick(mid)
-            else -> latestTextClick()
-          }
-        }
+        detectTapGestures(
+          onTap = { position ->
+            val offset = layoutResult.value?.getOffsetForPosition(position)
+            val webUrl =
+              offset?.let { annotated.getStringAnnotations("web", it, it).firstOrNull() }?.item
+            val mid =
+              offset
+                ?.let { annotated.getStringAnnotations("mention", it, it).firstOrNull() }
+                ?.item
+                ?.toLongOrNull()
+            when {
+              webUrl != null -> latestWebLinkClick(webUrl)
+              mid != null -> latestMentionClick(mid)
+              else -> latestTextClick()
+            }
+          },
+          onLongPress = { latestTextLongClick() },
+        )
       },
     onTextLayout = {
-      layoutResult = it
+      layoutResult.value = it
       latestOverflowChanged(it.hasVisualOverflow)
     },
     style = style ?: MaterialTheme.typography.bodySmall,

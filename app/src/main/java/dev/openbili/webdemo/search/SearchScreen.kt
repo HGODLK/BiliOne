@@ -60,11 +60,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -74,37 +74,38 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import coil3.compose.AsyncImage
 import coil3.BitmapImage
+import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.allowHardware
-import coil3.imageLoader
 import dev.openbili.webdemo.api.ArticleItem
 import dev.openbili.webdemo.api.SearchUser
 import dev.openbili.webdemo.api.SpaceContentCard
 import dev.openbili.webdemo.article.ArticleCard
 import dev.openbili.webdemo.feed.FeedCardContent
 import dev.openbili.webdemo.feed.FeedCardMetadataMode
-import dev.openbili.webdemo.feed.FeedItem
 import dev.openbili.webdemo.feed.FeedImageLoadMode
+import dev.openbili.webdemo.feed.FeedItem
 import dev.openbili.webdemo.feed.LocalFeedImageLoadPolicy
 import dev.openbili.webdemo.feed.rememberGridFeedImageLoadPolicy
 import dev.openbili.webdemo.live.LiveSearchRoom
-import dev.openbili.webdemo.profile.formatProfileFollowerCount
 import dev.openbili.webdemo.profile.BangumiPosterCard
+import dev.openbili.webdemo.profile.formatProfileFollowerCount
+import dev.openbili.webdemo.ui.NavigationCardBottomClearance
+import dev.openbili.webdemo.ui.OfficialVerificationIcon
+import dev.openbili.webdemo.ui.OfficialVerificationIconSize
+import dev.openbili.webdemo.ui.PressableVideoCard
+import dev.openbili.webdemo.ui.PullRefreshContainer
+import dev.openbili.webdemo.ui.VideoCardReveal
+import dev.openbili.webdemo.ui.VideoShapeTokens
 import dev.openbili.webdemo.video.CommentAuthorBadge
 import dev.openbili.webdemo.video.CommentAvatarPaletteCache
 import dev.openbili.webdemo.video.CommentLevelIcon
 import dev.openbili.webdemo.video.extractAvatarDominantColors
 import dev.openbili.webdemo.video.readableCommentCardColor
-import dev.openbili.webdemo.ui.PressableVideoCard
-import dev.openbili.webdemo.ui.NavigationCardBottomClearance
-import dev.openbili.webdemo.ui.PullRefreshContainer
-import dev.openbili.webdemo.ui.VideoCardReveal
-import dev.openbili.webdemo.ui.VideoShapeTokens
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /** Search suggestions panel that expands from the search capsule in the top bar. */
@@ -302,6 +303,7 @@ fun SearchScreen(
 fun SearchResultsScreen(
   state: SearchUiState,
   gridState: LazyGridState,
+  columns: Int,
   onCategory: (SearchCategory) -> Unit,
   onOrder: (SearchOrder) -> Unit,
   onArticleOrder: (ArticleSearchOrder) -> Unit,
@@ -325,7 +327,8 @@ fun SearchResultsScreen(
   effectsEnabled: Boolean = true,
 ) {
   BackHandler(enabled = backEnabled, onBack = onBack)
-  val imageLoadPolicy = rememberGridFeedImageLoadPolicy(gridState)
+  val effectiveColumns = columns.coerceIn(3, 6)
+  val imageLoadPolicy = rememberGridFeedImageLoadPolicy(gridState, effectiveColumns)
   val nearEnd by remember {
     derivedStateOf {
       val last = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
@@ -345,7 +348,8 @@ fun SearchResultsScreen(
         state.hasMore &&
         !state.loadingMore &&
         imageLoadPolicy.mode != FeedImageLoadMode.PAUSED
-    ) onLoadMore()
+    )
+      onLoadMore()
   }
   LaunchedEffect(
     state.submittedQuery,
@@ -446,147 +450,141 @@ fun SearchResultsScreen(
         CompositionLocalProvider(LocalFeedImageLoadPolicy provides imageLoadPolicy) {
           LazyVerticalGrid(
             state = gridState,
-            columns =
-              GridCells.Fixed(
-                if (state.category == SearchCategory.BANGUMI ||
-                  state.category == SearchCategory.CINEMA
-                ) 5
-                else 3
-              ),
+            columns = GridCells.Fixed(effectiveColumns),
             contentPadding = PaddingValues(bottom = NavigationCardBottomClearance),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
           ) {
-          if (state.category == SearchCategory.USER) {
-            items(state.users, key = { it.mid }) { user ->
-              SearchUserCard(user = user, onClick = onUser)
-            }
-          } else if (state.category == SearchCategory.LIVE) {
-            itemsIndexed(state.liveRooms, key = { _, room -> room.stableId }) { index, room ->
-              var coverBounds by remember(room.roomId) { mutableStateOf(Rect.Zero) }
-              val card =
-                FeedItem(
-                  id = room.stableId,
-                  title = room.title,
-                  videoUrl = "https://live.bilibili.com/${room.roomId}",
-                  coverUrl = room.keyframeUrl ?: room.coverUrl.orEmpty(),
-                  uploader = room.uname,
-                  playCount = null,
-                  duration = null,
-                  uploaderFace = room.faceUrl,
-                  uploaderMid = room.uid,
-                  description =
-                    listOfNotNull(room.parentAreaName, room.areaName).joinToString(" · "),
-                )
-              VideoCardReveal(
-                index = index,
-                batchKey = state.liveRooms.firstOrNull()?.stableId,
-                itemKey = room.stableId,
-              ) {
-                PressableVideoCard(
-                  onClick = { onLive(room, coverBounds) },
-                  onLongClick = {},
+            if (state.category == SearchCategory.USER) {
+              items(state.users, key = { it.mid }) { user ->
+                SearchUserCard(user = user, onClick = onUser)
+              }
+            } else if (state.category == SearchCategory.LIVE) {
+              itemsIndexed(state.liveRooms, key = { _, room -> room.stableId }) { index, room ->
+                var coverBounds by remember(room.roomId) { mutableStateOf(Rect.Zero) }
+                val card =
+                  FeedItem(
+                    id = room.stableId,
+                    title = room.title,
+                    videoUrl = "https://live.bilibili.com/${room.roomId}",
+                    coverUrl = room.keyframeUrl ?: room.coverUrl.orEmpty(),
+                    uploader = room.uname,
+                    playCount = null,
+                    duration = null,
+                    uploaderFace = room.faceUrl,
+                    uploaderMid = room.uid,
+                    description =
+                      listOfNotNull(room.parentAreaName, room.areaName).joinToString(" · "),
+                  )
+                VideoCardReveal(
+                  index = index,
+                  batchKey = state.liveRooms.firstOrNull()?.stableId,
+                  itemKey = room.stableId,
                 ) {
-                  FeedCardContent(
-                    item = card,
-                    metadataMode = FeedCardMetadataMode.LIVE,
-                    profileClickEnabled = false,
-                    onProfileBoundsClick = { _, _ -> },
-                    coverVisible = room.stableId != hiddenCoverItemId,
-                    liveStatusText = if (room.liveStatus == 1) "直播中" else "未开播",
-                    liveSecondaryText =
-                      listOfNotNull(room.parentAreaName, room.areaName)
-                        .distinct()
-                        .joinToString(" · "),
-                    onCoverBoundsChanged = {
-                      coverBounds = it
-                      onLiveBounds(room, it)
-                    },
+                  PressableVideoCard(
+                    onClick = { onLive(room, coverBounds) },
+                    onLongClick = {},
+                  ) {
+                    FeedCardContent(
+                      item = card,
+                      metadataMode = FeedCardMetadataMode.LIVE,
+                      profileClickEnabled = false,
+                      onProfileBoundsClick = { _, _ -> },
+                      coverVisible = room.stableId != hiddenCoverItemId,
+                      liveStatusText = if (room.liveStatus == 1) "直播中" else "未开播",
+                      liveSecondaryText =
+                        listOfNotNull(room.parentAreaName, room.areaName)
+                          .distinct()
+                          .joinToString(" · "),
+                      onCoverBoundsChanged = {
+                        coverBounds = it
+                        onLiveBounds(room, it)
+                      },
+                    )
+                  }
+                }
+              }
+            } else if (state.category == SearchCategory.ARTICLE) {
+              itemsIndexed(state.articles, key = { _, article -> article.stableId }) {
+                index,
+                article ->
+                VideoCardReveal(
+                  index = index,
+                  batchKey = state.articles.firstOrNull()?.stableId,
+                  itemKey = article.stableId,
+                ) {
+                  ArticleCard(
+                    article = article,
+                    coverVisible = article.stableId != hiddenArticleItemId,
+                    onClick = { bounds -> onArticle(article, bounds) },
+                    onBoundsChanged = { bounds -> onArticleBounds(article, bounds) },
                   )
                 }
               }
-            }
-          } else if (state.category == SearchCategory.ARTICLE) {
-            itemsIndexed(state.articles, key = { _, article -> article.stableId }) { index, article
-              ->
-              VideoCardReveal(
-                index = index,
-                batchKey = state.articles.firstOrNull()?.stableId,
-                itemKey = article.stableId,
-              ) {
-                ArticleCard(
-                  article = article,
-                  coverVisible = article.stableId != hiddenArticleItemId,
-                  onClick = { bounds -> onArticle(article, bounds) },
-                  onBoundsChanged = { bounds -> onArticleBounds(article, bounds) },
-                )
-              }
-            }
-          } else if (
-            state.category == SearchCategory.BANGUMI ||
-              state.category == SearchCategory.CINEMA
-          ) {
-            itemsIndexed(state.bangumiResults, key = { _, card -> card.id }) { index, card ->
-              val video =
-                FeedItem(
-                  id = card.id,
-                  title = card.title,
-                  videoUrl = card.videoUrl,
-                  coverUrl = card.coverUrl,
-                  uploader = null,
-                  playCount = null,
-                  duration = null,
-                  description = card.subtitle,
-                )
-              BangumiPosterCard(
-                card = card,
-                video = video,
-                index = index,
-                batchKey = state.bangumiResults.firstOrNull()?.id,
-                hiddenCoverItemId = hiddenCoverItemId,
-                onClick = { bounds -> onBangumi(card, bounds) },
-                onLongClick = { onVideoLongClick(video) },
-                onBoundsChanged = { bounds -> onVideoBounds(video, bounds) },
-              )
-            }
-          } else {
-            itemsIndexed(state.results, key = { _, video -> video.id }) { index, video ->
-              var coverBounds by remember(video.id) { mutableStateOf(Rect.Zero) }
-              VideoCardReveal(
-                index = index,
-                batchKey = state.results.firstOrNull()?.id,
-                itemKey = video.id,
-              ) {
-                PressableVideoCard(
-                  onClick = { onVideo(video, coverBounds) },
+            } else if (
+              state.category == SearchCategory.BANGUMI || state.category == SearchCategory.CINEMA
+            ) {
+              itemsIndexed(state.bangumiResults, key = { _, card -> card.id }) { index, card ->
+                val video =
+                  FeedItem(
+                    id = card.id,
+                    title = card.title,
+                    videoUrl = card.videoUrl,
+                    coverUrl = card.coverUrl,
+                    uploader = null,
+                    playCount = null,
+                    duration = null,
+                    description = card.subtitle,
+                  )
+                BangumiPosterCard(
+                  card = card,
+                  video = video,
+                  index = index,
+                  batchKey = state.bangumiResults.firstOrNull()?.id,
+                  hiddenCoverItemId = hiddenCoverItemId,
+                  onClick = { bounds -> onBangumi(card, bounds) },
                   onLongClick = { onVideoLongClick(video) },
+                  onBoundsChanged = { bounds -> onVideoBounds(video, bounds) },
+                )
+              }
+            } else {
+              itemsIndexed(state.results, key = { _, video -> video.id }) { index, video ->
+                var coverBounds by remember(video.id) { mutableStateOf(Rect.Zero) }
+                VideoCardReveal(
+                  index = index,
+                  batchKey = state.results.firstOrNull()?.id,
+                  itemKey = video.id,
                 ) {
-                  FeedCardContent(
-                    item = video,
-                    profileClickEnabled = video.uploaderMid > 0L,
-                    onProfileBoundsClick = { mid, bounds ->
-                      onVideoProfile(mid, video.uploaderFace, video.uploader, bounds)
-                    },
-                    coverVisible = video.id != hiddenCoverItemId,
-                    onCoverBoundsChanged = {
-                      coverBounds = it
-                      onVideoBounds(video, it)
-                    },
-                  )
+                  PressableVideoCard(
+                    onClick = { onVideo(video, coverBounds) },
+                    onLongClick = { onVideoLongClick(video) },
+                  ) {
+                    FeedCardContent(
+                      item = video,
+                      profileClickEnabled = video.uploaderMid > 0L,
+                      onProfileBoundsClick = { mid, bounds ->
+                        onVideoProfile(mid, video.uploaderFace, video.uploader, bounds)
+                      },
+                      coverVisible = video.id != hiddenCoverItemId,
+                      onCoverBoundsChanged = {
+                        coverBounds = it
+                        onVideoBounds(video, it)
+                      },
+                    )
+                  }
                 }
               }
             }
-          }
-          if (state.loadingMore) {
-            item(span = { GridItemSpan(maxLineSpan) }) {
-              Box(
-                Modifier.fillMaxWidth().padding(16.dp),
-                contentAlignment = Alignment.Center,
-              ) {
-                CircularProgressIndicator(Modifier.size(26.dp), strokeWidth = 2.dp)
+            if (state.loadingMore) {
+              item(span = { GridItemSpan(maxLineSpan) }) {
+                Box(
+                  Modifier.fillMaxWidth().padding(16.dp),
+                  contentAlignment = Alignment.Center,
+                ) {
+                  CircularProgressIndicator(Modifier.size(26.dp), strokeWidth = 2.dp)
+                }
               }
             }
-          }
           }
         }
         if (
@@ -652,7 +650,7 @@ private fun SearchUserCard(
     shape = VideoShapeTokens.Card,
     color = Color.Transparent,
     tonalElevation = 0.dp,
-    shadowElevation = 3.dp,
+    shadowElevation = 0.dp,
     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
   ) {
     Row(
@@ -688,7 +686,14 @@ private fun SearchUserCard(
         Modifier.weight(1f).padding(start = 14.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
       ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+          OfficialVerificationIcon(
+            verification = user.officialVerification,
+            modifier = Modifier.size(OfficialVerificationIconSize),
+          )
           Text(
             user.name,
             modifier = Modifier.weight(1f, fill = false),

@@ -1,5 +1,6 @@
 package dev.openbili.webdemo.my
 
+import dev.openbili.webdemo.api.AccountMessageUserStyle
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -30,6 +31,29 @@ class MyUnreadIndicatorTest {
     assertEquals(10_000L, accountUnreadRetryDelayMs(2))
     assertEquals(30_000L, accountUnreadRetryDelayMs(3))
     assertEquals(30_000L, accountUnreadRetryDelayMs(9))
+  }
+
+  @Test
+  fun `account message user card fills missing level and vip style`() {
+    val message = privateConversationSession(42L, "测试 UP", "")
+    val styled =
+      applyAccountMessageUserStyles(
+        messages = listOf(message),
+        styles =
+          mapOf(
+            42L to
+              AccountMessageUserStyle(
+                level = 6,
+                vipActive = true,
+                vipLabel = "年度大会员",
+              )
+          ),
+      )
+        .single()
+
+    assertEquals(6, styled.userLevel)
+    assertTrue(styled.userVipActive)
+    assertEquals("年度大会员", styled.userVipLabel)
   }
 
   @Test

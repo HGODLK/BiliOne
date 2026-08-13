@@ -26,6 +26,9 @@ import coil3.compose.AsyncImage
 import dev.openbili.webdemo.ui.VideoShapeTokens
 import java.lang.ref.WeakReference
 import java.util.LinkedHashMap
+import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Remembers images that completed in this process. A fast fling may reuse those requests because
@@ -41,6 +44,8 @@ internal object LoadedFeedImageRegistry {
 
   private val entries = LinkedHashMap<String, Entry>(MAX_ENTRIES, .75f, true)
   private val retainedBitmaps = LinkedHashMap<String, Bitmap>(MAX_RETAINED_BITMAPS, .75f, true)
+  private val bitmapWaiters =
+    ConcurrentHashMap<String, MutableSet<CompletableDeferred<Bitmap>>>()
 
   @Synchronized
   fun contains(url: String?): Boolean =
@@ -70,8 +75,31 @@ internal object LoadedFeedImageRegistry {
         retainedBitmaps.remove(retainedBitmaps.keys.first())
       }
     }
+    bitmap?.let { loaded ->
+      bitmapWaiters.remove(url)?.forEach { waiter -> waiter.complete(loaded) }
+    }
     bitmap?.let { PlaybackCoverRegistry.onLoaded(url, it) }
     while (entries.size > MAX_ENTRIES) entries.remove(entries.keys.first())
+  }
+
+  suspend fun awaitBitmap(url: String?, timeoutMs: Long): Bitmap? {
+    if (url.isNullOrBlank()) return null
+    bitmap(url)?.let { return it }
+    val waiter = CompletableDeferred<Bitmap>()
+    bitmapWaiters
+      .computeIfAbsent(url) { ConcurrentHashMap.newKeySet() }
+      .add(waiter)
+    bitmap(url)?.let {
+      waiter.complete(it)
+    }
+    return try {
+      withTimeoutOrNull(timeoutMs) { waiter.await() }
+    } finally {
+      bitmapWaiters.computeIfPresent(url) { _, waiters ->
+        waiters.remove(waiter)
+        waiters.takeIf { it.isNotEmpty() }
+      }
+    }
   }
 }
 

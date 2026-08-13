@@ -99,6 +99,7 @@ internal fun AppRootProfileLayer(
   profileIpAuthorized: Boolean,
   settings: AppSettings,
   hiddenCoverItemId: String?,
+  bangumiReturnRequest: ProfileBangumiReturnRequest?,
   hiddenArticleItemId: String?,
   profileAvatarBounds: Rect,
   commentTransition: CommentProfileTransition?,
@@ -119,9 +120,8 @@ internal fun AppRootProfileLayer(
   onSelectFollowingGroup: (Long, Long) -> Unit,
   onUnfollow: (Long) -> Unit,
   onPrivateMessagesSelected: (Long, String, String) -> Unit,
-  privateMessageContent: @Composable () -> Unit,
+  privateMessageContent: @Composable (Long) -> Unit,
   onLogin: () -> Unit,
-  onAuthorizeProfileIp: () -> Unit,
   onCommentProfileClick: (Long, Long, CommentItem, CommentProfileAnchor) -> Unit,
   onAvatarProfileClick: (Long, Long, String?, String?, Rect) -> Unit,
   onEnsureDynamics: () -> Unit,
@@ -225,10 +225,16 @@ internal fun AppRootProfileLayer(
             onUnfollow = { rootEntry?.let { onUnfollow(it.entryId) } },
             showPrivateMessages = mid > 0L && mid != currentAccountMid,
             onPrivateMessagesSelected = onPrivateMessagesSelected,
-            privateMessageContent = privateMessageContent,
+            privateMessageContent = {
+              rootEntry?.let { privateMessageContent(it.entryId) }
+            },
             onLogin = onLogin,
-            onAuthorizeProfileIp = onAuthorizeProfileIp,
             hiddenCoverItemId = hiddenCoverItemId,
+            bangumiReturnRequestToken =
+              bangumiReturnRequest?.takeIf { it.profileEntryId == rootEntry?.entryId }?.token
+                ?: 0L,
+            bangumiReturnCardId =
+              bangumiReturnRequest?.takeIf { it.profileEntryId == rootEntry?.entryId }?.cardId,
             onVideoBoundsChanged = { item, bounds ->
               rootEntry?.let { onVideoBoundsChanged(it.entryId, item, bounds) }
             },
@@ -532,10 +538,14 @@ internal fun AppRootProfileLayer(
             onUnfollow = { onUnfollow(nestedEntry.entryId) },
             showPrivateMessages = nestedMid > 0L && nestedMid != currentAccountMid,
             onPrivateMessagesSelected = onPrivateMessagesSelected,
-            privateMessageContent = privateMessageContent,
+            privateMessageContent = { privateMessageContent(nestedEntry.entryId) },
             onLogin = onLogin,
-            onAuthorizeProfileIp = onAuthorizeProfileIp,
             hiddenCoverItemId = hiddenCoverItemId.takeIf { isTopProfile },
+            bangumiReturnRequestToken =
+              bangumiReturnRequest?.takeIf { it.profileEntryId == nestedEntry.entryId }?.token
+                ?: 0L,
+            bangumiReturnCardId =
+              bangumiReturnRequest?.takeIf { it.profileEntryId == nestedEntry.entryId }?.cardId,
             onVideoBoundsChanged = { item, bounds ->
               onVideoBoundsChanged(nestedEntry.entryId, item, bounds)
             },

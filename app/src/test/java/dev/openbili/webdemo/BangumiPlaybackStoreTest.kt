@@ -17,6 +17,7 @@ class BangumiPlaybackStoreTest {
   @Before
   fun clearStore() {
     context.getSharedPreferences("bangumi_playback_selection", 0).edit().clear().commit()
+    context.getSharedPreferences("bangumi_local_history", 0).edit().clear().commit()
   }
 
   @Test
@@ -42,4 +43,56 @@ class BangumiPlaybackStoreTest {
       BangumiPlaybackStore.read(context, profileCard),
     )
   }
+
+  @Test
+  fun localHistoryReplacesAnOlderEpisodeFromTheSameSeason() {
+    val indexCard =
+      SpaceContentCard(
+        id = "bangumi-index:42",
+        title = "索引作品",
+        coverUrl = "https://example.com/season.jpg",
+        seasonId = 42,
+        seasonType = 4,
+      )
+    val first = episode(id = 101, title = "第一话")
+    val second = episode(id = 102, title = "第二话")
+
+    BangumiLocalHistoryStore.record(
+      context,
+      indexCard,
+      seasonId = 42,
+      episode = first,
+      positionMs = 30_000,
+      durationMs = 1_000_000,
+      viewedAt = 100,
+    )
+    BangumiLocalHistoryStore.record(
+      context,
+      indexCard,
+      seasonId = 42,
+      episode = second,
+      positionMs = 40_000,
+      durationMs = 1_000_000,
+      viewedAt = 200,
+    )
+
+    val stored = BangumiLocalHistoryStore.read(context).single()
+    assertEquals(102L, stored.episodeId)
+    assertEquals(42L, stored.seasonId)
+    assertEquals(4, stored.seasonType)
+    assertEquals(40_000L, stored.positionMs)
+    assertEquals(200L, stored.viewedAt)
+  }
+
+  private fun episode(id: Long, title: String) =
+    BangumiEpisode(
+      id = id,
+      aid = id + 100,
+      bvid = "BV$id",
+      cid = id + 200,
+      title = title,
+      longTitle = title,
+      coverUrl = "https://example.com/$id.jpg",
+      durationSeconds = 1_000,
+    )
 }

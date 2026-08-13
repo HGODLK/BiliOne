@@ -21,11 +21,11 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -41,15 +41,9 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -71,6 +65,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -83,6 +78,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import coil3.imageLoader
@@ -119,12 +115,17 @@ fun FeedScreen(
   dismissedItemIds: Set<String> = emptySet(),
   onRestoreDismissedItem: (FeedItem) -> Unit = {},
   onItemBoundsChanged: (FeedItem, Rect) -> Unit = { _, _ -> },
+  columns: Int = 3,
+  topContentPadding: Dp = 12.dp,
+  bottomContentPadding: Dp = NavigationCardBottomClearance,
+  chromeVisible: Boolean = true,
+  onBackgroundClick: () -> Unit = {},
 ) {
-  val scope = rememberCoroutineScope()
   val snackbarHostState = remember { SnackbarHostState() }
   val context = LocalContext.current
   val prefetchedCovers = remember { mutableSetOf<String>() }
-  val imageLoadPolicy = rememberGridFeedImageLoadPolicy(gridState)
+  val effectiveColumns = columns.coerceIn(3, 6)
+  val imageLoadPolicy = rememberGridFeedImageLoadPolicy(gridState, effectiveColumns)
   // Infinite scroll trigger
   val shouldLoadMore by remember {
     derivedStateOf {
@@ -136,7 +137,7 @@ fun FeedScreen(
   LaunchedEffect(shouldLoadMore, imageLoadPolicy.mode, backgroundWorkAllowed) {
     if (
       backgroundWorkAllowed &&
-      shouldLoadMore &&
+        shouldLoadMore &&
         imageLoadPolicy.mode != FeedImageLoadMode.PAUSED &&
         state is FeedUiState.Content &&
         !state.isLoadingMore
@@ -203,63 +204,31 @@ fun FeedScreen(
 
   // Refresh message -> snackbar
   val refreshMessage = (state as? FeedUiState.Content)?.refreshMessage
-  LaunchedEffect(refreshMessage) {
-    if (!refreshMessage.isNullOrBlank()) {
+  LaunchedEffect(refreshMessage, chromeVisible) {
+    if (chromeVisible && !refreshMessage.isNullOrBlank()) {
       snackbarHostState.showSnackbar(refreshMessage)
       onConsumeRefreshMessage()
     }
   }
 
-  Scaffold(
-    containerColor = MaterialTheme.colorScheme.background,
-    contentWindowInsets = WindowInsets(0, 0, 0, 0),
-    snackbarHost = { SnackbarHost(snackbarHostState) },
-    floatingActionButton = {
-      Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        // scroll to top
-        androidx.compose.material3.SmallFloatingActionButton(
-          onClick = {
-            scope.launch {
-              gridState.animateScrollToItem(0)
-            }
-          },
-          containerColor = MaterialTheme.colorScheme.surfaceVariant,
-        ) {
-          Icon(
-            Icons.Default.KeyboardArrowUp,
-            contentDescription = "回到顶部",
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-        }
-        // refresh
-        androidx.compose.material3.SmallFloatingActionButton(
-          onClick = {
-            if (state is FeedUiState.Content) {
-              scope.launch {
-                gridState.scrollToItem(0)
-                onRefresh()
-              }
-            } else onRefresh()
-          },
-          containerColor = MaterialTheme.colorScheme.primary,
-        ) {
-          Icon(
-            Icons.Default.Refresh,
-            contentDescription = stringResource(R.string.refresh_feed),
-            tint = MaterialTheme.colorScheme.onPrimary,
-          )
-        }
-      }
-    },
-  ) { padding ->
+  Box(
+    Modifier.fillMaxSize().clickable(
+      enabled = !chromeVisible,
+      interactionSource = remember { MutableInteractionSource() },
+      indication = null,
+      onClick = onBackgroundClick,
+    )
+  ) {
     PullRefreshContainer(
       refreshing = state.isRefreshing,
       onRefresh = onRefresh,
-      modifier = Modifier.fillMaxSize().padding(padding),
+      enabled = chromeVisible,
+      indicatorTopPadding = topContentPadding + 8.dp,
+      modifier = Modifier.fillMaxSize(),
     ) {
       val current = state
       when (current) {
-        is FeedUiState.Loading -> FeedSkeleton()
+        is FeedUiState.Loading -> FeedSkeleton(effectiveColumns, topContentPadding)
         is FeedUiState.Content ->
           CompositionLocalProvider(LocalFeedImageLoadPolicy provides imageLoadPolicy) {
             FeedGrid(
@@ -273,6 +242,10 @@ fun FeedScreen(
               dismissedItemIds = dismissedItemIds,
               onRestoreDismissedItem = onRestoreDismissedItem,
               onItemBoundsChanged = onItemBoundsChanged,
+              columns = effectiveColumns,
+              topContentPadding = topContentPadding,
+              bottomContentPadding = bottomContentPadding,
+              showLoadingIndicator = chromeVisible,
             )
           }
         is FeedUiState.Empty -> FeedEmpty()
@@ -280,10 +253,18 @@ fun FeedScreen(
         is FeedUiState.NetworkError -> FeedError(current.detail, onRefresh)
       }
     }
+    if (chromeVisible) {
+      SnackbarHost(
+        hostState = snackbarHostState,
+        modifier = Modifier.align(Alignment.BottomCenter),
+      )
+    }
   }
 }
 
-/** Exact safe-viewport position retained after a navigation target has been brought fully on-screen. */
+/**
+ * Exact safe-viewport position retained after a navigation target has been brought fully on-screen.
+ */
 data class FeedScrollAnchor(
   val firstVisibleItemIndex: Int,
   val firstVisibleItemScrollOffset: Int,
@@ -355,26 +336,30 @@ internal fun feedNavigationScrollDelta(
   viewportStartOffset: Int,
   viewportEndOffset: Int,
   bottomClearancePx: Int,
+  topClearancePx: Int = 0,
 ): Float {
+  val safeViewportStart =
+    (viewportStartOffset + topClearancePx.coerceAtLeast(0)).coerceAtMost(viewportEndOffset)
   val safeViewportEnd =
-    (viewportEndOffset - bottomClearancePx.coerceAtLeast(0)).coerceAtLeast(viewportStartOffset)
-  val safeViewportHeight = safeViewportEnd - viewportStartOffset
+    (viewportEndOffset - bottomClearancePx.coerceAtLeast(0)).coerceAtLeast(safeViewportStart)
+  val safeViewportHeight = safeViewportEnd - safeViewportStart
   if (itemHeight > safeViewportHeight) {
     // A card should normally fit. If window resizing makes that impossible, align its top so the
     // 16:9 cover—the shared-transition source—remains completely visible.
-    return (itemOffsetY - viewportStartOffset).toFloat()
+    return (itemOffsetY - safeViewportStart).toFloat()
   }
   val itemEnd = itemOffsetY + itemHeight
   return when {
-    itemOffsetY < viewportStartOffset -> (itemOffsetY - viewportStartOffset).toFloat()
+    itemOffsetY < safeViewportStart -> (itemOffsetY - safeViewportStart).toFloat()
     itemEnd > safeViewportEnd -> (itemEnd - safeViewportEnd).toFloat()
     else -> 0f
   }
 }
 
-private suspend fun bringFeedItemIntoSafeViewport(
+internal suspend fun bringFeedItemIntoSafeViewport(
   gridState: LazyGridState,
   itemKey: String,
+  topClearancePx: Int,
   bottomClearancePx: Int,
 ) {
   repeat(2) {
@@ -387,6 +372,7 @@ private suspend fun bringFeedItemIntoSafeViewport(
         viewportStartOffset = layoutInfo.viewportStartOffset,
         viewportEndOffset = layoutInfo.viewportEndOffset,
         bottomClearancePx = bottomClearancePx,
+        topClearancePx = topClearancePx,
       )
     if (abs(delta) < 1f) return
     gridState.animateScrollBy(
@@ -409,8 +395,13 @@ internal fun FeedGrid(
   dismissedItemIds: Set<String>,
   onRestoreDismissedItem: (FeedItem) -> Unit,
   onItemBoundsChanged: (FeedItem, Rect) -> Unit,
+  columns: Int,
+  topContentPadding: Dp,
+  bottomContentPadding: Dp = NavigationCardBottomClearance,
+  showLoadingIndicator: Boolean = true,
 ) {
   val flingTracker = remember(gridState) { FeedNavigationFlingTracker() }
+  val topClearancePx = with(LocalDensity.current) { topContentPadding.roundToPx() }
   val dynamicPaletteAllowed =
     remember(gridState) {
       derivedStateOf {
@@ -418,18 +409,15 @@ internal fun FeedGrid(
       }
     }
   LazyVerticalGrid(
-    columns = GridCells.Fixed(3),
+    columns = GridCells.Fixed(columns.coerceIn(3, 6)),
     state = gridState,
-    modifier =
-      Modifier.fillMaxSize()
-        .nestedScroll(flingTracker)
-        .testTag("feed_grid"),
+    modifier = Modifier.fillMaxSize().nestedScroll(flingTracker).testTag("feed_grid"),
     contentPadding =
       PaddingValues(
         start = 16.dp,
         end = 16.dp,
-        top = 12.dp,
-        bottom = NavigationCardBottomClearance,
+        top = topContentPadding,
+        bottom = bottomContentPadding,
       ),
     horizontalArrangement = Arrangement.spacedBy(12.dp),
     verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -466,10 +454,11 @@ internal fun FeedGrid(
           gridState = gridState,
           flingTracker = flingTracker,
           dynamicPaletteAllowed = dynamicPaletteAllowed,
+          topClearancePx = topClearancePx,
         )
       }
     }
-    if (isLoadingMore) {
+    if (isLoadingMore && showLoadingIndicator) {
       item(
         key = "loading",
         span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) },
@@ -515,6 +504,10 @@ fun FeedCardContent(
   paletteRequestHeight: Int = 54,
   onCoverBoundsChanged: (Rect) -> Unit = {},
   onAvatarBoundsChanged: (Rect) -> Unit = {},
+  statsTextOverride: String? = null,
+  publishDateTextOverride: String? = null,
+  durationTextOverride: String? = null,
+  coverOverlay: @Composable BoxScope.() -> Unit = {},
   liveStatusText: String? = null,
   liveSecondaryText: String? = null,
   liveTrailingText: String? = null,
@@ -525,10 +518,14 @@ fun FeedCardContent(
   val titleHeight = (48f + extraScale * 28f).dp
   val metadataLineHeight = (21f + extraScale * 14f).dp
   val statsText =
-    remember(item.playCount, item.danmakuCount) {
-      feedCardStatsText(item.playCount, item.danmakuCount)
+    remember(item.playCount, item.danmakuCount, statsTextOverride) {
+      statsTextOverride ?: feedCardStatsText(item.playCount, item.danmakuCount)
     }
-  val publishDate = remember(item.publishedAt) { formatCardPublishDate(item.publishedAt) }
+  val publishDate =
+    remember(item.publishedAt, publishDateTextOverride) {
+      publishDateTextOverride ?: formatCardPublishDate(item.publishedAt)
+    }
+  val displayedDuration = durationTextOverride ?: item.duration
   VideoCardGradient(
     coverUrl = item.coverUrl,
     modifier = modifier,
@@ -557,6 +554,7 @@ fun FeedCardContent(
           requestHeight = FeedPerformanceConfig.coverRequestHeight,
           loadKey = item.id,
         )
+        coverOverlay()
       }
 
       Row(
@@ -654,7 +652,7 @@ fun FeedCardContent(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
               )
-              item.duration?.takeIf(String::isNotBlank)?.let {
+              displayedDuration?.takeIf(String::isNotBlank)?.let {
                 Text(
                   it,
                   modifier = Modifier.widthIn(max = 88.dp),
@@ -738,6 +736,7 @@ private fun FeedCard(
   gridState: LazyGridState,
   flingTracker: FeedNavigationFlingTracker,
   dynamicPaletteAllowed: State<Boolean>,
+  topClearancePx: Int,
 ) {
   val navigationBounds = remember(item.id) { FeedCardNavigationBounds() }
   val scope = rememberCoroutineScope()
@@ -784,7 +783,12 @@ private fun FeedCard(
           onClick = {
             scope.launch {
               settleFeedForNavigation(gridState, flingTracker)
-              bringFeedItemIntoSafeViewport(gridState, item.id, bottomClearancePx)
+              bringFeedItemIntoSafeViewport(
+                gridState,
+                item.id,
+                topClearancePx,
+                bottomClearancePx,
+              )
               withFrameNanos {}
               withFrameNanos {}
               val scrollAnchor =
@@ -821,7 +825,12 @@ private fun FeedCard(
             val sourceCoverBounds = navigationBounds.cover
             scope.launch {
               settleFeedForNavigation(gridState, flingTracker)
-              bringFeedItemIntoSafeViewport(gridState, item.id, bottomClearancePx)
+              bringFeedItemIntoSafeViewport(
+                gridState,
+                item.id,
+                topClearancePx,
+                bottomClearancePx,
+              )
               // The safe-viewport scroll may move a card that looked visible to LazyGrid but was
               // covered by the root navigation capsule. Wait for the final avatar coordinates.
               withFrameNanos {}
@@ -888,11 +897,17 @@ private fun FeedCard(
 // ── Skeleton ─────────────────────────────────────────────────────────────────
 
 @Composable
-private fun FeedSkeleton() {
+private fun FeedSkeleton(columns: Int, topContentPadding: Dp) {
   LazyVerticalGrid(
-    columns = GridCells.Fixed(3),
+    columns = GridCells.Fixed(columns.coerceIn(3, 6)),
     modifier = Modifier.fillMaxSize().testTag("feed_skeleton"),
-    contentPadding = PaddingValues(16.dp),
+    contentPadding =
+      PaddingValues(
+        start = 16.dp,
+        end = 16.dp,
+        top = topContentPadding,
+        bottom = 16.dp,
+      ),
     horizontalArrangement = Arrangement.spacedBy(12.dp),
     verticalArrangement = Arrangement.spacedBy(12.dp),
   ) {

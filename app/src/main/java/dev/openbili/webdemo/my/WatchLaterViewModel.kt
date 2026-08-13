@@ -80,7 +80,15 @@ class WatchLaterViewModel : ViewModel() {
     }
   }
 
+  fun toggle(item: FeedItem, aidHint: Long? = null) {
+    update(item, aidHint, remove = _state.value.contains(item, aidHint))
+  }
+
   fun add(item: FeedItem, aidHint: Long? = null) {
+    update(item, aidHint, remove = false)
+  }
+
+  private fun update(item: FeedItem, aidHint: Long?, remove: Boolean) {
     val expectedMid = accountMid
     if (expectedMid <= 0L) {
       postFeedback("请先登录")
@@ -100,7 +108,9 @@ class WatchLaterViewModel : ViewModel() {
               ?: resolveWatchLaterAid(item)
               ?: throw IllegalStateException("无法识别这个视频")
           }
-        withContext(Dispatchers.IO) { BiliApi.addToWatchLater(aid) }
+        withContext(Dispatchers.IO) {
+          if (remove) BiliApi.removeFromWatchLater(aid) else BiliApi.addToWatchLater(aid)
+        }
         if (accountMid != expectedMid) return@launch
         val refreshedCards =
           if (_state.value.loaded) {
@@ -114,19 +124,39 @@ class WatchLaterViewModel : ViewModel() {
         _state.value =
           if (refreshedCards != null) {
             val refreshedItems = refreshedCards.map(::toFeedItem)
-            current.copy(
-              items =
-                if (refreshedCards.any { it.aid == aid }) refreshedItems
-                else
-                  listOf(item) +
-                    refreshedItems.filterNot { existing ->
-                      watchLaterVideoKeys(existing).any(keys::contains)
-                    },
-              addedVideoKeys = refreshedCards.flatMapTo(linkedSetOf(), ::watchLaterCardKeys) + keys,
-              busyVideoIds = current.busyVideoIds - item.id,
-              loaded = true,
-              error = null,
-            )
+            if (remove) {
+              current
+                .copy(
+                  items = refreshedItems,
+                  addedVideoKeys = refreshedCards.flatMapTo(linkedSetOf(), ::watchLaterCardKeys),
+                  busyVideoIds = current.busyVideoIds - item.id,
+                  loaded = true,
+                  error = null,
+                )
+                .withoutWatchLaterItem(item, aid)
+            } else {
+              current.copy(
+                items =
+                  if (refreshedCards.any { it.aid == aid }) refreshedItems
+                  else
+                    listOf(item) +
+                      refreshedItems.filterNot { existing ->
+                        watchLaterVideoKeys(existing).any(keys::contains)
+                      },
+                addedVideoKeys =
+                  refreshedCards.flatMapTo(linkedSetOf(), ::watchLaterCardKeys) + keys,
+                busyVideoIds = current.busyVideoIds - item.id,
+                loaded = true,
+                error = null,
+              )
+            }
+          } else if (remove) {
+            current
+              .copy(
+                busyVideoIds = current.busyVideoIds - item.id,
+                error = null,
+              )
+              .withoutWatchLaterItem(item, aid)
           } else {
             current.copy(
               items =
@@ -145,12 +175,12 @@ class WatchLaterViewModel : ViewModel() {
               error = null,
             )
           }
-        postFeedback("已添加到稍后再看")
+        postFeedback(if (remove) "已移出稍后再看" else "已添加到稍后再看")
       } catch (error: Throwable) {
         if (error is CancellationException) throw error
         if (accountMid != expectedMid) return@launch
         _state.value = _state.value.copy(busyVideoIds = _state.value.busyVideoIds - item.id)
-        postFeedback(error.message ?: "添加到稍后再看失败")
+        postFeedback(error.message ?: if (remove) "移出稍后再看失败" else "添加到稍后再看失败")
       }
     }
   }
@@ -202,6 +232,20 @@ internal fun watchLaterVideoKeys(item: FeedItem, aid: Long? = null): Set<String>
 
 internal fun WatchLaterUiState.contains(item: FeedItem, aid: Long? = null): Boolean =
   watchLaterVideoKeys(item, aid).any(addedVideoKeys::contains)
+
+internal fun WatchLaterUiState.withoutWatchLaterItem(
+  item: FeedItem,
+  aid: Long? = null,
+): WatchLaterUiState {
+  val removedKeys = watchLaterVideoKeys(item, aid)
+  return copy(
+    items =
+      items.filterNot { existing ->
+        watchLaterVideoKeys(existing).any(removedKeys::contains)
+      },
+    addedVideoKeys = addedVideoKeys - removedKeys,
+  )
+}
 
 private fun watchLaterCardKeys(card: FeedCard): Set<String> = buildSet {
   add(card.aid.toString())

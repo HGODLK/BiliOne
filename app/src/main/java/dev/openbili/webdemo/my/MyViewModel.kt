@@ -7,6 +7,7 @@ import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import dev.openbili.webdemo.BangumiLocalHistoryStore
 import dev.openbili.webdemo.api.AccountHistoryItem
 import dev.openbili.webdemo.api.AccountHistoryResponse
 import dev.openbili.webdemo.api.AccountMessage
@@ -14,6 +15,7 @@ import dev.openbili.webdemo.api.AccountMessageUserStyle
 import dev.openbili.webdemo.api.ArticleItem
 import dev.openbili.webdemo.api.BiliApi
 import dev.openbili.webdemo.api.BiliEmotePackage
+import dev.openbili.webdemo.api.BangumiWatchProgress
 import dev.openbili.webdemo.api.FavoriteFolder
 import dev.openbili.webdemo.api.FeedCard
 import dev.openbili.webdemo.api.FollowingGroup
@@ -22,6 +24,7 @@ import dev.openbili.webdemo.api.HistoryCursor
 import dev.openbili.webdemo.api.InteractionMessagePage
 import dev.openbili.webdemo.api.MessageCursor
 import dev.openbili.webdemo.api.SpaceContentCard
+import dev.openbili.webdemo.api.SpaceContentKind
 import dev.openbili.webdemo.feed.FeedItem
 import dev.openbili.webdemo.feed.FeedViewModel
 import dev.openbili.webdemo.live.LiveHistoryStore
@@ -47,6 +50,8 @@ enum class MySection(val label: String) {
   FOLLOWING("我的关注"),
   MESSAGES("我的消息"),
   INTERACTIONS("回复或@我的"),
+  LIKES("点赞消息"),
+  CACHED_VIDEOS("缓存视频"),
   SETTINGS("设置"),
 }
 
@@ -61,6 +66,20 @@ internal fun accountUnreadRetryDelayMs(consecutiveFailures: Int): Long =
     consecutiveFailures <= 1 -> 5_000L
     consecutiveFailures == 2 -> 10_000L
     else -> 30_000L
+  }
+
+internal fun applyAccountMessageUserStyles(
+  messages: List<AccountMessage>,
+  styles: Map<Long, AccountMessageUserStyle>,
+): List<AccountMessage> =
+  messages.map { message ->
+    styles[message.userMid]?.let { style ->
+      message.copy(
+        userLevel = style.level,
+        userVipActive = style.vipActive,
+        userVipLabel = style.vipLabel,
+      )
+    } ?: message
   }
 
 internal fun privateConversationSession(
@@ -202,6 +221,14 @@ sealed interface HistoryCardItem {
   }
 }
 
+private fun historyMergeKey(item: HistoryCardItem): String =
+  (item as? HistoryCardItem.Bangumi)
+    ?.bangumi
+    ?.seasonId
+    ?.takeIf { it > 0L }
+    ?.let { "pgc:season:$it" }
+    ?: item.stableId
+
 data class MyUiState(
   val section: MySection = MySection.HISTORY,
   val folders: List<FavoriteFolder> = emptyList(),
@@ -235,6 +262,7 @@ data class MyUiState(
   val selectedMessageId: Long? = null,
   val privateMessageUnreadCount: Int = 0,
   val interactionUnreadCount: Int = 0,
+  val likeUnreadCount: Int = 0,
   val privateMessageHistory: Map<Long, List<AccountMessage>> = emptyMap(),
   val privateMessagesLoading: Boolean = false,
   val privateHistoryHasMore: Boolean = false,
@@ -248,6 +276,8 @@ data class MyUiState(
   val messageAtCursor: MessageCursor = MessageCursor(),
   val messageReplyHasMore: Boolean = false,
   val messageAtHasMore: Boolean = false,
+  val messageLikeCursor: MessageCursor = MessageCursor(),
+  val messageLikeHasMore: Boolean = false,
   val messagesLoadingMore: Boolean = false,
   val loading: Boolean = false,
   val error: String? = null,
@@ -257,6 +287,7 @@ internal fun MyUiState.hasUnread(section: MySection): Boolean =
   when (section) {
     MySection.MESSAGES -> privateMessageUnreadCount > 0
     MySection.INTERACTIONS -> interactionUnreadCount > 0
+    MySection.LIKES -> likeUnreadCount > 0
     else -> false
   }
 
@@ -404,7 +435,11 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
     val expectedMid = mid
     if (expectedMid <= 0L) {
       _state.value =
-        _state.value.copy(privateMessageUnreadCount = 0, interactionUnreadCount = 0)
+        _state.value.copy(
+          privateMessageUnreadCount = 0,
+          interactionUnreadCount = 0,
+          likeUnreadCount = 0,
+        )
       return
     }
     unreadLoadJob?.cancel()
@@ -501,6 +536,10 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
             interactionSummary?.let { summary ->
               if (current.section == MySection.INTERACTIONS) 0 else summary.interactionCount
             } ?: current.interactionUnreadCount,
+          likeUnreadCount =
+            interactionSummary?.let { summary ->
+              if (current.section == MySection.LIKES) 0 else summary.likeCount
+            } ?: current.likeUnreadCount,
         )
       privateMessageCount != null && interactionSummary != null
     }
@@ -567,11 +606,17 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
         messageAtCursor = MessageCursor(),
         messageReplyHasMore = false,
         messageAtHasMore = false,
+        messageLikeCursor = MessageCursor(),
+        messageLikeHasMore = false,
         messagesLoadingMore = false,
         loading = false,
         error = null,
       )
-    if (mid <= 0 || section == MySection.SETTINGS || section == MySection.WATCH_LATER) return
+    if (
+      section == MySection.WATCH_LATER ||
+        section == MySection.CACHED_VIDEOS ||
+        mid <= 0
+    ) return
     loadJob = viewModelScope.launch {
       _state.value =
         _state.value.copy(loading = !(section == MySection.MESSAGES && privateMessagesLoaded))
@@ -604,18 +649,19 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
               )
           }
           MySection.HISTORY -> {
-            val (response, localLive) =
+            val (response, localHistory) =
               withContext(Dispatchers.IO) {
-                BiliApi.getHistory(type = HistoryFilter.ALL.apiType) to readLocalLiveHistory()
+                BiliApi.getHistory(type = HistoryFilter.ALL.apiType) to
+                  (readLocalLiveHistory() + readLocalBangumiHistory())
               }
             if (!isCurrentLoad(generation, expectedMid, section)) return@launch
             val remote = response.items.mapNotNull(::toHistoryCardItem)
             _state.value =
               _state.value.copy(
                 historyItems =
-                  (localLive + remote)
+                  (localHistory + remote)
                     .sortedByDescending(HistoryCardItem::viewAt)
-                    .distinctBy(HistoryCardItem::stableId),
+                    .distinctBy(::historyMergeKey),
                 historyCursor = response.cursor,
                 historyHasMore = response.hasMore,
                 loading = false,
@@ -726,10 +772,50 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
                 loading = false,
               )
             messageEmoteCache = emotes
-            enrichInteractionUserStyles(page.items, generation, expectedMid)
+            enrichAccountMessageUserStyles(
+              messages = page.items,
+              generation = generation,
+              expectedMid = expectedMid,
+              section = MySection.INTERACTIONS,
+            )
+          }
+          MySection.LIKES -> {
+            val (page, emotes) =
+              coroutineScope {
+                val pageRequest = async(Dispatchers.IO) { BiliApi.getLikeMessages() }
+                val emotesRequest =
+                  async(Dispatchers.IO) {
+                    if (messageEmoteCache.isNotEmpty()) messageEmoteCache
+                    else runCatching { BiliApi.getReplyEmotes() }.getOrDefault(emptyList())
+                  }
+                pageRequest.await() to emotesRequest.await()
+              }
+            if (!isCurrentLoad(generation, expectedMid, section)) return@launch
+            _state.value =
+              _state.value.copy(
+                messages = page.items,
+                selectedMessageId = null,
+                messageLikeCursor = page.cursor,
+                messageLikeHasMore = page.hasMore,
+                likeUnreadCount = 0,
+                messageEmotePackages = emotes,
+                loading = false,
+              )
+            messageEmoteCache = emotes
+            enrichAccountMessageUserStyles(
+              messages = page.items,
+              generation = generation,
+              expectedMid = expectedMid,
+              section = MySection.LIKES,
+            )
           }
           MySection.WATCH_LATER -> Unit
-          MySection.SETTINGS -> Unit
+          MySection.CACHED_VIDEOS -> Unit
+          MySection.SETTINGS -> {
+            val folders = withContext(Dispatchers.IO) { BiliApi.getFavoriteFolders(expectedMid) }
+            if (!isCurrentLoad(generation, expectedMid, section)) return@launch
+            _state.value = _state.value.copy(folders = folders, loading = false)
+          }
         }
       } catch (error: Exception) {
         if (error is kotlinx.coroutines.CancellationException) throw error
@@ -744,7 +830,11 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
     val section = _state.value.section
     if (mid <= 0L) return
     refreshUnreadStatus()
-    if (section == MySection.SETTINGS || section == MySection.WATCH_LATER) return
+    if (
+      section == MySection.SETTINGS ||
+        section == MySection.WATCH_LATER ||
+        section == MySection.CACHED_VIDEOS
+    ) return
     commitPendingUnfollows()
     if (section == MySection.FAVORITES && _state.value.selectedFolderId != null) {
       favoriteSearchJob?.cancel()
@@ -803,14 +893,16 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
       )
     loadJob = viewModelScope.launch {
       try {
-        val (response, localLive) =
+        val (response, localHistory) =
           withContext(Dispatchers.IO) {
             loadFilteredHistory(cursor, filter) to
-              if (reset && filter in setOf(HistoryFilter.ALL, HistoryFilter.LIVE)) {
-                readLocalLiveHistory()
-              } else {
-                emptyList()
-              }
+              if (!reset) emptyList()
+              else
+                when (filter) {
+                  HistoryFilter.ALL -> readLocalLiveHistory() + readLocalBangumiHistory()
+                  HistoryFilter.LIVE -> readLocalLiveHistory()
+                  else -> emptyList()
+                }
           }
         if (!isCurrentLoad(generation, expectedMid, MySection.HISTORY)) return@launch
         if (_state.value.historyFilter != filter) return@launch
@@ -826,14 +918,14 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
             }
             .mapNotNull(::toHistoryCardItem)
         val loaded =
-          (localLive + remoteLoaded)
+          (localHistory + remoteLoaded)
             .sortedByDescending(HistoryCardItem::viewAt)
-            .distinctBy(HistoryCardItem::stableId)
+            .distinctBy(::historyMergeKey)
         _state.value =
           _state.value.copy(
             historyItems =
               (if (reset) loaded else _state.value.historyItems + loaded)
-                .distinctBy(HistoryCardItem::stableId)
+                .distinctBy(::historyMergeKey)
                 .sortedByDescending(HistoryCardItem::viewAt),
             historyCursor = response.cursor,
             historyHasMore = response.hasMore && response.cursor != cursor,
@@ -1171,7 +1263,12 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
             messageAtHasMore = state.messageAtHasMore && page.atHasMore,
             messagesLoadingMore = false,
           )
-        enrichInteractionUserStyles(page.items, generation, expectedMid)
+        enrichAccountMessageUserStyles(
+          messages = page.items,
+          generation = generation,
+          expectedMid = expectedMid,
+          section = MySection.INTERACTIONS,
+        )
       } catch (error: Exception) {
         if (error is kotlinx.coroutines.CancellationException) throw error
         if (!isCurrentLoad(generation, expectedMid, MySection.INTERACTIONS)) return@launch
@@ -1179,6 +1276,47 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
           _state.value.copy(
             messagesLoadingMore = false,
             error = error.message ?: "历史回复加载失败",
+          )
+      }
+    }
+  }
+
+  fun loadMoreLikes() {
+    val state = _state.value
+    if (
+      state.section != MySection.LIKES ||
+        state.loading ||
+        state.messagesLoadingMore ||
+        !state.messageLikeHasMore
+    ) return
+    val expectedMid = mid
+    val generation = loadGeneration
+    _state.value = state.copy(messagesLoadingMore = true, error = null)
+    messageLoadMoreJob?.cancel()
+    messageLoadMoreJob = viewModelScope.launch {
+      try {
+        val page = withContext(Dispatchers.IO) { BiliApi.getLikeMessages(state.messageLikeCursor) }
+        if (!isCurrentLoad(generation, expectedMid, MySection.LIKES)) return@launch
+        _state.value =
+          _state.value.copy(
+            messages = (_state.value.messages + page.items).distinctBy { it.id },
+            messageLikeCursor = page.cursor,
+            messageLikeHasMore = page.hasMore,
+            messagesLoadingMore = false,
+          )
+        enrichAccountMessageUserStyles(
+          messages = page.items,
+          generation = generation,
+          expectedMid = expectedMid,
+          section = MySection.LIKES,
+        )
+      } catch (error: Exception) {
+        if (error is kotlinx.coroutines.CancellationException) throw error
+        if (!isCurrentLoad(generation, expectedMid, MySection.LIKES)) return@launch
+        _state.value =
+          _state.value.copy(
+            messagesLoadingMore = false,
+            error = error.message ?: "点赞消息加载失败",
           )
       }
     }
@@ -1579,10 +1717,11 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
     }
   }
 
-  private fun enrichInteractionUserStyles(
+  private fun enrichAccountMessageUserStyles(
     messages: List<AccountMessage>,
     generation: Long,
     expectedMid: Long,
+    section: MySection,
   ) {
     val userIds = messages.map { it.userMid }.filter { it > 0L }.distinct()
     if (userIds.isEmpty()) return
@@ -1596,23 +1735,13 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
             }
           }.mapNotNull { it.await() }.toMap()
         }
-      if (!isCurrentLoad(generation, expectedMid, MySection.INTERACTIONS) || styles.isEmpty()) return@launch
+      if (!isCurrentLoad(generation, expectedMid, section) || styles.isEmpty()) return@launch
       _state.value =
         _state.value.copy(
-          messages =
-            _state.value.messages.map { message ->
-              styles[message.userMid]?.let { style -> message.withUserStyle(style) } ?: message
-            }
+          messages = applyAccountMessageUserStyles(_state.value.messages, styles)
         )
     }
   }
-
-  private fun AccountMessage.withUserStyle(style: AccountMessageUserStyle): AccountMessage =
-    copy(
-      userLevel = style.level,
-      userVipActive = style.vipActive,
-      userVipLabel = style.vipLabel,
-    )
 
   fun editFavoriteFolder(folder: FavoriteFolder, title: String, isPublic: Boolean) {
     val ownerMid = mid
@@ -1968,6 +2097,74 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
   private fun readLocalLiveHistory(): List<HistoryCardItem.Live> =
     LiveHistoryStore.read(getApplication()).map { item ->
       HistoryCardItem.Live(item.room, item.viewedAt)
+    }
+
+  private fun readLocalBangumiHistory(): List<HistoryCardItem.Bangumi> =
+    BangumiLocalHistoryStore.read(getApplication()).map { stored ->
+      val historyId = "history:pgc:ep${stored.episodeId}"
+      val seasonType = stored.seasonType.takeIf { it > 0 } ?: 1
+      val mediaLabel = pgcMediaLabel(seasonType)
+      val progressPercent =
+        stored.durationMs
+          .takeIf { it > 0L }
+          ?.let { duration -> ((stored.positionMs * 100L) / duration).toInt().coerceIn(0, 100) }
+      val videoUrl = "https://www.bilibili.com/bangumi/play/ep${stored.episodeId}"
+      val bangumi =
+        SpaceContentCard(
+          id = historyId,
+          title = stored.title,
+          subtitle = stored.episodeTitle,
+          historyCoverUrl = stored.coverUrl,
+          aid = stored.aid,
+          bvid = stored.bvid,
+          videoUrl = videoUrl,
+          seasonId = stored.seasonId,
+          episodeId = stored.episodeId,
+          kind =
+            if (seasonType == 1 || seasonType == 4) SpaceContentKind.BANGUMI
+            else SpaceContentKind.DRAMA,
+          watchProgress =
+            BangumiWatchProgress(
+              episodeId = stored.episodeId,
+              episodeIndex = stored.episodeTitle,
+              positionMs = stored.positionMs,
+              percent = progressPercent,
+            ),
+          seasonType = seasonType,
+          hasHistory = true,
+          historicalOnly = true,
+          lastViewedAt = stored.viewedAt,
+        )
+      HistoryCardItem.Bangumi(
+        item =
+          FeedItem(
+            id = historyId,
+            title = stored.title,
+            videoUrl = videoUrl,
+            coverUrl = stored.coverUrl,
+            uploader = mediaLabel,
+            playCount = null,
+            duration =
+              stored.durationMs
+                .takeIf { it > 0L }
+                ?.let { FeedViewModel.formatDuration(it / 1_000L) },
+            publishedAt = stored.viewedAt,
+            description = stored.episodeTitle,
+          ),
+        bangumi = bangumi,
+        mediaLabel = mediaLabel,
+        viewAt = stored.viewedAt,
+      )
+    }
+
+  private fun pgcMediaLabel(seasonType: Int): String =
+    when (seasonType) {
+      2 -> "电影"
+      3 -> "纪录片"
+      4 -> "国创"
+      5 -> "电视剧"
+      7 -> "综艺"
+      else -> "番剧"
     }
 
   private fun favoriteVideoId(card: FeedCard): String = card.bvid.ifBlank { card.aid.toString() }

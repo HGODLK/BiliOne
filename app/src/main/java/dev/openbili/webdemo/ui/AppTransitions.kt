@@ -15,9 +15,15 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -25,6 +31,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import dev.openbili.webdemo.feed.CoverImage
@@ -85,7 +93,7 @@ internal fun ProfileTransitionBackground(
       shape = RectangleShape,
       color = MaterialTheme.colorScheme.background,
       tonalElevation = if (revealFromTransparent) 0.dp else 2.dp,
-      shadowElevation = if (revealFromTransparent) 0.dp else 5.dp,
+      shadowElevation = 0.dp,
     ) {}
   }
 }
@@ -212,7 +220,15 @@ internal fun ExpandingPageTransitionOverlay(
             transformOrigin = TransformOrigin(0f, 0f)
             val apparentCorner =
               sourceCornerRadius.value + (targetCornerRadius.value - sourceCornerRadius.value) * p
-            shape = RoundedCornerShape((apparentCorner / currentScaleY).dp)
+            // The page uses different X/Y scales while collapsing. A normal rounded rectangle is
+            // stretched into an ellipse; compensate each axis so the visible corner still matches
+            // the source search field exactly.
+            shape =
+              NonUniformScaledRoundedShape(
+                apparentRadiusPx = apparentCorner * density.density,
+                scaleX = currentScaleX,
+                scaleY = currentScaleY,
+              )
             clip = true
           },
       shape = RectangleShape,
@@ -223,10 +239,37 @@ internal fun ExpandingPageTransitionOverlay(
   }
 }
 
+private data class NonUniformScaledRoundedShape(
+  val apparentRadiusPx: Float,
+  val scaleX: Float,
+  val scaleY: Float,
+) : Shape {
+  override fun createOutline(
+    size: Size,
+    layoutDirection: LayoutDirection,
+    density: Density,
+  ): Outline {
+    val radiusX =
+      (apparentRadiusPx / scaleX.coerceAtLeast(.001f)).coerceIn(0f, size.width / 2f)
+    val radiusY =
+      (apparentRadiusPx / scaleY.coerceAtLeast(.001f)).coerceIn(0f, size.height / 2f)
+    return Outline.Rounded(
+      RoundRect(
+        left = 0f,
+        top = 0f,
+        right = size.width,
+        bottom = size.height,
+        cornerRadius = CornerRadius(radiusX, radiusY),
+      )
+    )
+  }
+}
+
 // ── Transition phase ──────────────────────────────────────────────────
 
 internal enum class VideoOrigin {
   HOME,
+  HOME_DYNAMIC,
   POPULAR,
   MY,
   SEARCH,
@@ -306,7 +349,13 @@ internal fun CardTransitionOverlay(
       color = MaterialTheme.colorScheme.surface,
       tonalElevation = 2.dp,
     ) {
-      Box(Modifier.fillMaxSize()) {
+      Box(
+        Modifier.fillMaxSize().drawWithContent {
+          drawContent()
+          val dimAlpha = coverDimAlpha().coerceIn(0f, 1f)
+          if (dimAlpha > 0f) drawRect(Color.Black.copy(alpha = dimAlpha))
+        }
+      ) {
         if (transitionBitmap != null) {
           Image(
             bitmap = transitionBitmap.asImageBitmap(),
@@ -327,11 +376,6 @@ internal fun CardTransitionOverlay(
         } else {
           Box(Modifier.fillMaxSize().background(Color.Black))
         }
-        Box(
-          Modifier.fillMaxSize()
-            .graphicsLayer { alpha = coverDimAlpha().coerceIn(0f, 1f) }
-            .background(Color.Black)
-        )
       }
     }
   }

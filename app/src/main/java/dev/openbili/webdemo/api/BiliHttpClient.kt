@@ -168,8 +168,10 @@ object BiliHttpClient {
           original
             .newBuilder()
             .url(requestUrl)
-            .header("Accept", "application/json, text/plain, */*")
             .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+        if (original.header("Accept") == null) {
+          builder.header("Accept", "application/json, text/plain, */*")
+        }
         if (original.header("Referer") == null) {
           builder.header("Referer", "https://www.bilibili.com/")
         }
@@ -189,13 +191,14 @@ object BiliHttpClient {
       .readTimeout(30, TimeUnit.SECONDS)
       .cookieJar(CookieJar.NO_COOKIES)
       .addInterceptor { chain ->
-        val builder =
-          chain
-            .request()
-            .newBuilder()
-            .header("Referer", "https://www.bilibili.com/")
-            .header("Accept", "text/xml, */*")
-            .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+        val original = chain.request()
+        val builder = original.newBuilder().header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+        if (original.header("Referer") == null) {
+          builder.header("Referer", "https://www.bilibili.com/")
+        }
+        if (original.header("Accept") == null) {
+          builder.header("Accept", "text/xml, */*")
+        }
         cachedDesktopUa?.let { builder.header("User-Agent", it) }
         chain.proceed(builder.build())
       }

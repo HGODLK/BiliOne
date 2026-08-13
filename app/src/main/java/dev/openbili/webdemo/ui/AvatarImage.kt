@@ -15,6 +15,7 @@ import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.allowHardware
 import coil3.size.Precision
+import dev.openbili.webdemo.UrlPolicy
 import dev.openbili.webdemo.feed.LoadedFeedImageRegistry
 import dev.openbili.webdemo.feed.LocalFeedImageLoadPolicy
 
@@ -33,8 +34,12 @@ fun AvatarImage(
 ) {
   val context = LocalContext.current
   val imageLoadPolicy = LocalFeedImageLoadPolicy.current
-  val previouslyLoaded = remember(face) { LoadedFeedImageRegistry.contains(face) }
-  var displayed by remember(face) { mutableStateOf(false) }
+  val normalizedFace = remember(face) { UrlPolicy.normalizeImageUrl(face).orEmpty() }
+  val previouslyLoaded =
+    remember(normalizedFace) {
+      normalizedFace.isNotBlank() && LoadedFeedImageRegistry.contains(normalizedFace)
+    }
+  var displayed by remember(normalizedFace) { mutableStateOf(false) }
   val requestPermitted = previouslyLoaded || displayed || imageLoadPolicy.permits(loadKey)
   val imageAlpha by
     animateFloatAsState(
@@ -43,10 +48,10 @@ fun AvatarImage(
       label = "avatarImageAlpha",
     )
   val model =
-    remember(face, requestSize, requestPermitted) {
-      if (requestPermitted) {
+    remember(normalizedFace, requestSize, requestPermitted) {
+      if (requestPermitted && normalizedFace.isNotBlank()) {
         ImageRequest.Builder(context)
-          .data(face)
+          .data(normalizedFace)
           .size(requestSize, requestSize)
           .precision(Precision.INEXACT)
           .allowHardware(false)
@@ -60,7 +65,7 @@ fun AvatarImage(
     contentScale = ContentScale.Crop,
     onSuccess = {
       displayed = true
-      LoadedFeedImageRegistry.markLoaded(face)
+      LoadedFeedImageRegistry.markLoaded(normalizedFace)
     },
   )
 }

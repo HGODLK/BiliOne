@@ -131,6 +131,17 @@ class SearchViewModel(application: Application) : AndroidViewModel(application) 
     }
   }
 
+  fun clearEntry() {
+    suggestionJob?.cancel()
+    suggestionGeneration++
+    _state.value =
+      _state.value.copy(
+        query = "",
+        suggestions = emptyList(),
+        suggestionsLoading = false,
+      )
+  }
+
   fun selectCategory(category: SearchCategory) {
     if (!category.enabled || category == _state.value.category) return
     _state.value = _state.value.copy(category = category)

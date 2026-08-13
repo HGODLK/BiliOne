@@ -3,32 +3,28 @@ package dev.openbili.webdemo.my
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
-import androidx.compose.foundation.background
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
-import androidx.compose.foundation.text.input.delete
-import androidx.compose.foundation.text.input.rememberTextFieldState
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -37,42 +33,46 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.ime
-import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.relocation.BringIntoViewRequester
-import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.layout.LazyLayoutCacheWindow
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.layout.LazyLayoutCacheWindow
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.input.delete
+import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.AddCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -130,8 +130,8 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextRange
-import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
@@ -173,39 +173,39 @@ import dev.openbili.webdemo.settings.ThemeAccent
 import dev.openbili.webdemo.settings.ThemeMode
 import dev.openbili.webdemo.settings.canSelectPreferredResolution
 import dev.openbili.webdemo.settings.detectSimAvailability
-import dev.openbili.webdemo.ui.PressableVideoCard
 import dev.openbili.webdemo.ui.NavigationCardBottomClearance
 import dev.openbili.webdemo.ui.OfficialVerificationIcon
 import dev.openbili.webdemo.ui.OfficialVerificationIconSize
+import dev.openbili.webdemo.ui.PressableVideoCard
 import dev.openbili.webdemo.ui.PullRefreshContainer
 import dev.openbili.webdemo.ui.RootAccountHeader
 import dev.openbili.webdemo.ui.VideoCardGradient
 import dev.openbili.webdemo.ui.VideoCardReveal
 import dev.openbili.webdemo.ui.VideoShapeTokens
+import dev.openbili.webdemo.video.BiliRichText
+import dev.openbili.webdemo.video.CommentAvatarPaletteCache
+import dev.openbili.webdemo.video.CommentEmoteMarkerRegistry
 import dev.openbili.webdemo.video.CommentImagePreviewOverlay
 import dev.openbili.webdemo.video.CommentImagePreviewSession
-import dev.openbili.webdemo.video.BiliRichText
-import dev.openbili.webdemo.video.CommentEmoteMarkerRegistry
+import dev.openbili.webdemo.video.CommentProfileAnchor
+import dev.openbili.webdemo.video.CommentRow
 import dev.openbili.webdemo.video.CommentTextEditor
 import dev.openbili.webdemo.video.CommentToolPage
 import dev.openbili.webdemo.video.CommentToolPanel
-import dev.openbili.webdemo.video.CommentAvatarPaletteCache
-import dev.openbili.webdemo.video.CommentProfileAnchor
-import dev.openbili.webdemo.video.CommentRow
 import dev.openbili.webdemo.video.extractAvatarDominantColors
 import dev.openbili.webdemo.video.readableCommentCardColor
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
+import kotlin.math.abs
+import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.time.Instant
-import java.time.LocalDate
-import java.time.ZoneId
-import java.time.temporal.ChronoUnit
-import java.time.format.DateTimeFormatter
-import kotlin.math.abs
-import kotlin.math.roundToInt
 
 @Composable
 fun MyScreen(
@@ -316,7 +316,7 @@ fun MyScreen(
                     if (selected) MaterialTheme.colorScheme.primaryContainer
                     else MaterialTheme.colorScheme.surface
                   )
-                  .clickable { onSection(section) },
+                  .clickable { onSection(section) }
             ) {
               Text(
                 section.label,
@@ -361,8 +361,7 @@ fun MyScreen(
             end = 20.dp,
             bottom =
               if (state.section == MySection.MESSAGES) 14.dp
-              else if (immerseBehindBottomCapsule) 0.dp
-              else 20.dp,
+              else if (immerseBehindBottomCapsule) 0.dp else 20.dp,
           )
       ) {
         if (!user.isLogin && state.section != MySection.CACHED_VIDEOS) {
@@ -687,9 +686,7 @@ private fun FollowingUserCard(
     remember(person.face) { LoadedFeedImageRegistry.contains(person.face) }
   var avatarDisplayed by remember(person.face) { mutableStateOf(false) }
   val avatarRequestPermitted =
-    avatarPreviouslyLoaded ||
-      avatarDisplayed ||
-      imageLoadPolicy.permits(person.mid.toString())
+    avatarPreviouslyLoaded || avatarDisplayed || imageLoadPolicy.permits(person.mid.toString())
   val avatarAlpha by
     animateFloatAsState(
       targetValue = if (avatarDisplayed) 1f else 0f,
@@ -717,10 +714,7 @@ private fun FollowingUserCard(
   ) {
     Box {
       Box(Modifier.fillMaxSize()) {
-        Box(
-          Modifier.fillMaxSize()
-            .background(Brush.horizontalGradient(gradientColors))
-        )
+        Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(gradientColors)))
         Box(
           Modifier.fillMaxSize()
             .background(
@@ -851,9 +845,10 @@ private fun SettingsPane(
   var clearingCache by remember { mutableStateOf(false) }
   var showResetDialog by remember { mutableStateOf(false) }
   var showMusicFolderPicker by remember { mutableStateOf(false) }
-  var simAvailability by remember(context.applicationContext) {
-    mutableStateOf(detectSimAvailability(context))
-  }
+  var simAvailability by
+    remember(context.applicationContext) {
+      mutableStateOf(detectSimAvailability(context))
+    }
   val homeBackgroundPicker =
     rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
       if (uri != null) {
@@ -876,6 +871,18 @@ private fun SettingsPane(
           )
         }
         onChange { it.copy(videoBackgroundUri = uri.toString()) }
+      }
+    }
+  val startupMaskPicker =
+    rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+      if (uri != null) {
+        runCatching {
+          context.contentResolver.takePersistableUriPermission(
+            uri,
+            Intent.FLAG_GRANT_READ_URI_PERMISSION,
+          )
+        }
+        onChange { it.copy(startupMaskUri = uri.toString()) }
       }
     }
 
@@ -920,7 +927,12 @@ private fun SettingsPane(
       onDismiss = { showMusicFolderPicker = false },
       onSelected = { folderId ->
         showMusicFolderPicker = false
-        onChange { it.copy(musicFavoriteFolderId = folderId) }
+        onChange {
+          it.copy(
+            musicFavoriteFolderId = folderId,
+            musicFavoriteFolderConfigured = true,
+          )
+        }
       },
     )
   }
@@ -933,6 +945,14 @@ private fun SettingsPane(
       }
     } else {
       Toast.makeText(context, "只有大会员可以选择~", Toast.LENGTH_SHORT).show()
+    }
+  }
+
+  fun selectMusicResolution(mode: PreferredResolutionMode) {
+    if (mode != PreferredResolutionMode.EXTREME && canSelectPreferredResolution(mode, vipActive)) {
+      onChange { value -> value.copy(musicPreferredResolutionMode = mode) }
+    } else {
+      Toast.makeText(context, "非大会员最高可选择 1080P", Toast.LENGTH_SHORT).show()
     }
   }
 
@@ -1066,13 +1086,13 @@ private fun SettingsPane(
 
     item { SettingsTitle("音乐播放器") }
     item {
-      val selectedFolder =
-        favoriteFolders.firstOrNull { it.id == settings.musicFavoriteFolderId }
+      val selectedFolder = favoriteFolders.firstOrNull { it.id == settings.musicFavoriteFolderId }
       SettingsAction(
         title = "音乐播放器收藏夹",
         subtitle =
           when {
-            settings.musicFavoriteFolderId <= 0L -> "默认按名称自动查找“音乐”收藏夹"
+            !settings.musicFavoriteFolderConfigured -> "首次进入音乐页时选择收藏夹"
+            settings.musicFavoriteFolderId <= 0L -> "按名称自动查找“音乐”收藏夹"
             selectedFolder != null ->
               "当前使用“${selectedFolder.title}” · ${selectedFolder.mediaCount} 个内容"
             favoriteFoldersLoading -> "正在读取个人收藏夹…"
@@ -1081,6 +1101,23 @@ private fun SettingsPane(
         action = if (favoriteFoldersLoading) "加载中" else "选择",
         enabled = !favoriteFoldersLoading,
         onClick = { showMusicFolderPicker = true },
+      )
+    }
+
+    item {
+      PreferredResolutionSetting(
+        title = "音乐播放器视频规格（非大会员最高 1080P）",
+        selected =
+          if (
+            !vipActive &&
+              settings.musicPreferredResolutionMode == PreferredResolutionMode.ULTRA_HIGH
+          ) {
+            PreferredResolutionMode.HIGH
+          } else {
+            settings.musicPreferredResolutionMode
+          },
+        options = PreferredResolutionMode.entries.filter { it != PreferredResolutionMode.EXTREME },
+        onSelected = ::selectMusicResolution,
       )
     }
 
@@ -1151,6 +1188,16 @@ private fun SettingsPane(
         onChange { value -> value.copy(showPlaybackDeviceStatus = it) }
       }
     }
+    item {
+      BackgroundImageSetting(
+        title = "自定义启动遮罩图",
+        selected = settings.startupMaskUri.isNotBlank(),
+        selectedDescription = "已选择；下次启动全程使用并裁剪覆盖全屏",
+        defaultDescription = "未设置，使用当前默认遮罩图",
+        onPick = { startupMaskPicker.launch(arrayOf("image/*")) },
+        onClear = { onChange { it.copy(startupMaskUri = "") } },
+      )
+    }
     item { SettingsTitle("页面背景") }
     item {
       BackgroundImageSetting(
@@ -1166,14 +1213,18 @@ private fun SettingsPane(
           "模糊首页背景图",
           "预先生成静态模糊图；开启后背景透明度不生效",
           settings.homeBackgroundBlur,
-        ) { checked -> onChange { it.copy(homeBackgroundBlur = checked) } }
+        ) { checked ->
+          onChange { it.copy(homeBackgroundBlur = checked) }
+        }
       }
       item {
         SettingsSwitch(
           "用于音乐播放页",
           "音乐页会使用无压暗的静态模糊版本",
           settings.useHomeBackgroundForMusic,
-        ) { checked -> onChange { it.copy(useHomeBackgroundForMusic = checked) } }
+        ) { checked ->
+          onChange { it.copy(useHomeBackgroundForMusic = checked) }
+        }
       }
       if (!settings.homeBackgroundBlur) {
         item {
@@ -1183,7 +1234,9 @@ private fun SettingsPane(
             value = settings.homeBackgroundTransparency,
             range = 0f..1f,
             steps = 9,
-          ) { next -> onChange { it.copy(homeBackgroundTransparency = next) } }
+          ) { next ->
+            onChange { it.copy(homeBackgroundTransparency = next) }
+          }
         }
       }
     }
@@ -1200,7 +1253,9 @@ private fun SettingsPane(
         "使用当前视频封面作为播放页背景",
         "默认开启；番剧和分 P 会跟随当前播放集。设置自定义播放页背景图后不生效",
         settings.useVideoCoverBackground,
-      ) { checked -> onChange { it.copy(useVideoCoverBackground = checked) } }
+      ) { checked ->
+        onChange { it.copy(useVideoCoverBackground = checked) }
+      }
     }
     if (settings.videoBackgroundUri.isNotBlank()) {
       item {
@@ -1208,7 +1263,9 @@ private fun SettingsPane(
           "模糊播放页背景图",
           "预先生成静态模糊图；开启后背景透明度不生效",
           settings.videoBackgroundBlur,
-        ) { checked -> onChange { it.copy(videoBackgroundBlur = checked) } }
+        ) { checked ->
+          onChange { it.copy(videoBackgroundBlur = checked) }
+        }
       }
       if (!settings.videoBackgroundBlur) {
         item {
@@ -1218,7 +1275,9 @@ private fun SettingsPane(
             value = settings.videoBackgroundTransparency,
             range = 0f..1f,
             steps = 9,
-          ) { next -> onChange { it.copy(videoBackgroundTransparency = next) } }
+          ) { next ->
+            onChange { it.copy(videoBackgroundTransparency = next) }
+          }
         }
       }
     }
@@ -1387,8 +1446,7 @@ private fun SettingsPane(
       SettingsAction(
         title = "个人主页 IP 属地",
         subtitle =
-          if (profileIpAuthorized) "已授权，可显示个人主页接口返回的公开 IP 属地"
-          else "授权后可显示个人主页接口返回的公开 IP 属地",
+          if (profileIpAuthorized) "已授权，可显示个人主页接口返回的公开 IP 属地" else "授权后可显示个人主页接口返回的公开 IP 属地",
         action = if (profileIpAuthorized) "已授权" else "去授权",
         enabled = !profileIpAuthorized,
         onClick = onAuthorizeProfileIp,
@@ -1463,8 +1521,7 @@ private fun MusicFavoriteFolderPicker(
             SettingsRadioRow(
               selected = selectedFolderId == folder.id,
               title = folder.title,
-              description =
-                "${folder.mediaCount} 个内容 · ${if (folder.isPublic) "公开" else "私密"}",
+              description = "${folder.mediaCount} 个内容 · ${if (folder.isPublic) "公开" else "私密"}",
               onClick = { onSelected(folder.id) },
             )
           }
@@ -1480,6 +1537,7 @@ private fun MusicFavoriteFolderPicker(
 private fun PreferredResolutionSetting(
   title: String,
   selected: PreferredResolutionMode,
+  options: List<PreferredResolutionMode> = PreferredResolutionMode.entries,
   onSelected: (PreferredResolutionMode) -> Unit,
 ) {
   Surface(
@@ -1494,7 +1552,7 @@ private fun PreferredResolutionSetting(
         modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp),
         style = MaterialTheme.typography.titleSmall,
       )
-      PreferredResolutionMode.entries.forEach { mode ->
+      options.forEach { mode ->
         SettingsRadioRow(
           selected = selected == mode,
           title = mode.title,
@@ -1581,6 +1639,8 @@ private fun SettingsTitle(text: String) {
 private fun BackgroundImageSetting(
   title: String,
   selected: Boolean,
+  selectedDescription: String = "已选择；仅作为页面最底层背景",
+  defaultDescription: String = "未选择，使用主题背景",
   onPick: () -> Unit,
   onClear: () -> Unit,
 ) {
@@ -1592,7 +1652,7 @@ private fun BackgroundImageSetting(
       Column(Modifier.weight(1f)) {
         Text(title, style = MaterialTheme.typography.titleMedium)
         Text(
-          if (selected) "已选择；仅作为页面最底层背景" else "未选择，使用主题背景",
+          if (selected) selectedDescription else defaultDescription,
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -1742,8 +1802,7 @@ private fun WatchLaterPanel(
       columns = GridCells.Fixed(3),
       state = gridState,
       modifier = Modifier.fillMaxSize(),
-      contentPadding =
-        PaddingValues(end = 136.dp, bottom = NavigationCardBottomClearance),
+      contentPadding = PaddingValues(end = 136.dp, bottom = NavigationCardBottomClearance),
       horizontalArrangement = Arrangement.spacedBy(12.dp),
       verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -1863,10 +1922,7 @@ private fun HistoryPanel(
   val currentPeriod by
     remember(gridEntries, gridState) {
       derivedStateOf {
-        gridEntries
-          .getOrNull(gridState.firstVisibleItemIndex)
-          ?.period
-          ?: HistoryPeriod.TODAY
+        gridEntries.getOrNull(gridState.firstVisibleItemIndex)?.period ?: HistoryPeriod.TODAY
       }
     }
   val preciseMaxMinute =
@@ -1886,7 +1942,9 @@ private fun HistoryPanel(
     state.loading,
   ) {
     val target = pendingTarget ?: return@LaunchedEffect
-    val index = gridEntries.indexOfFirst { it is HistoryGridEntry.Section && it.period == target.period }
+    val index = gridEntries.indexOfFirst {
+      it is HistoryGridEntry.Section && it.period == target.period
+    }
     if (index >= 0) {
       gridState.animateScrollToItem(index)
       pendingTarget = null
@@ -1899,7 +1957,8 @@ private fun HistoryPanel(
   LaunchedEffect(preciseMode, selectedMinute, currentPeriod, gridEntries) {
     if (!preciseMode || currentPeriod == HistoryPeriod.EARLIER) return@LaunchedEffect
     val index =
-      gridEntries.withIndex()
+      gridEntries
+        .withIndex()
         .filter { (_, entry) ->
           entry is HistoryGridEntry.Card && entry.period == currentPeriod
         }
@@ -1951,8 +2010,7 @@ private fun HistoryPanel(
           columns = GridCells.Fixed(3),
           state = gridState,
           modifier = Modifier.fillMaxSize(),
-          contentPadding =
-            PaddingValues(end = 136.dp, bottom = NavigationCardBottomClearance),
+          contentPadding = PaddingValues(end = 136.dp, bottom = NavigationCardBottomClearance),
           horizontalArrangement = Arrangement.spacedBy(12.dp),
           verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -2037,8 +2095,7 @@ private fun HistoryPanel(
                         historyLabel = formatHistoryWatchTime(history.viewAt),
                       )
                     is HistoryCardItem.Live -> {
-                      var coverBounds by
-                        remember(history.room.roomId) { mutableStateOf(Rect.Zero) }
+                      var coverBounds by remember(history.room.roomId) { mutableStateOf(Rect.Zero) }
                       val room = history.room
                       val card =
                         FeedItem(
@@ -2104,22 +2161,21 @@ private fun HistoryPanel(
                   .getOrNull(gridState.firstVisibleItemIndex)
                   .let { it as? HistoryGridEntry.Card }
                   ?.history
-                  ?: gridEntries
-                    .drop(gridState.firstVisibleItemIndex)
-                    .firstNotNullOfOrNull { (it as? HistoryGridEntry.Card)?.history }
+                  ?: gridEntries.drop(gridState.firstVisibleItemIndex).firstNotNullOfOrNull {
+                    (it as? HistoryGridEntry.Card)?.history
+                  }
               selectedMinute =
-                (visibleHistory?.viewAt?.let(::historyMinuteOfDay) ?: 0)
-                  .coerceIn(0, preciseMaxMinute)
+                (visibleHistory?.viewAt?.let(::historyMinuteOfDay) ?: 0).coerceIn(
+                  0,
+                  preciseMaxMinute,
+                )
             }
             preciseMode = enabled && currentPeriod != HistoryPeriod.EARLIER
           },
           onMinuteChange = { selectedMinute = it.coerceIn(0, preciseMaxMinute) },
           maxMinute = preciseMaxMinute,
           modifier =
-            Modifier.align(Alignment.CenterEnd)
-              .padding(end = 10.dp)
-              .fillMaxHeight()
-              .width(88.dp),
+            Modifier.align(Alignment.CenterEnd).padding(end = 10.dp).fillMaxHeight().width(88.dp),
         )
       }
       Column(
@@ -2198,9 +2254,7 @@ private fun HistorySectionDivider(period: HistoryPeriod) {
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(10.dp),
   ) {
-    Box(
-      Modifier.size(9.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary)
-    )
+    Box(Modifier.size(9.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary))
     Text(
       period.label,
       style = MaterialTheme.typography.titleSmall,
@@ -2334,10 +2388,9 @@ private fun HistoryTimeline(
             HistoryPeriod.entries.forEach { period ->
               Row(
                 modifier =
-                  Modifier.fillMaxWidth()
-                    .weight(1f)
-                    .clip(RoundedCornerShape(12.dp))
-                    .clickable { onPeriod(period) },
+                  Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(12.dp)).clickable {
+                    onPeriod(period)
+                  },
                 verticalAlignment = Alignment.CenterVertically,
               ) {
                 Box(Modifier.width(31.dp))
@@ -2398,16 +2451,14 @@ private fun HistoryTimeScale(
   val outline = MaterialTheme.colorScheme.outline
   val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
   val density = androidx.compose.ui.platform.LocalDensity.current
-  Box(
-    modifier =
-      modifier.onSizeChanged { heightPx = it.height.toFloat().coerceAtLeast(1f) }
-  ) {
+  Box(modifier = modifier.onSizeChanged { heightPx = it.height.toFloat().coerceAtLeast(1f) }) {
     Canvas(Modifier.fillMaxSize()) {
       val right = size.width - 3.dp.toPx()
-      val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-        color = labelColor.toArgb()
-        textSize = 8.dp.toPx()
-      }
+      val paint =
+        android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+          color = labelColor.toArgb()
+          textSize = 8.dp.toPx()
+        }
       for (step in 0..120) {
         val minute = 1440 - step * 12
         val y = size.height * step / 120f
@@ -2426,7 +2477,7 @@ private fun HistoryTimeScale(
             "%02d".format(minute / 60),
             right - 38.dp.toPx(),
             (y + 3.dp.toPx()).coerceIn(paint.textSize, size.height),
-          paint.apply { alpha = if (future) 70 else 255 },
+            paint.apply { alpha = if (future) 70 else 255 },
           )
         }
       }
@@ -2447,8 +2498,7 @@ private fun HistoryTimeScale(
         paint,
       )
     }
-    val currentYDp =
-      with(density) { ((1f - selectedMinute / 1440f) * heightPx).toDp() }
+    val currentYDp = with(density) { ((1f - selectedMinute / 1440f) * heightPx).toDp() }
     Box(
       modifier =
         Modifier.fillMaxWidth()
@@ -2477,7 +2527,7 @@ private fun HistoryTimeScale(
             )
           }
           .clickable(onClick = onClose)
-          .zIndex(1f),
+          .zIndex(1f)
     )
   }
 }
@@ -2622,105 +2672,105 @@ private fun VideoPanel(
       }
       CompositionLocalProvider(LocalFeedImageLoadPolicy provides imageLoadPolicy) {
         LazyVerticalGrid(
-        columns = GridCells.Fixed(3),
-        state = gridState,
-        modifier = Modifier.weight(1f),
-        contentPadding = PaddingValues(bottom = NavigationCardBottomClearance),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+          columns = GridCells.Fixed(3),
+          state = gridState,
+          modifier = Modifier.weight(1f),
+          contentPadding = PaddingValues(bottom = NavigationCardBottomClearance),
+          horizontalArrangement = Arrangement.spacedBy(12.dp),
+          verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-        if (state.videos.isEmpty() && !state.loading) {
-          item(
-            key = "video_panel_empty_${state.selectedFolderId}_${state.favoriteQuery}",
-            span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) },
-          ) {
-            Box(
-              Modifier.fillMaxWidth().padding(vertical = 48.dp),
-              contentAlignment = Alignment.Center,
+          if (state.videos.isEmpty() && !state.loading) {
+            item(
+              key = "video_panel_empty_${state.selectedFolderId}_${state.favoriteQuery}",
+              span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) },
             ) {
-              Text(
-                if (favoriteMode && state.favoriteQuery.isNotBlank()) "没有找到相关视频"
-                else if (favoriteMode) "这个收藏夹还是空的" else "暂无历史视频",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
+              Box(
+                Modifier.fillMaxWidth().padding(vertical = 48.dp),
+                contentAlignment = Alignment.Center,
+              ) {
+                Text(
+                  if (favoriteMode && state.favoriteQuery.isNotBlank()) "没有找到相关视频"
+                  else if (favoriteMode) "这个收藏夹还是空的" else "暂无历史视频",
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+              }
             }
           }
-        }
-        itemsIndexed(state.videos, key = { _, video -> video.id }) { index, video ->
-          var coverBounds by remember(video.id) { mutableStateOf(Rect.Zero) }
-          VideoCardReveal(
-            index = index,
-            batchKey = state.videos.firstOrNull()?.id,
-            itemKey = video.id,
-          ) {
-            PressableVideoCard(
-              onClick = {
-                if (managedVideoId != null) {
-                  managedVideoId = null
-                  deleteConfirmationId = null
-                } else {
-                  onVideo(video, coverBounds.takeUnless { it == Rect.Zero } ?: Rect.Zero)
-                }
-              },
-              onLongClick = {
-                if (favoriteMode) {
-                  deleteConfirmationId = null
-                  managedVideoId = video.id
-                } else onVideoLongClick(video)
-              },
+          itemsIndexed(state.videos, key = { _, video -> video.id }) { index, video ->
+            var coverBounds by remember(video.id) { mutableStateOf(Rect.Zero) }
+            VideoCardReveal(
+              index = index,
+              batchKey = state.videos.firstOrNull()?.id,
+              itemKey = video.id,
             ) {
-              Box {
-                MyVideoCardContent(
-                  item = video,
-                  coverVisible = video.id != hiddenCoverItemId,
-                  onCoverBoundsChanged = { coverBounds = it },
-                )
-                if (favoriteMode && managedVideoId == video.id) {
-                  FavoriteManagementOverlay(
-                    deleteConfirmation = deleteConfirmationId == video.id,
-                    busy = state.favoriteActionBusyId == video.id,
-                    onDismiss = {
-                      managedVideoId = null
-                      deleteConfirmationId = null
-                    },
-                    onRemoveRequest = { deleteConfirmationId = video.id },
-                    onRemoveUndo = { deleteConfirmationId = null },
-                    onRemoveConfirm = {
-                      managedVideoId = null
-                      deleteConfirmationId = null
-                      onRemoveFavorite(video)
-                    },
-                    onCopy = {
-                      transferRequest = FavoriteTransferRequest(video, move = false)
-                    },
-                    onMove = {
-                      transferRequest = FavoriteTransferRequest(video, move = true)
-                    },
+              PressableVideoCard(
+                onClick = {
+                  if (managedVideoId != null) {
+                    managedVideoId = null
+                    deleteConfirmationId = null
+                  } else {
+                    onVideo(video, coverBounds.takeUnless { it == Rect.Zero } ?: Rect.Zero)
+                  }
+                },
+                onLongClick = {
+                  if (favoriteMode) {
+                    deleteConfirmationId = null
+                    managedVideoId = video.id
+                  } else onVideoLongClick(video)
+                },
+              ) {
+                Box {
+                  MyVideoCardContent(
+                    item = video,
+                    coverVisible = video.id != hiddenCoverItemId,
+                    onCoverBoundsChanged = { coverBounds = it },
                   )
+                  if (favoriteMode && managedVideoId == video.id) {
+                    FavoriteManagementOverlay(
+                      deleteConfirmation = deleteConfirmationId == video.id,
+                      busy = state.favoriteActionBusyId == video.id,
+                      onDismiss = {
+                        managedVideoId = null
+                        deleteConfirmationId = null
+                      },
+                      onRemoveRequest = { deleteConfirmationId = video.id },
+                      onRemoveUndo = { deleteConfirmationId = null },
+                      onRemoveConfirm = {
+                        managedVideoId = null
+                        deleteConfirmationId = null
+                        onRemoveFavorite(video)
+                      },
+                      onCopy = {
+                        transferRequest = FavoriteTransferRequest(video, move = false)
+                      },
+                      onMove = {
+                        transferRequest = FavoriteTransferRequest(video, move = true)
+                      },
+                    )
+                  }
                 }
               }
             }
           }
-        }
-        if (favoriteMode && state.favoriteHasMore) {
-          item(
-            key =
-              "favorite_load_more_${state.selectedFolderId}_${state.favoritePage}_${state.favoriteQuery}",
-            span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) },
-          ) {
-            LaunchedEffect(
-              state.selectedFolderId,
-              state.favoritePage,
-              state.favoriteQuery,
-              imageLoadPolicy.mode,
+          if (favoriteMode && state.favoriteHasMore) {
+            item(
+              key =
+                "favorite_load_more_${state.selectedFolderId}_${state.favoritePage}_${state.favoriteQuery}",
+              span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) },
             ) {
-              if (imageLoadPolicy.mode != FeedImageLoadMode.PAUSED) onLoadMoreFavorites()
-            }
-            Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
-              CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+              LaunchedEffect(
+                state.selectedFolderId,
+                state.favoritePage,
+                state.favoriteQuery,
+                imageLoadPolicy.mode,
+              ) {
+                if (imageLoadPolicy.mode != FeedImageLoadMode.PAUSED) onLoadMoreFavorites()
+              }
+              Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+              }
             }
           }
-        }
         }
       }
     }

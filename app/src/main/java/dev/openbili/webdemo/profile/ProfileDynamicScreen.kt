@@ -39,6 +39,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ThumbUp
+import androidx.compose.material.icons.outlined.ThumbUp
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -49,6 +50,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -73,8 +75,8 @@ import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -93,21 +95,22 @@ import dev.openbili.webdemo.api.SpaceDynamicImage
 import dev.openbili.webdemo.api.SpaceDynamicItem
 import dev.openbili.webdemo.api.SpaceDynamicVideo
 import dev.openbili.webdemo.api.SpaceProfile
+import dev.openbili.webdemo.article.ArticleCard
 import dev.openbili.webdemo.feed.CoverImage
-import dev.openbili.webdemo.feed.FeedItem
 import dev.openbili.webdemo.feed.FeedImageLoadMode
+import dev.openbili.webdemo.feed.FeedItem
 import dev.openbili.webdemo.feed.LocalFeedImageLoadPolicy
 import dev.openbili.webdemo.feed.rememberStaggeredFeedImageLoadPolicy
-import dev.openbili.webdemo.article.ArticleCard
 import dev.openbili.webdemo.settings.AppSettings
-import dev.openbili.webdemo.ui.PressableVideoCard
-import dev.openbili.webdemo.ui.NavigationCardBottomClearance
 import dev.openbili.webdemo.ui.AvatarImage
+import dev.openbili.webdemo.ui.NavigationCardBottomClearance
+import dev.openbili.webdemo.ui.PressableVideoCard
 import dev.openbili.webdemo.ui.PullRefreshContainer
 import dev.openbili.webdemo.ui.VideoCardGradient
 import dev.openbili.webdemo.ui.VideoCardReveal
-import dev.openbili.webdemo.video.CommentComposer
+import dev.openbili.webdemo.ui.VideoShapeTokens
 import dev.openbili.webdemo.video.BiliRichText
+import dev.openbili.webdemo.video.CommentComposer
 import dev.openbili.webdemo.video.CommentImagePreviewOverlay
 import dev.openbili.webdemo.video.CommentImagePreviewSession
 import dev.openbili.webdemo.video.CommentProfileAnchor
@@ -266,6 +269,17 @@ internal fun ProfileDynamicGrid(
   profile: SpaceProfile?,
   currentAccountMid: Long,
   settings: AppSettings,
+  showFilterRow: Boolean = true,
+  allowManagement: Boolean = true,
+  gridHorizontalPadding: Dp = 0.dp,
+  gridStartPadding: Dp = gridHorizontalPadding,
+  gridEndPadding: Dp = gridHorizontalPadding,
+  gridTopPadding: Dp = 0.dp,
+  detailTopPadding: Dp = 0.dp,
+  scrollToTopKey: Any? = null,
+  revealBatchKey: Any? = items.firstOrNull()?.id,
+  onDetailOverlayActiveChanged: (Boolean) -> Unit = {},
+  onDetailTransitionRunningChanged: (Boolean) -> Unit = {},
   onVideoClick: (FeedItem, Rect) -> Unit,
   onVideoLongClick: (FeedItem) -> Unit,
   hiddenCoverItemId: String?,
@@ -287,15 +301,14 @@ internal fun ProfileDynamicGrid(
 ) {
   val state = rememberLazyStaggeredGridState()
   val imageLoadPolicy = rememberStaggeredFeedImageLoadPolicy(state)
-  LaunchedEffect(searchQuery) { state.scrollToItem(0) }
+  LaunchedEffect(searchQuery, scrollToTopKey) { state.scrollToItem(0) }
   val cardBounds = remember(profile?.mid) { mutableMapOf<String, Rect>() }
   var displayedDynamicId by remember(profile?.mid) { mutableStateOf(selectedDynamicId) }
   var transitionSourceBounds by remember(profile?.mid) { mutableStateOf(Rect.Zero) }
   var transitionTargetBounds by remember(profile?.mid) { mutableStateOf(Rect.Zero) }
   var managedDynamicId by remember(profile?.mid) { mutableStateOf<String?>(null) }
   var deleteConfirmationId by remember(profile?.mid) { mutableStateOf<String?>(null) }
-  var selectedFilter by
-    rememberSaveable(profile?.mid) { mutableStateOf(ProfileDynamicFilter.ALL) }
+  var selectedFilter by rememberSaveable(profile?.mid) { mutableStateOf(ProfileDynamicFilter.ALL) }
   val filteredItems =
     remember(items, selectedFilter, searchQuery) {
       filterProfileDynamics(items, selectedFilter).filter { item ->
@@ -322,6 +335,12 @@ internal fun ProfileDynamicGrid(
     remember(profile?.mid) { Animatable(if (selectedDynamicId == null) 0f else 1f) }
   var detailContentReady by remember(profile?.mid) { mutableStateOf(false) }
   val displayedItem = items.firstOrNull { it.id == displayedDynamicId }
+  DisposableEffect(displayedDynamicId) {
+    onDetailOverlayActiveChanged(displayedDynamicId != null)
+    onDispose {
+      if (displayedDynamicId != null) onDetailOverlayActiveChanged(false)
+    }
+  }
   BackHandler(enabled = backHandlingEnabled && displayedDynamicId != null) {
     onSelectedDynamicIdChange(null)
   }
@@ -331,47 +350,58 @@ internal fun ProfileDynamicGrid(
     if (deleteConfirmationId != null) deleteConfirmationId = null else managedDynamicId = null
   }
   LaunchedEffect(selectedDynamicId) {
-    if (selectedDynamicId != null) {
-      if (items.none { it.id == selectedDynamicId }) return@LaunchedEffect
-      displayedDynamicId = selectedDynamicId
-      detailContentReady = false
-      if (transitionSourceBounds.width > 1f && transitionSourceBounds.height > 1f) {
-        detailProgress.snapTo(0f)
-        repeat(3) {
+    onDetailTransitionRunningChanged(true)
+    try {
+      if (selectedDynamicId != null) {
+        if (items.none { it.id == selectedDynamicId }) return@LaunchedEffect
+        displayedDynamicId = selectedDynamicId
+        detailContentReady = false
+        if (transitionSourceBounds.width > 1f && transitionSourceBounds.height > 1f) {
+          detailProgress.snapTo(0f)
+          repeat(3) {
+            withFrameNanos {}
+            if (transitionTargetBounds.width > 1f && transitionTargetBounds.height > 1f)
+              return@repeat
+          }
+          detailProgress.animateTo(
+            1f,
+            tween(if (settings.reduceMotion) 140 else 460, easing = FastOutSlowInEasing),
+          )
           withFrameNanos {}
-          if (transitionTargetBounds.width > 1f && transitionTargetBounds.height > 1f)
-            return@repeat
+          detailContentReady = true
+        } else {
+          detailProgress.snapTo(1f)
+          detailContentReady = true
         }
-        detailProgress.animateTo(
-          1f,
-          tween(if (settings.reduceMotion) 140 else 460, easing = FastOutSlowInEasing),
-        )
+      } else if (displayedDynamicId != null) {
+        val latestSource = cardBounds[displayedDynamicId] ?: transitionSourceBounds
+        if (latestSource.width > 1f && latestSource.height > 1f)
+          transitionSourceBounds = latestSource
+        // Dispose the expensive dynamic detail tree before the return morph. The animation then
+        // only moves the lightweight surface mask, avoiding a full-window scale on every frame.
+        detailContentReady = false
         withFrameNanos {}
-        detailContentReady = true
-      } else {
-        detailProgress.snapTo(1f)
-        detailContentReady = true
+        withFrameNanos {}
+        detailProgress.animateTo(
+          0f,
+          tween(if (settings.reduceMotion) 120 else 400, easing = FastOutSlowInEasing),
+        )
+        displayedDynamicId = null
+        transitionSourceBounds = Rect.Zero
       }
-    } else if (displayedDynamicId != null) {
-      detailContentReady = false
-      val latestSource = cardBounds[displayedDynamicId] ?: transitionSourceBounds
-      if (latestSource.width > 1f && latestSource.height > 1f) transitionSourceBounds = latestSource
-      detailProgress.animateTo(
-        0f,
-        tween(if (settings.reduceMotion) 120 else 400, easing = FastOutSlowInEasing),
-      )
-      delay(16)
-      displayedDynamicId = null
-      transitionSourceBounds = Rect.Zero
+    } finally {
+      onDetailTransitionRunningChanged(false)
     }
   }
   Box(Modifier.fillMaxSize()) {
     if (items.isEmpty()) {
       Column(Modifier.fillMaxSize()) {
-        DynamicFilterRow(
-          selected = selectedFilter,
-          onSelected = { selectedFilter = it },
-        )
+        if (showFilterRow) {
+          DynamicFilterRow(
+            selected = selectedFilter,
+            onSelected = { selectedFilter = it },
+          )
+        }
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
           when {
             loading -> CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 2.dp)
@@ -392,120 +422,129 @@ internal fun ProfileDynamicGrid(
         }
       }
       LaunchedEffect(nearEnd, hasMore, loading, imageLoadPolicy.mode) {
-        if (
-          nearEnd && hasMore && !loading && imageLoadPolicy.mode != FeedImageLoadMode.PAUSED
-        ) onLoadMore()
+        if (nearEnd && hasMore && !loading && imageLoadPolicy.mode != FeedImageLoadMode.PAUSED)
+          onLoadMore()
       }
       LaunchedEffect(state.isScrollInProgress) {
         if (state.isScrollInProgress) onScrollStarted()
       }
       CompositionLocalProvider(LocalFeedImageLoadPolicy provides imageLoadPolicy) {
         LazyVerticalStaggeredGrid(
-        columns = StaggeredGridCells.Fixed(2),
-        state = state,
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(bottom = NavigationCardBottomClearance),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalItemSpacing = 12.dp,
+          columns = StaggeredGridCells.Fixed(2),
+          state = state,
+          modifier = Modifier.fillMaxSize(),
+          contentPadding =
+            PaddingValues(
+              start = gridStartPadding,
+              end = gridEndPadding,
+              top = gridTopPadding,
+              bottom = NavigationCardBottomClearance,
+            ),
+          horizontalArrangement = Arrangement.spacedBy(12.dp),
+          verticalItemSpacing = 12.dp,
         ) {
-        item(key = "dynamic_filters", span = StaggeredGridItemSpan.FullLine) {
-          DynamicFilterRow(
-            selected = selectedFilter,
-            onSelected = { selectedFilter = it },
-          )
-        }
-        if (filteredItems.isEmpty()) {
-          item(key = "dynamic_filter_empty", span = StaggeredGridItemSpan.FullLine) {
-            Box(
-              Modifier.fillMaxWidth().padding(vertical = 48.dp),
-              contentAlignment = Alignment.Center,
-            ) {
-              Text(
-                if (searchQuery.isBlank()) "暂时没有符合筛选的动态" else "没有找到相关动态",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+          if (showFilterRow) {
+            item(key = "dynamic_filters", span = StaggeredGridItemSpan.FullLine) {
+              DynamicFilterRow(
+                selected = selectedFilter,
+                onSelected = { selectedFilter = it },
               )
             }
           }
-        }
-        itemsIndexed(filteredItems, key = { _, item -> item.id }) { index, item ->
-          VideoCardReveal(index = index, batchKey = items.firstOrNull()?.id, itemKey = item.id) {
-            val dynamicArticle = item.article
-            if (dynamicArticle != null) {
-              ArticleCard(
-                article = dynamicArticle,
-                coverVisible = dynamicArticle.stableId != hiddenArticleItemId,
-                onClick = { bounds -> onArticleClick(dynamicArticle, bounds) },
-                onBoundsChanged = { bounds -> onArticleBoundsChanged(dynamicArticle, bounds) },
-                loadKey = item.id,
-              )
-            } else DynamicCard(
-              item = item,
-              emotes = dynamicEmoteMap,
-              profile = profile,
-              onBoundsChanged = { cardBounds[item.id] = it },
-              onClick = {
-                transitionSourceBounds = cardBounds[item.id] ?: Rect.Zero
-                displayedDynamicId = item.id
-                onSelectedDynamicIdChange(item.id)
-              },
-              onAvatarClick = { bounds ->
-                onAvatarProfileClick(
-                  item.authorMid.takeIf { it > 0L } ?: profile?.mid ?: 0L,
-                  item.authorFace.ifBlank { profile?.face.orEmpty() },
-                  item.authorName.ifBlank { profile?.name.orEmpty() },
-                  bounds,
+          if (filteredItems.isEmpty()) {
+            item(key = "dynamic_filter_empty", span = StaggeredGridItemSpan.FullLine) {
+              Box(
+                Modifier.fillMaxWidth().padding(vertical = 48.dp),
+                contentAlignment = Alignment.Center,
+              ) {
+                Text(
+                  if (searchQuery.isBlank()) "暂时没有符合筛选的动态" else "没有找到相关动态",
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-              },
-              hiddenAvatarSourceBounds = hiddenAvatarSourceBounds,
-              onLike = { onDynamicLike(item) },
-              managementSelected = managedDynamicId == item.id,
-              deleteConfirmation = deleteConfirmationId == item.id,
-              canManage =
-                currentAccountMid > 0L &&
-                  (item.authorMid.takeIf { it > 0L } ?: profile?.mid) == currentAccountMid,
-              onManage = {
-                deleteConfirmationId = null
-                managedDynamicId = item.id
-              },
-              onCancelManage = {
-                deleteConfirmationId = null
-                managedDynamicId = null
-              },
-              onDeleteRequest = { deleteConfirmationId = item.id },
-              onDeleteUndo = { deleteConfirmationId = null },
-              onDeleteConfirm = {
-                deleteConfirmationId = null
-                managedDynamicId = null
-                onDynamicDelete(item)
-              },
-              onPin = {
-                managedDynamicId = null
-                onDynamicPin(item)
-              },
-            )
-          }
-        }
-        if (loading || error != null) {
-          item {
-            Box(
-              Modifier.fillMaxWidth().padding(12.dp),
-              contentAlignment = Alignment.Center,
-            ) {
-              if (loading) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
-              else Text(error.orEmpty(), color = MaterialTheme.colorScheme.onSurfaceVariant)
+              }
             }
           }
-        }
+          itemsIndexed(filteredItems, key = { _, item -> item.id }) { index, item ->
+            VideoCardReveal(index = index, batchKey = revealBatchKey, itemKey = item.id) {
+              val dynamicArticle = item.article
+              if (dynamicArticle != null) {
+                ArticleCard(
+                  article = dynamicArticle,
+                  coverVisible = dynamicArticle.stableId != hiddenArticleItemId,
+                  onClick = { bounds -> onArticleClick(dynamicArticle, bounds) },
+                  onBoundsChanged = { bounds -> onArticleBoundsChanged(dynamicArticle, bounds) },
+                  loadKey = item.id,
+                )
+              } else
+                DynamicCard(
+                  item = item,
+                  emotes = dynamicEmoteMap,
+                  profile = profile,
+                  onBoundsChanged = { cardBounds[item.id] = it },
+                  onClick = {
+                    transitionSourceBounds = cardBounds[item.id] ?: Rect.Zero
+                    displayedDynamicId = item.id
+                    onSelectedDynamicIdChange(item.id)
+                  },
+                  onAvatarClick = { bounds ->
+                    onAvatarProfileClick(
+                      item.authorMid.takeIf { it > 0L } ?: profile?.mid ?: 0L,
+                      item.authorFace.ifBlank { profile?.face.orEmpty() },
+                      item.authorName.ifBlank { profile?.name.orEmpty() },
+                      bounds,
+                    )
+                  },
+                  hiddenAvatarSourceBounds = hiddenAvatarSourceBounds,
+                  onLike = { onDynamicLike(item) },
+                  managementSelected = managedDynamicId == item.id,
+                  deleteConfirmation = deleteConfirmationId == item.id,
+                  canManage =
+                    allowManagement &&
+                      currentAccountMid > 0L &&
+                      (item.authorMid.takeIf { it > 0L } ?: profile?.mid) == currentAccountMid,
+                  onManage = {
+                    deleteConfirmationId = null
+                    managedDynamicId = item.id
+                  },
+                  onCancelManage = {
+                    deleteConfirmationId = null
+                    managedDynamicId = null
+                  },
+                  onDeleteRequest = { deleteConfirmationId = item.id },
+                  onDeleteUndo = { deleteConfirmationId = null },
+                  onDeleteConfirm = {
+                    deleteConfirmationId = null
+                    managedDynamicId = null
+                    onDynamicDelete(item)
+                  },
+                  onPin = {
+                    managedDynamicId = null
+                    onDynamicPin(item)
+                  },
+                )
+            }
+          }
+          if (loading || error != null) {
+            item {
+              Box(
+                Modifier.fillMaxWidth().padding(12.dp),
+                contentAlignment = Alignment.Center,
+              ) {
+                if (loading) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                else Text(error.orEmpty(), color = MaterialTheme.colorScheme.onSurfaceVariant)
+              }
+            }
+          }
         }
       }
     }
     displayedItem?.let { item ->
       BoxWithConstraints(Modifier.fillMaxSize().zIndex(10f)) {
         Box(
-          Modifier.offset(12.dp, 12.dp)
+          Modifier.offset(12.dp, detailTopPadding + 12.dp)
             .size(
               width = (maxWidth - 24.dp).coerceAtLeast(1.dp),
-              height = (maxHeight - 24.dp).coerceAtLeast(1.dp),
+              height = (maxHeight - detailTopPadding - 24.dp).coerceAtLeast(1.dp),
             )
             .onGloballyPositioned { transitionTargetBounds = it.boundsInRoot() }
         ) {
@@ -584,14 +623,15 @@ private fun DynamicDetailTransition(
             MaterialTheme.colorScheme.outlineVariant.copy(alpha = .72f),
           ),
         tonalElevation = 1.dp,
-        shadowElevation = 6.dp,
+        shadowElevation = 0.dp,
       ) {
-        AnimatedVisibility(
-          visible = contentReady,
-          enter = fadeIn(tween(160, easing = FastOutSlowInEasing)),
-          exit = fadeOut(tween(80, easing = FastOutSlowInEasing)),
-        ) {
-          Box(Modifier.fillMaxSize()) { content() }
+        if (contentReady) {
+          AnimatedVisibility(
+            visible = true,
+            enter = fadeIn(tween(160, easing = FastOutSlowInEasing)),
+          ) {
+            Box(Modifier.fillMaxSize()) { content() }
+          }
         }
       }
     }
@@ -621,9 +661,8 @@ private fun DynamicCard(
   PressableVideoCard(
     onClick = onClick,
     onLongClick = { if (canManage) onManage() },
-    modifier =
-      Modifier.onGloballyPositioned { onBoundsChanged(it.boundsInRoot()) },
-    shape = RoundedCornerShape(20.dp),
+    modifier = Modifier.onGloballyPositioned { onBoundsChanged(it.boundsInRoot()) },
+    shape = VideoShapeTokens.Card,
   ) {
     Box {
       Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -641,12 +680,11 @@ private fun DynamicCard(
           VideoCardGradient(
             coverUrl = it.coverUrl,
             loadKey = item.id,
-            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)),
+            modifier = Modifier.fillMaxWidth().clip(VideoShapeTokens.Card),
           ) {
             DynamicVideoPreview(it, compact = true, loadKey = item.id)
           }
-        }
-          ?: DynamicImageGrid(item.images, compact = true, loadKey = item.id)
+        } ?: DynamicImageGrid(item.images, compact = true, loadKey = item.id)
         DynamicStats(item, onLike)
       }
       if (item.pinned) {
@@ -656,7 +694,7 @@ private fun DynamicCard(
           color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = .94f),
           contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
           tonalElevation = 2.dp,
-          shadowElevation = 3.dp,
+          shadowElevation = 0.dp,
         ) {
           Box(contentAlignment = Alignment.Center) {
             Icon(
@@ -747,7 +785,7 @@ private fun DynamicFilterRow(
 }
 
 @Composable
-private fun DynamicAuthorRow(
+internal fun DynamicAuthorRow(
   item: SpaceDynamicItem,
   profile: SpaceProfile?,
   onAvatarClick: (Rect) -> Unit = {},
@@ -792,7 +830,7 @@ private fun DynamicAuthorRow(
 }
 
 @Composable
-private fun DynamicStats(item: SpaceDynamicItem, onLike: () -> Unit) {
+internal fun DynamicStats(item: SpaceDynamicItem, onLike: () -> Unit) {
   Row(
     Modifier.fillMaxWidth(),
     horizontalArrangement = Arrangement.spacedBy(26.dp),
@@ -800,7 +838,7 @@ private fun DynamicStats(item: SpaceDynamicItem, onLike: () -> Unit) {
   ) {
     DynamicStat(DynamicCommentBubbleIcon, item.commentCount, "评论")
     DynamicStat(
-      icon = Icons.Default.ThumbUp,
+      icon = if (item.liked) Icons.Filled.ThumbUp else Icons.Outlined.ThumbUp,
       count = item.likeCount,
       label = "点赞",
       active = item.liked,
@@ -828,19 +866,23 @@ private fun DynamicStat(
       icon,
       contentDescription = label,
       modifier = Modifier.size(17.dp),
-      tint = if (active) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
+      tint =
+        if (active) MaterialTheme.colorScheme.tertiary
+        else MaterialTheme.colorScheme.onSurfaceVariant,
     )
     Text(
       if (count > 0) formatCompactCount(count) else label,
       modifier = Modifier.padding(start = 5.dp),
       style = MaterialTheme.typography.bodySmall,
-      color = if (active) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
+      color =
+        if (active) MaterialTheme.colorScheme.tertiary
+        else MaterialTheme.colorScheme.onSurfaceVariant,
     )
   }
 }
 
 @Composable
-private fun DynamicImageGrid(
+internal fun DynamicImageGrid(
   images: List<SpaceDynamicImage>,
   compact: Boolean,
   visibleHeight: Dp? = null,
@@ -866,8 +908,7 @@ private fun DynamicImageGrid(
           .coerceAtMost(if (compact) 480.dp else 560.dp)
       // Portrait media narrows instead of stretching across the whole card. Very long media gets
       // a readable crop here; the detail preview still opens the complete source image.
-      val widthLimit =
-        if (compact) maxWidth * .94f else minOf(maxWidth * .72f, 560.dp)
+      val widthLimit = if (compact) maxWidth * .94f else minOf(maxWidth * .72f, 560.dp)
       val displayWidth = minOf(widthLimit, heightLimit * displayRatio)
       val displayHeight = minOf(heightLimit, displayWidth / displayRatio)
       CoverImage(
@@ -903,8 +944,7 @@ private fun DynamicImageGrid(
         visibleHeight?.times(2f / 3f) ?: Dp.Infinity,
       )
     val rowCount = (shown.size + columns - 1) / columns
-    val maxItemHeight =
-      ((heightLimit - 6.dp * (rowCount - 1)) / rowCount).coerceAtLeast(1.dp)
+    val maxItemHeight = ((heightLimit - 6.dp * (rowCount - 1)) / rowCount).coerceAtLeast(1.dp)
     val widthFromHeight = maxItemHeight * columns + 6.dp * (columns - 1)
     val gridWidth =
       if (compact) minOf(maxWidth, widthFromHeight)
@@ -951,7 +991,7 @@ private fun DynamicImageGrid(
 }
 
 @Composable
-private fun DynamicVideoPreview(
+internal fun DynamicVideoPreview(
   video: SpaceDynamicVideo,
   compact: Boolean,
   coverVisible: Boolean = true,
@@ -959,9 +999,7 @@ private fun DynamicVideoPreview(
   loadKey: String = video.bvid.ifBlank { video.aid.toString() },
 ) {
   Row(
-    Modifier.fillMaxWidth()
-      .clip(RoundedCornerShape(16.dp))
-      .padding(8.dp),
+    Modifier.fillMaxWidth().clip(VideoShapeTokens.Card).padding(8.dp),
     verticalAlignment = Alignment.CenterVertically,
   ) {
     CoverImage(
@@ -972,7 +1010,7 @@ private fun DynamicVideoPreview(
           .aspectRatio(16f / 9f)
           .onGloballyPositioned { onCoverBoundsChanged(it.boundsInRoot()) }
           .graphicsLayer { alpha = if (coverVisible) 1f else 0f },
-      shape = RoundedCornerShape(12.dp),
+      shape = VideoShapeTokens.Card,
       enforceAspectRatio = false,
       loadKey = loadKey,
     )
@@ -1036,18 +1074,19 @@ private fun DynamicDetail(
   val scope = rememberCoroutineScope()
   val listState = androidx.compose.foundation.lazy.rememberLazyListState()
   val restoredComments = remember(item.id) { DynamicCommentMemoryCache.get(item.id) }
-  var comments by
-    remember(item.id) { mutableStateOf(restoredComments?.comments ?: emptyList()) }
+  var comments by remember(item.id) { mutableStateOf(restoredComments?.comments ?: emptyList()) }
   var commentsLoading by remember(item.id) { mutableStateOf(false) }
   var commentsRefreshing by remember(item.id) { mutableStateOf(false) }
   var commentsPage by remember(item.id) { mutableIntStateOf(restoredComments?.page ?: 1) }
   var commentsHasMore by remember(item.id) { mutableStateOf(restoredComments?.hasMore ?: false) }
-  var commentTotal by remember(item.id) {
-    mutableStateOf(restoredComments?.total ?: item.commentCount)
-  }
-  var commentSort by remember(item.id) {
-    mutableStateOf(restoredComments?.sort ?: CommentSort.DEFAULT)
-  }
+  var commentTotal by
+    remember(item.id) {
+      mutableStateOf(restoredComments?.total ?: item.commentCount)
+    }
+  var commentSort by
+    remember(item.id) {
+      mutableStateOf(restoredComments?.sort ?: CommentSort.DEFAULT)
+    }
   var replyRoot by remember(item.id) { mutableStateOf<CommentItem?>(null) }
   var displayedReplyRoot by remember(item.id) { mutableStateOf<CommentItem?>(null) }
   var replySourceBounds by remember(item.id) { mutableStateOf(Rect.Zero) }
@@ -1292,15 +1331,11 @@ private fun DynamicDetail(
     }
   }
   BackHandler(enabled = backHandlingEnabled && imagePreview != null) { closeImage() }
-  BackHandler(
-    enabled = backHandlingEnabled && deleteCandidate != null && imagePreview == null
-  ) {
+  BackHandler(enabled = backHandlingEnabled && deleteCandidate != null && imagePreview == null) {
     deleteCandidate = null
   }
 
-  Box(
-    modifier = Modifier.fillMaxSize().onGloballyPositioned { rootBounds = it.boundsInRoot() },
-  ) {
+  Box(modifier = Modifier.fillMaxSize().onGloballyPositioned { rootBounds = it.boundsInRoot() }) {
     Box(Modifier.fillMaxSize()) {
       Column(Modifier.fillMaxSize()) {
         Row(
@@ -1319,6 +1354,7 @@ private fun DynamicDetail(
         PullRefreshContainer(
           refreshing = commentsRefreshing,
           onRefresh = { loadComments(1, refresh = true) },
+          enabled = backHandlingEnabled,
           modifier = Modifier.weight(1f).fillMaxWidth(),
         ) {
           LazyColumn(
@@ -1392,7 +1428,7 @@ private fun DynamicDetail(
                 PressableVideoCard(
                   onClick = { onVideoClick(video, coverBounds) },
                   onLongClick = { onVideoLongClick(video) },
-                  shape = RoundedCornerShape(18.dp),
+                  shape = VideoShapeTokens.Card,
                 ) {
                   VideoCardGradient(coverUrl = video.coverUrl, loadKey = video.id) {
                     DynamicVideoPreview(
@@ -1539,10 +1575,9 @@ private fun DynamicDetail(
       )
       displayedReplyRoot?.let { root ->
         Box(
-          Modifier.fillMaxSize()
-            .padding(top = 56.dp)
-            .zIndex(15f)
-            .onGloballyPositioned { replyTargetBounds = it.boundsInRoot() }
+          Modifier.fillMaxSize().padding(top = 56.dp).zIndex(15f).onGloballyPositioned {
+            replyTargetBounds = it.boundsInRoot()
+          }
         ) {
           ReplyThreadTransitionContainer(
             sourceBounds = replySourceBounds,
@@ -1552,42 +1587,44 @@ private fun DynamicDetail(
             modifier = Modifier.fillMaxSize(),
           ) {
             ReplyThreadPanel(
-          root = root,
-          replies = replies,
-          hasMore = repliesHasMore,
-          loading = repliesLoading,
-          showEmotes = settings.showCommentEmotes,
-          emoteCatalog = emoteMap,
-          showLocation = settings.showCommentLocation,
-          onLike = ::likeComment,
-          uploaderMid = item.authorMid,
-          onProfileClick = onCommentProfileClick,
-          onImagePreview = ::openImage,
-          onReply = { rootComment, target ->
-            replyTargetRoot = rootComment
-            replyTarget = target
-          },
-          onLoadMore = { loadReplies(root, repliesPage + 1) },
-          onRefresh = { loadReplies(root, 1) },
-          onDismiss = {
-            replyRoot = null
-            replyTarget = null
-            replyTargetRoot = null
-          },
-           bottomClearancePx = composerHeightPx,
-           hiddenCommentAvatarRpid = hiddenCommentAvatarRpid,
-          hiddenLinkedVideoCoverItemId = hiddenCoverItemId,
-          onLinkedVideoClick = onVideoClick,
-          onLinkedVideoBoundsChanged = onVideoBoundsChanged,
-          onLinkedVideoLongClick = onVideoLongClick,
-          onLinkedArticleClick = onArticleClick,
-          hiddenLinkedArticleItemId = hiddenArticleItemId,
-          onLinkedArticleBoundsChanged = onArticleBoundsChanged,
-          deletionSelectedRpid = deleteCandidate?.rpid,
-          canDeleteComment = { commentCanBeDeletedBy(currentAccountMid, item.authorMid, it.mid) },
-          onDeleteRequest = { comment, _ -> deleteCandidate = comment },
-          onDeleteConfirm = ::deleteComment,
-          onDeleteCancel = { deleteCandidate = null },
+              root = root,
+              replies = replies,
+              hasMore = repliesHasMore,
+              loading = repliesLoading,
+              showEmotes = settings.showCommentEmotes,
+              emoteCatalog = emoteMap,
+              showLocation = settings.showCommentLocation,
+              onLike = ::likeComment,
+              uploaderMid = item.authorMid,
+              onProfileClick = onCommentProfileClick,
+              onImagePreview = ::openImage,
+              onReply = { rootComment, target ->
+                replyTargetRoot = rootComment
+                replyTarget = target
+              },
+              onLoadMore = { loadReplies(root, repliesPage + 1) },
+              onRefresh = { loadReplies(root, 1) },
+              onDismiss = {
+                replyRoot = null
+                replyTarget = null
+                replyTargetRoot = null
+              },
+              bottomClearancePx = composerHeightPx,
+              hiddenCommentAvatarRpid = hiddenCommentAvatarRpid,
+              hiddenLinkedVideoCoverItemId = hiddenCoverItemId,
+              onLinkedVideoClick = onVideoClick,
+              onLinkedVideoBoundsChanged = onVideoBoundsChanged,
+              onLinkedVideoLongClick = onVideoLongClick,
+              onLinkedArticleClick = onArticleClick,
+              hiddenLinkedArticleItemId = hiddenArticleItemId,
+              onLinkedArticleBoundsChanged = onArticleBoundsChanged,
+              deletionSelectedRpid = deleteCandidate?.rpid,
+              canDeleteComment = {
+                commentCanBeDeletedBy(currentAccountMid, item.authorMid, it.mid)
+              },
+              onDeleteRequest = { comment, _ -> deleteCandidate = comment },
+              onDeleteConfirm = ::deleteComment,
+              onDeleteCancel = { deleteCandidate = null },
               largeCommentText = true,
               modifier = Modifier.fillMaxSize(),
             )
@@ -1606,7 +1643,7 @@ private fun DynamicDetail(
   }
 }
 
-private fun SpaceDynamicVideo.toFeedItem(item: SpaceDynamicItem, profile: SpaceProfile?) =
+internal fun SpaceDynamicVideo.toFeedItem(item: SpaceDynamicItem, profile: SpaceProfile? = null) =
   FeedItem(
     id = bvid,
     title = title,

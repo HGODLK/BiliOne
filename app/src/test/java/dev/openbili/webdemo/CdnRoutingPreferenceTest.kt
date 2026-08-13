@@ -42,4 +42,20 @@ class CdnRoutingPreferenceTest {
 
     assertEquals("https://backup-b.example/another.m4s", result.primary)
   }
+
+  @Test
+  fun startupShanghaiHostWinsWhenApiProvidesIt() {
+    val result =
+      prioritizeCdnUrls(
+        primary = "https://upos-sz-upcdnbda2.bilivideo.com/video.m4s",
+        backups =
+          listOf(
+            "https://upos-sz-mirrorcos.bilivideo.com/video.m4s",
+            "https://upos-sz-mirroralib.bilivideo.com/video.m4s",
+          ),
+        preferredHost = STARTUP_PREFERRED_CDN_HOST,
+      )
+
+    assertEquals("https://upos-sz-mirroralib.bilivideo.com/video.m4s", result.primary)
+  }
 }

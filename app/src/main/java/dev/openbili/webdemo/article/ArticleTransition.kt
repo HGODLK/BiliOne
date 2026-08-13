@@ -22,6 +22,7 @@ import dev.openbili.webdemo.api.ArticleItem
 import dev.openbili.webdemo.ui.VideoShapeTokens
 
 enum class ArticleOrigin {
+  HOME_DYNAMIC,
   MY,
   SEARCH,
   PROFILE,

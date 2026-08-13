@@ -35,10 +35,13 @@ import androidx.compose.ui.unit.dp
 fun BackdropGlassSurface(
   backdropLayer: GraphicsLayer?,
   backdropBounds: Rect,
+  underlayLayer: GraphicsLayer? = null,
+  underlayBounds: Rect = Rect.Zero,
   modifier: Modifier = Modifier,
   shape: Shape = AppShapes.medium,
   blurRadius: Dp = 12.dp,
   containerColor: Color,
+  fallbackColor: Color? = null,
   border: BorderStroke? = null,
   tonalElevation: Dp = 0.dp,
   shadowElevation: Dp = 0.dp,
@@ -47,7 +50,7 @@ fun BackdropGlassSurface(
 ) {
   val glassEffectsEnabled = LocalGlassEffectsEnabled.current
   val resolvedContainerColor =
-    if (glassEffectsEnabled) containerColor else MaterialTheme.colorScheme.surface
+    if (glassEffectsEnabled) containerColor else fallbackColor ?: MaterialTheme.colorScheme.surface
   var surfaceBounds by remember { mutableStateOf(Rect.Zero) }
   Surface(
     modifier = modifier.onGloballyPositioned { surfaceBounds = it.boundsInRoot() },
@@ -60,20 +63,30 @@ fun BackdropGlassSurface(
   ) {
     Box {
       val layer = backdropLayer
+      val baseLayer = underlayLayer
       val sampleOrigin = sampleOriginInRoot ?: surfaceBounds.topLeft
       if (
         glassEffectsEnabled &&
-          layer != null &&
-          backdropBounds.width > 0f &&
-          backdropBounds.height > 0f &&
+          ((layer != null && backdropBounds.width > 0f && backdropBounds.height > 0f) ||
+            (baseLayer != null && underlayBounds.width > 0f && underlayBounds.height > 0f)) &&
           (sampleOriginInRoot != null || surfaceBounds.width > 0f)
       ) {
         Canvas(Modifier.matchParentSize().clip(shape).blur(blurRadius)) {
-          translate(
-            left = backdropBounds.left - sampleOrigin.x,
-            top = backdropBounds.top - sampleOrigin.y,
-          ) {
-            drawLayer(layer)
+          if (baseLayer != null && underlayBounds.width > 0f && underlayBounds.height > 0f) {
+            translate(
+              left = underlayBounds.left - sampleOrigin.x,
+              top = underlayBounds.top - sampleOrigin.y,
+            ) {
+              drawLayer(baseLayer)
+            }
+          }
+          if (layer != null && backdropBounds.width > 0f && backdropBounds.height > 0f) {
+            translate(
+              left = backdropBounds.left - sampleOrigin.x,
+              top = backdropBounds.top - sampleOrigin.y,
+            ) {
+              drawLayer(layer)
+            }
           }
         }
       }

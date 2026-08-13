@@ -4,11 +4,12 @@ import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -17,78 +18,75 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PageSize
 import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.key
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.unit.Velocity
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
@@ -97,15 +95,18 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.Velocity
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import dev.openbili.webdemo.api.BangumiCoverVariant
 import dev.openbili.webdemo.api.BangumiExploreCardStyle
 import dev.openbili.webdemo.api.BangumiExploreCategory
 import dev.openbili.webdemo.api.BangumiExploreItem
-import dev.openbili.webdemo.api.BangumiExploreSectionKind
 import dev.openbili.webdemo.api.BangumiExplorePage
-import dev.openbili.webdemo.api.BangumiCoverVariant
+import dev.openbili.webdemo.api.BangumiExploreSectionKind
 import dev.openbili.webdemo.api.BangumiWatchProgress
 import dev.openbili.webdemo.api.BangumiWatchProgressState
 import dev.openbili.webdemo.api.SpaceContentCard
@@ -115,18 +116,18 @@ import dev.openbili.webdemo.bangumi.BangumiExploreUiState
 import dev.openbili.webdemo.bangumi.BangumiFollowingUiState
 import dev.openbili.webdemo.feed.CoverImage
 import dev.openbili.webdemo.video.formatCompactCount
+import java.util.Locale
+import kotlin.math.absoluteValue
+import kotlin.math.floor
+import kotlin.math.roundToInt
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlin.math.floor
-import kotlin.math.roundToInt
-import kotlin.math.absoluteValue
-import java.util.Locale
 
 /**
- * The second-level PGC page deliberately owns no player. It is safe to mount underneath the
- * shared root player and keeps both the top category capsule and bottom root capsule clear of
- * scroll content.
+ * The second-level PGC page deliberately owns no player. It is safe to mount underneath the shared
+ * root player and keeps both the top category capsule and bottom root capsule clear of scroll
+ * content.
  */
 @Composable
 internal fun BangumiExploreScreen(
@@ -145,11 +146,20 @@ internal fun BangumiExploreScreen(
   modifier: Modifier = Modifier,
 ) {
   val categories = BangumiExploreCategory.entries
-  val pagerState = rememberPagerState(initialPage = state.selectedCategory.ordinal, pageCount = { categories.size })
+  val pagerState =
+    rememberPagerState(
+      initialPage = state.selectedCategory.ordinal,
+      pageCount = { categories.size },
+    )
   val scope = rememberCoroutineScope()
   val currentSelectCategory by rememberUpdatedState(onSelectCategory)
   val contentBackdropLayer = rememberGraphicsLayer()
   var contentBounds by remember { mutableStateOf(Rect.Zero) }
+  val density = LocalDensity.current
+  val contentTopPadding =
+    bangumiExploreContentTopPadding(
+      safeDrawingTop = with(density) { WindowInsets.safeDrawing.getTop(this).toDp() }
+    )
 
   // The base page is composed behind the recommendation cover, so start its first category load
   // immediately. This guarantees a visible loading state the instant the cover is pulled away.
@@ -164,11 +174,7 @@ internal fun BangumiExploreScreen(
     }
   }
 
-  Box(
-    modifier
-      .fillMaxSize()
-      .background(MaterialTheme.colorScheme.background)
-  ) {
+  Box(modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
     // Capture only the scrollable content. The glass capsule is drawn outside this recorder, so
     // it can blur the page beneath it without sampling itself or AppRoot's capture layer.
     Box(
@@ -188,6 +194,7 @@ internal fun BangumiExploreScreen(
         BangumiExploreCategoryContent(
           category = category,
           state = state,
+          contentTopPadding = contentTopPadding,
           hiddenItemId = hiddenItemId,
           foregroundActive = active,
           onRefresh = { onRefresh(category) },
@@ -214,8 +221,10 @@ internal fun BangumiExploreScreen(
       var indexWidthPx by remember { mutableIntStateOf(0) }
       BangumiExploreCategoryCapsule(
         selectionPosition = {
-          (pagerState.currentPage + pagerState.currentPageOffsetFraction)
-            .coerceIn(0f, categories.lastIndex.toFloat())
+          (pagerState.currentPage + pagerState.currentPageOffsetFraction).coerceIn(
+            0f,
+            categories.lastIndex.toFloat(),
+          )
         },
         backdropLayer = contentBackdropLayer,
         backdropBounds = contentBounds,
@@ -257,9 +266,7 @@ internal fun BangumiExploreScreen(
       // The recommendation layer may be visually transparent in parts while it is covering or
       // returning. Keep a real input barrier above this page so taps never reach cards beneath.
       Box(
-        Modifier.fillMaxSize()
-          .zIndex(2f)
-          .pointerInput(interactionEnabled) {
+        Modifier.fillMaxSize().zIndex(2f).pointerInput(interactionEnabled) {
             awaitPointerEventScope {
               while (true) awaitPointerEvent().changes.forEach { it.consume() }
             }
@@ -319,8 +326,10 @@ private fun BangumiExploreCategoryCapsule(
   val shape = CircleShape
   fun settleDrag() {
     val position =
-      (dragPosition ?: selectionPosition())
-        .coerceIn(0f, BangumiExploreCategory.entries.lastIndex.toFloat())
+      (dragPosition ?: selectionPosition()).coerceIn(
+        0f,
+        BangumiExploreCategory.entries.lastIndex.toFloat(),
+      )
     dragPosition = null
     onCategoryClick(BangumiExploreCategory.entries[position.roundToInt()])
   }
@@ -329,7 +338,7 @@ private fun BangumiExploreCategoryCapsule(
     backdropBounds = backdropBounds,
     // Same capsule recipe as the root navigation: full rounded glass, a subtle border, and a
     // sliding selection pill. The top bar remains thinner because it carries text only.
-    modifier = modifier.widthIn(max = 680.dp).fillMaxWidth().shadow(22.dp, shape),
+    modifier = modifier.widthIn(max = 680.dp).fillMaxWidth(),
     shape = shape,
     blurRadius = 14.dp,
     containerColor = MaterialTheme.colorScheme.surface.copy(alpha = .48f),
@@ -340,7 +349,8 @@ private fun BangumiExploreCategoryCapsule(
         .height(44.dp)
         .fillMaxWidth()
         .onSizeChanged {
-          selectionTravelPx = (it.width / BangumiExploreCategory.entries.size.toFloat()).coerceAtLeast(1f)
+          selectionTravelPx =
+            (it.width / BangumiExploreCategory.entries.size.toFloat()).coerceAtLeast(1f)
         }
         .pointerInput(selectionTravelPx) {
           detectHorizontalDragGestures(
@@ -348,8 +358,10 @@ private fun BangumiExploreCategoryCapsule(
             onHorizontalDrag = { change, dragAmount ->
               change.consume()
               val updated =
-                ((dragPosition ?: selectionPosition()) + dragAmount / selectionTravelPx)
-                  .coerceIn(0f, BangumiExploreCategory.entries.lastIndex.toFloat())
+                ((dragPosition ?: selectionPosition()) + dragAmount / selectionTravelPx).coerceIn(
+                  0f,
+                  BangumiExploreCategory.entries.lastIndex.toFloat(),
+                )
               dragPosition = updated
               onSelectionDrag(updated)
             },
@@ -376,10 +388,9 @@ private fun BangumiExploreCategoryCapsule(
         BangumiExploreCategory.entries.forEach { category ->
           val selectedItem = category.ordinal == currentPosition.roundToInt()
           Box(
-            Modifier.weight(1f)
-              .fillMaxSize()
-              .clip(CircleShape)
-              .clickable { onCategoryClick(category) },
+            Modifier.weight(1f).fillMaxSize().clip(CircleShape).clickable {
+              onCategoryClick(category)
+            },
             contentAlignment = Alignment.Center,
           ) {
             Text(
@@ -402,6 +413,7 @@ private fun BangumiExploreCategoryCapsule(
 private fun BangumiExploreCategoryContent(
   category: BangumiExploreCategory,
   state: BangumiExploreUiState,
+  contentTopPadding: Dp,
   hiddenItemId: String?,
   foregroundActive: Boolean,
   onRefresh: () -> Unit,
@@ -430,7 +442,9 @@ private fun BangumiExploreCategoryContent(
       }
     page == null -> Unit
     else ->
-      if (category == BangumiExploreCategory.ANIME || category == BangumiExploreCategory.GUOCHUANG) {
+      if (
+        category == BangumiExploreCategory.ANIME || category == BangumiExploreCategory.GUOCHUANG
+      ) {
         // 国创 is追更型 like anime: it reuses the anime hero + following + ranking + recommendation
         // layout, but owns a distinct state tree. A new session key resets all local scroll and
         // animation state on entry instead of retaining the previously selected subpage.
@@ -439,6 +453,7 @@ private fun BangumiExploreCategoryContent(
           AnimeExploreContent(
             category = category,
             page = page,
+            contentTopPadding = contentTopPadding,
             following = following,
             accountMid = state.accountMid,
             hiddenItemId = hiddenItemId,
@@ -454,6 +469,7 @@ private fun BangumiExploreCategoryContent(
         ExploreCategoryGridContent(
           category = category,
           page = page,
+          contentTopPadding = contentTopPadding,
           hiddenItemId = hiddenItemId,
           foregroundActive = foregroundActive,
           onExplorePull = onExplorePull,
@@ -471,6 +487,9 @@ internal data class AnimeExploreContentGroups(
   val recommendations: List<BangumiExploreItem>,
 )
 
+internal fun bangumiExploreContentTopPadding(safeDrawingTop: Dp): Dp =
+  safeDrawingTop + 78.dp
+
 internal fun animeExploreContentGroups(page: BangumiExplorePage): AnimeExploreContentGroups {
   val visibleSections = page.sections.filterNot { it.kind == BangumiExploreSectionKind.TIMELINE }
   val hot =
@@ -478,9 +497,7 @@ internal fun animeExploreContentGroups(page: BangumiExplorePage): AnimeExploreCo
       .filter { it.kind == BangumiExploreSectionKind.HOT }
       .flatMap { it.items }
       .ifEmpty {
-        visibleSections
-          .filter { it.kind != BangumiExploreSectionKind.RANKING }
-          .flatMap { it.items }
+        visibleSections.filter { it.kind != BangumiExploreSectionKind.RANKING }.flatMap { it.items }
       }
       .distinctBy(BangumiExploreItem::stableId)
       .take(6)
@@ -502,6 +519,7 @@ internal fun animeExploreContentGroups(page: BangumiExplorePage): AnimeExploreCo
 private fun AnimeExploreContent(
   category: BangumiExploreCategory = BangumiExploreCategory.ANIME,
   page: BangumiExplorePage,
+  contentTopPadding: Dp,
   following: BangumiFollowingUiState,
   accountMid: Long,
   hiddenItemId: String?,
@@ -527,10 +545,12 @@ private fun AnimeExploreContent(
   // input phase, no recomposition delay.
   val heroItems = groups.hot
   val midpoint = Int.MAX_VALUE / 2
-  val heroInitialPage = remember(heroItems.size) {
+  val heroInitialPage =
+    remember(heroItems.size) {
     if (heroItems.isEmpty()) 0 else midpoint - Math.floorMod(midpoint, heroItems.size)
   }
-  val heroPagerState = rememberPagerState(
+  val heroPagerState =
+    rememberPagerState(
     initialPage = heroInitialPage,
     pageCount = { if (heroItems.isEmpty()) 1 else Int.MAX_VALUE },
   )
@@ -539,7 +559,8 @@ private fun AnimeExploreContent(
       val layoutInfo = gridState.layoutInfo
       val lastVisible = layoutInfo.visibleItemsInfo.maxOfOrNull { it.index } ?: -1
       layoutInfo.totalItemsCount > 0 && lastVisible >= layoutInfo.totalItemsCount - 2
-    }.collect { nearEnd ->
+      }
+      .collect { nearEnd ->
       if (nearEnd && recommendationVisibleCount < groups.recommendations.size) {
         recommendationVisibleCount =
           (recommendationVisibleCount + 10).coerceAtMost(groups.recommendations.size)
@@ -595,7 +616,8 @@ private fun AnimeExploreContent(
       columns = columns,
       state = gridState,
       modifier = Modifier.fillMaxSize().nestedScroll(pullToCollapseConnection),
-      contentPadding = PaddingValues(start = 28.dp, top = 78.dp, end = 28.dp, bottom = 118.dp),
+      contentPadding =
+        PaddingValues(start = 28.dp, top = contentTopPadding, end = 28.dp, bottom = 118.dp),
       horizontalArrangement = Arrangement.spacedBy(12.dp),
       verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
@@ -628,7 +650,9 @@ private fun AnimeExploreContent(
         item(key = "anime-ranking-heading", span = { GridItemSpan(maxLineSpan) }) {
           ExploreSectionHeading("热播榜")
         }
-        gridItemsIndexed(groups.ranking, key = { _, item -> "anime-rank-${item.stableId}" }) { index, item ->
+        gridItemsIndexed(groups.ranking, key = { _, item -> "anime-rank-${item.stableId}" }) {
+          index,
+          item ->
           AnimeRankingPoster(
             item = item,
             rank = index + 1,
@@ -643,7 +667,10 @@ private fun AnimeExploreContent(
         item(key = "anime-recommend-heading", span = { GridItemSpan(maxLineSpan) }) {
           AnimeRecommendationBoundary(subtitle = "为你精选的${category.label}")
         }
-        gridItemsIndexed(visibleRecommendations, key = { _, item -> "anime-rec-${item.stableId}" }) { _, item ->
+        gridItemsIndexed(
+          visibleRecommendations,
+          key = { _, item -> "anime-rec-${item.stableId}" },
+        ) { _, item ->
           AnimeRecommendationPoster(
             item = item,
             hidden = "bangumi-explore-${item.stableId}" == hiddenItemId,
@@ -681,7 +708,7 @@ private fun AnimeRecommendationBoundary(
           )
         )
       )
-      .padding(horizontal = 20.dp, vertical = 16.dp),
+      .padding(horizontal = 20.dp, vertical = 16.dp)
   ) {
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
       Text(
@@ -787,7 +814,7 @@ private fun AnimeHotHeroContent(
       .height(410.dp)
       .navigationBringIntoViewTarget(bringIntoViewRequester)
       .clip(RoundedCornerShape(24.dp))
-      .clickable { requestOpen() },
+      .clickable { requestOpen() }
   ) {
     Crossfade(
       targetState = selectedItem,
@@ -818,9 +845,10 @@ private fun AnimeHotHeroContent(
       )
     }
     Box(
-      Modifier.fillMaxSize().background(
+      Modifier.fillMaxSize()
+        .background(
         Brush.horizontalGradient(
-          listOf(Color.Black.copy(alpha = .50f), Color.Transparent, Color.Transparent),
+            listOf(Color.Black.copy(alpha = .50f), Color.Transparent, Color.Transparent)
         )
       )
     )
@@ -862,7 +890,9 @@ private fun AnimeHotHeroContent(
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-          selectedItem.rating?.takeIf { it > 0.0 }?.let { rating ->
+          selectedItem.rating
+            ?.takeIf { it > 0.0 }
+            ?.let { rating ->
             Text(
               "评分 ${String.format(Locale.US, "%.1f", rating)}",
               color = Color.White,
@@ -870,7 +900,9 @@ private fun AnimeHotHeroContent(
               fontWeight = FontWeight.Bold,
             )
           }
-          selectedItem.ratingCount.takeIf { it > 0L }?.let { count ->
+          selectedItem.ratingCount
+            .takeIf { it > 0L }
+            ?.let { count ->
             Text(
               "${formatCompactCount(count)} 人评分",
               color = Color.White.copy(alpha = .82f),
@@ -879,7 +911,11 @@ private fun AnimeHotHeroContent(
           }
         }
       }
-      Text("查看详情", color = Color.White.copy(alpha = .94f), style = MaterialTheme.typography.labelLarge)
+      Text(
+        "查看详情",
+        color = Color.White.copy(alpha = .94f),
+        style = MaterialTheme.typography.labelLarge,
+      )
     }
     VerticalPager(
       state = pagerState,
@@ -888,16 +924,25 @@ private fun AnimeHotHeroContent(
           .padding(end = stackEndPadding)
           .width(stackWidth)
           .height(410.dp)
-          .nestedScroll(remember {
+          .nestedScroll(
+            remember {
             object : NestedScrollConnection {
               override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset =
                 Offset.Zero
-              override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset =
-                available
-              override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity =
-                available
+
+                override fun onPostScroll(
+                  consumed: Offset,
+                  available: Offset,
+                  source: NestedScrollSource,
+                ): Offset = available
+
+                override suspend fun onPostFling(
+                  consumed: Velocity,
+                  available: Velocity,
+                ): Velocity = available
             }
-          }),
+            }
+          ),
       pageSize = PageSize.Fixed(stackCardHeight),
       contentPadding = PaddingValues(vertical = 113.dp),
       pageSpacing = 10.dp,
@@ -906,7 +951,8 @@ private fun AnimeHotHeroContent(
     ) { page ->
       val item = items[Math.floorMod(page, items.size)]
       val selected = page == pagerState.currentPage
-      val pageOffset = ((pagerState.currentPage - page) + pagerState.currentPageOffsetFraction).absoluteValue
+      val pageOffset =
+        ((pagerState.currentPage - page) + pagerState.currentPageOffsetFraction).absoluteValue
       AnimeHotStackCard(
         item = item,
         selected = selected,
@@ -950,8 +996,7 @@ private fun AnimeHotStackCard(
     if (opening) return
     opening = true
     chromeAnimationJob?.cancel()
-    chromeAnimationJob =
-      scope.launch {
+    chromeAnimationJob = scope.launch {
         // Match the home-card contract: fade the chrome first while the card is stationary, then
         // hand the real bounds to the shared transition so only the cover flies.
         chromeAlpha.animateTo(0f, tween(MotionTokens.Standard))
@@ -1008,7 +1053,7 @@ private fun AnimeHotStackCard(
           .then(clickModifier),
       shape = RoundedCornerShape(16.dp),
       color = Color.Black,
-      shadowElevation = if (selected) 14.dp else 5.dp,
+      shadowElevation = 0.dp,
     ) {
       Box(Modifier.fillMaxSize()) {
         CoverImage(
@@ -1036,9 +1081,9 @@ private fun AnimeHotStackCard(
         Text(
           item.title,
           modifier =
-            Modifier.align(Alignment.BottomStart)
-              .padding(12.dp)
-              .graphicsLayer { alpha = chromeAlpha.value },
+            Modifier.align(Alignment.BottomStart).padding(12.dp).graphicsLayer {
+              alpha = chromeAlpha.value
+            },
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
           color = Color.White,
@@ -1064,14 +1109,118 @@ private fun AnimeFollowingSection(
   var displayedFollowing by remember { mutableStateOf(state.cards) }
   var enteringFollowingKeys by remember { mutableStateOf<Set<String>>(emptySet()) }
   var entryAnimationGeneration by remember { mutableIntStateOf(0) }
+  var showBoundaryLoadingIndicator by remember { mutableStateOf(false) }
+  val latestHasMore by rememberUpdatedState(state.hasMore)
+  val latestLoadingMore by rememberUpdatedState(state.loadingMore)
+  val latestDisplayedFollowing by rememberUpdatedState(displayedFollowing)
+  LaunchedEffect(listState) {
+    var wasScrolling = false
+    var gestureStarted = false
+    var requestedForCardCount = -1
+    snapshotFlow {
+        Triple(
+          listState.firstVisibleItemIndex,
+          listState.firstVisibleItemScrollOffset,
+          listState.isScrollInProgress,
+        )
+      }
+      .collect { (_, _, scrolling) ->
+        if (scrolling && !wasScrolling) {
+          gestureStarted = true
+          requestedForCardCount = -1
+        }
+        val cards = latestDisplayedFollowing
+        val lastVisibleIndex = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+        val shouldPrefetch =
+          scrolling &&
+            shouldAutoLoadMoreFollowing(
+              userScrollStarted = gestureStarted,
+              hasMore = latestHasMore,
+              loadingMore = latestLoadingMore,
+              lastVisibleIndex = lastVisibleIndex,
+              lastCardIndex = cards.lastIndex,
+              prefetchDistanceCards = FOLLOWING_PREFETCH_DISTANCE_CARDS,
+            )
+        if (shouldPrefetch && requestedForCardCount != cards.size) {
+          requestedForCardCount = cards.size
+          latestLoadMore()
+        }
+        if (!scrolling && wasScrolling && gestureStarted) {
+          val reachedBoundary =
+            cards.isNotEmpty() && lastVisibleIndex >= cards.lastIndex && latestHasMore
+          if (reachedBoundary) {
+            // Slow scrolling normally starts the request several cards earlier and keeps the tail
+            // visually quiet. Only expose a compact spinner when the gesture actually reaches the
+            // end before that request has supplied more cards.
+            showBoundaryLoadingIndicator = true
+            if (!latestLoadingMore && requestedForCardCount != cards.size) {
+              requestedForCardCount = cards.size
+              latestLoadMore()
+            }
+          }
+          gestureStarted = false
+        }
+        wasScrolling = scrolling
+      }
+  }
+  LaunchedEffect(listState) {
+    var dragStarted = false
+    listState.interactionSource.interactions.collect { interaction ->
+      when (interaction) {
+        is DragInteraction.Start -> dragStarted = true
+        is DragInteraction.Stop,
+        is DragInteraction.Cancel -> {
+          if (!dragStarted) return@collect
+          dragStarted = false
+          val cards = latestDisplayedFollowing
+          val lastVisibleIndex = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+          val reachedBoundary =
+            cards.isNotEmpty() && lastVisibleIndex >= cards.lastIndex && latestHasMore
+          if (reachedBoundary) showBoundaryLoadingIndicator = true
+          if (
+            shouldAutoLoadMoreFollowing(
+              userScrollStarted = true,
+              hasMore = latestHasMore,
+              loadingMore = latestLoadingMore,
+              lastVisibleIndex = lastVisibleIndex,
+              lastCardIndex = cards.lastIndex,
+              prefetchDistanceCards = FOLLOWING_PREFETCH_DISTANCE_CARDS,
+            )
+          ) {
+            latestLoadMore()
+          }
+        }
+        else -> Unit
+      }
+    }
+  }
+  LaunchedEffect(state.loadingMore) {
+    if (!state.loadingMore) showBoundaryLoadingIndicator = false
+  }
   LaunchedEffect(state.cards, listState.isScrollInProgress) {
-    if (!listState.isScrollInProgress && state.cards != displayedFollowing) {
+    val canCommitWhileScrolling =
+      canCommitFollowingCardsDuringScroll(displayedFollowing, state.cards)
+    if (
+      (!listState.isScrollInProgress || canCommitWhileScrolling) &&
+        state.cards != displayedFollowing
+    ) {
       val previousKeys = displayedFollowing.mapTo(mutableSetOf(), ::followingCardKey)
       enteringFollowingKeys =
-        state.cards
-          .map(::followingCardKey)
-          .filterNot(previousKeys::contains)
-          .toSet()
+        if (listState.isScrollInProgress) emptySet()
+        else state.cards.map(::followingCardKey).filterNot(previousKeys::contains).toSet()
+      val reorderSeasonId = state.reorderingSeasonId
+      val movingExistingCardToFront =
+        reorderSeasonId != null &&
+          displayedFollowing.indexOfFirst { it.seasonId == reorderSeasonId } > 0 &&
+          state.cards.firstOrNull()?.seasonId == reorderSeasonId
+      if (
+        movingExistingCardToFront &&
+          (listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0)
+      ) {
+        // Disable LazyRow's old-key viewport anchoring for this remeasure. The reordered card's
+        // destination is now the visible left edge instead of an off-screen global index zero.
+        listState.requestScrollToItem(0)
+      }
       displayedFollowing = state.cards
       entryAnimationGeneration += 1
     }
@@ -1088,26 +1237,6 @@ private fun AnimeFollowingSection(
       loading = state.loading,
       refreshing = state.refreshing,
     )
-  LaunchedEffect(
-    state.cards.size,
-    state.hasMore,
-    state.loadingMore,
-  ) {
-    if (
-      state.hasMore &&
-        !state.loadingMore &&
-        (listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1) >=
-          displayedFollowing.lastIndex - 2
-    ) {
-      latestLoadMore()
-    }
-    snapshotFlow {
-      val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-      state.hasMore &&
-        !state.loadingMore &&
-        lastVisible >= displayedFollowing.lastIndex - 2
-    }.collect { nearEnd -> if (nearEnd) latestLoadMore() }
-  }
   when {
     showingPlaceholders ->
       Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1139,8 +1268,9 @@ private fun AnimeFollowingSection(
               hidden = "bangumi-explore-${card.id}" == hiddenItemId,
               onOpen = onOpen,
               modifier =
-                Modifier
-                  .zIndex(if (entering || card.seasonId == state.reorderingSeasonId) 1f else 0f)
+                Modifier.zIndex(
+                    if (entering || card.seasonId == state.reorderingSeasonId) 1f else 0f
+                  )
                   .animateItem()
                   .graphicsLayer {
                     alpha = entryProgress.value
@@ -1148,9 +1278,27 @@ private fun AnimeFollowingSection(
                   },
             )
           }
-          if (state.loadingMore) {
-            item(key = "following-loading-more") {
-              AnimeFollowingPlaceholderCard()
+          if (state.loadingMore || state.hasMore) {
+            item(key = "following-tail") {
+              Box(
+                Modifier.width(148.dp).height(FOLLOWING_CARD_HEIGHT),
+                contentAlignment = Alignment.Center,
+              ) {
+                when {
+                  state.loadingMore && showBoundaryLoadingIndicator ->
+                  CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+                  !state.loadingMore ->
+                    TextButton(
+                      onClick = {
+                        showBoundaryLoadingIndicator = true
+                        latestLoadMore()
+                      },
+                      modifier = Modifier.fillMaxSize(),
+                    ) {
+                      Text("加载更多")
+                    }
+                }
+              }
             }
           }
         }
@@ -1180,12 +1328,37 @@ private fun AnimeFollowingSection(
 private val FOLLOWING_CARD_WIDTH = 276.dp
 private val FOLLOWING_CARD_HEIGHT = 238.dp
 private const val FOLLOWING_PLACEHOLDER_COUNT = 5
+private const val FOLLOWING_PREFETCH_DISTANCE_CARDS = 3
 
 internal fun shouldShowFollowingPlaceholders(
   following: List<SpaceContentCard>,
   loading: Boolean,
   refreshing: Boolean,
 ): Boolean = following.isEmpty() && (loading || refreshing)
+
+internal fun shouldAutoLoadMoreFollowing(
+  userScrollStarted: Boolean,
+  hasMore: Boolean,
+  loadingMore: Boolean,
+  lastVisibleIndex: Int,
+  lastCardIndex: Int,
+  prefetchDistanceCards: Int = FOLLOWING_PREFETCH_DISTANCE_CARDS,
+): Boolean =
+  userScrollStarted &&
+    hasMore &&
+    !loadingMore &&
+    lastCardIndex >= 0 &&
+    lastVisibleIndex >= lastCardIndex - prefetchDistanceCards.coerceAtLeast(0)
+
+internal fun canCommitFollowingCardsDuringScroll(
+  current: List<SpaceContentCard>,
+  updated: List<SpaceContentCard>,
+): Boolean {
+  if (updated.size < current.size) return false
+  return current.indices.all { index ->
+    followingCardKey(current[index]) == followingCardKey(updated[index])
+  }
+}
 
 private fun followingCardKey(card: SpaceContentCard): String =
   card.seasonId.takeIf { it > 0L }?.let { "following-season-$it" } ?: card.id
@@ -1199,24 +1372,28 @@ private fun AnimeFollowingPlaceholderCard() {
   ) {
     Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
       Box(
-        Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(VideoShapeTokens.Player).background(
-          MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
-        )
+        Modifier.fillMaxWidth()
+          .aspectRatio(16f / 9f)
+          .clip(VideoShapeTokens.Player)
+          .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
       )
       Box(
-        Modifier.fillMaxWidth(0.82f).height(16.dp).clip(RoundedCornerShape(4.dp)).background(
-          MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
-        )
+        Modifier.fillMaxWidth(0.82f)
+          .height(16.dp)
+          .clip(RoundedCornerShape(4.dp))
+          .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f))
       )
       Box(
-        Modifier.fillMaxWidth(0.56f).height(14.dp).clip(RoundedCornerShape(4.dp)).background(
-          MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
-        )
+        Modifier.fillMaxWidth(0.56f)
+          .height(14.dp)
+          .clip(RoundedCornerShape(4.dp))
+          .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
       )
       Box(
-        Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(2.dp)).background(
-          MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
-        )
+        Modifier.fillMaxWidth()
+          .height(3.dp)
+          .clip(RoundedCornerShape(2.dp))
+          .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
       )
     }
   }
@@ -1317,8 +1494,7 @@ private fun AnimeFollowingCard(
         style = MaterialTheme.typography.bodySmall,
       )
       Box(
-        Modifier
-          .fillMaxWidth()
+        Modifier.fillMaxWidth()
           .height(7.dp)
           .padding(top = 4.dp)
           .clip(RoundedCornerShape(2.dp))
@@ -1326,8 +1502,7 @@ private fun AnimeFollowingCard(
       ) {
         if (progressPercent != null) {
           Box(
-            Modifier
-              .fillMaxHeight()
+            Modifier.fillMaxHeight()
               .fillMaxWidth(fraction = progressPercent / 100f)
               .background(MaterialTheme.colorScheme.primary)
           )
@@ -1353,8 +1528,7 @@ internal fun buildFollowingSubtitle(
     }
   }
   val episodeIndex = progress.episodeIndex.ifBlank { "第${progress.episodeId}话" }
-  val prefix =
-    episodeIndex.toIntOrNull()?.let { "第${it}话" } ?: episodeIndex
+  val prefix = episodeIndex.toIntOrNull()?.let { "第${it}话" } ?: episodeIndex
   val percent = progress.percent?.coerceIn(0, 100)
   return if (percent != null) "看到$prefix · ${percent}%" else "看到$prefix"
 }
@@ -1391,7 +1565,7 @@ private fun AnimeRankingPoster(
           withFrameNanos {}
           onOpen(item, bounds)
         }
-      },
+      }
   ) {
     CoverImage(
       coverUrl = bangumiCoverUrl(item.coverUrl, BangumiCoverVariant.POSTER),
@@ -1406,21 +1580,27 @@ private fun AnimeRankingPoster(
       requestWidth = 480,
       requestHeight = 640,
       loadKey = "anime-rank-${item.stableId}",
+      bitmapCacheKey = item.coverUrl,
       useOriginalSource = true,
+      retainBitmap = true,
     )
     Box(
       Modifier.fillMaxSize()
         .graphicsLayer { alpha = chromeAlpha.value }
         .background(
-          Brush.verticalGradient(listOf(Color.Transparent, Color.Transparent, Color.Black.copy(alpha = .78f)))
+          Brush.verticalGradient(
+            listOf(Color.Transparent, Color.Transparent, Color.Black.copy(alpha = .78f))
+          )
         )
     )
     Surface(
       modifier =
-        Modifier.align(Alignment.TopStart)
-          .padding(8.dp)
-          .graphicsLayer { alpha = chromeAlpha.value },
-      color = if (rank <= 3) MaterialTheme.colorScheme.primary.copy(alpha = .92f) else Color.Black.copy(alpha = .62f),
+        Modifier.align(Alignment.TopStart).padding(8.dp).graphicsLayer {
+          alpha = chromeAlpha.value
+        },
+      color =
+        if (rank <= 3) MaterialTheme.colorScheme.primary.copy(alpha = .92f)
+        else Color.Black.copy(alpha = .62f),
       shape = RoundedCornerShape(9.dp),
     ) {
       Text(
@@ -1432,9 +1612,9 @@ private fun AnimeRankingPoster(
       )
     }
     Column(
-      Modifier.align(Alignment.BottomStart)
-        .padding(12.dp)
-        .graphicsLayer { alpha = chromeAlpha.value },
+      Modifier.align(Alignment.BottomStart).padding(12.dp).graphicsLayer {
+        alpha = chromeAlpha.value
+      },
       verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
       Text(
@@ -1489,7 +1669,7 @@ private fun AnimeRecommendationPoster(
           withFrameNanos {}
           onOpen(item, bounds)
         }
-      },
+      }
   ) {
     CoverImage(
       coverUrl = bangumiCoverUrl(item.coverUrl, BangumiCoverVariant.POSTER),
@@ -1504,21 +1684,27 @@ private fun AnimeRecommendationPoster(
       requestWidth = 480,
       requestHeight = 640,
       loadKey = "anime-recommend-${item.stableId}",
+      bitmapCacheKey = item.coverUrl,
       useOriginalSource = true,
+      retainBitmap = true,
     )
     Box(
       Modifier.fillMaxSize()
         .graphicsLayer { alpha = chromeAlpha.value }
         .background(
-          Brush.verticalGradient(listOf(Color.Transparent, Color.Transparent, Color.Black.copy(alpha = .78f)))
+          Brush.verticalGradient(
+            listOf(Color.Transparent, Color.Transparent, Color.Black.copy(alpha = .78f))
+          )
         )
     )
-    item.rating?.takeIf { it > 0.0 }?.let { rating ->
+    item.rating
+      ?.takeIf { it > 0.0 }
+      ?.let { rating ->
       Surface(
         modifier =
-          Modifier.align(Alignment.TopStart)
-            .padding(8.dp)
-            .graphicsLayer { alpha = chromeAlpha.value },
+            Modifier.align(Alignment.TopStart).padding(8.dp).graphicsLayer {
+              alpha = chromeAlpha.value
+            },
         color = MaterialTheme.colorScheme.primary.copy(alpha = .92f),
         shape = RoundedCornerShape(9.dp),
       ) {
@@ -1532,9 +1718,9 @@ private fun AnimeRecommendationPoster(
       }
     }
     Column(
-      Modifier.align(Alignment.BottomStart)
-        .padding(12.dp)
-        .graphicsLayer { alpha = chromeAlpha.value },
+      Modifier.align(Alignment.BottomStart).padding(12.dp).graphicsLayer {
+        alpha = chromeAlpha.value
+      },
       verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
       Text(
@@ -1568,6 +1754,7 @@ private fun AnimeRecommendationPoster(
 private fun ExploreCategoryGridContent(
   category: BangumiExploreCategory,
   page: BangumiExplorePage,
+  contentTopPadding: Dp,
   hiddenItemId: String?,
   foregroundActive: Boolean,
   onExplorePull: (Float) -> Unit,
@@ -1618,19 +1805,25 @@ private fun ExploreCategoryGridContent(
   // Feed-like modules merge into a single recommendation grid rendered last behind a boundary band.
   val contentSections =
     page.sections.filterNot {
-      it.kind == BangumiExploreSectionKind.FEED || it.kind == BangumiExploreSectionKind.RECOMMENDATION
+      it.kind == BangumiExploreSectionKind.FEED ||
+        it.kind == BangumiExploreSectionKind.RECOMMENDATION
     }
   val feedItems =
     page.sections
-      .filter { it.kind == BangumiExploreSectionKind.FEED || it.kind == BangumiExploreSectionKind.RECOMMENDATION }
+      .filter {
+        it.kind == BangumiExploreSectionKind.FEED ||
+          it.kind == BangumiExploreSectionKind.RECOMMENDATION
+      }
       .flatMap { it.items }
       .distinctBy(BangumiExploreItem::stableId)
   val feedTitle =
     page.sections
-      .firstOrNull { it.kind == BangumiExploreSectionKind.FEED || it.kind == BangumiExploreSectionKind.RECOMMENDATION }
+      .firstOrNull {
+        it.kind == BangumiExploreSectionKind.FEED ||
+          it.kind == BangumiExploreSectionKind.RECOMMENDATION
+      }
       ?.title
-      ?.takeIf { it.isNotBlank() }
-      ?: "猜你喜欢"
+      ?.takeIf { it.isNotBlank() } ?: "猜你喜欢"
   var feedVisibleCount by remember(page) { mutableIntStateOf(10) }
   val visibleFeed = feedItems.take(feedVisibleCount)
 
@@ -1639,7 +1832,8 @@ private fun ExploreCategoryGridContent(
       val layoutInfo = gridState.layoutInfo
       val lastVisible = layoutInfo.visibleItemsInfo.maxOfOrNull { it.index } ?: -1
       layoutInfo.totalItemsCount > 0 && lastVisible >= layoutInfo.totalItemsCount - 2
-    }.collect { nearEnd ->
+      }
+      .collect { nearEnd ->
       if (nearEnd && feedVisibleCount < feedItems.size) {
         feedVisibleCount = (feedVisibleCount + 10).coerceAtMost(feedItems.size)
       }
@@ -1652,14 +1846,16 @@ private fun ExploreCategoryGridContent(
       columns = columns,
       state = gridState,
       modifier = Modifier.fillMaxSize().nestedScroll(pullToCollapseConnection),
-      contentPadding = PaddingValues(start = 28.dp, top = 78.dp, end = 28.dp, bottom = 118.dp),
+      contentPadding =
+        PaddingValues(start = 28.dp, top = contentTopPadding, end = 28.dp, bottom = 118.dp),
       horizontalArrangement = Arrangement.spacedBy(12.dp),
       verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
       contentSections.forEach { section ->
         when (section.kind) {
           BangumiExploreSectionKind.HOT -> {
-            // Discover categories lead with one cinematic focus banner. Its right-side 16:9 cover is
+            // Discover categories lead with one cinematic focus banner. Its right-side 16:9 cover
+            // is
             // the shared-flight source; the wide backdrop itself never flies.
             if (section.items.isNotEmpty()) {
               item(key = section.stableId + ":focus", span = { GridItemSpan(maxLineSpan) }) {
@@ -1774,8 +1970,8 @@ private fun ExploreCategoryGridContent(
 
 /**
  * A cinematic focus banner for discover categories. Like the anime hero, the wide artwork is only a
- * backdrop: the shared-flight source is the 16:9 cover card on its trailing edge, which flies to the
- * detail player. The backdrop itself never transforms into the player cover.
+ * backdrop: the shared-flight source is the 16:9 cover card on its trailing edge, which flies to
+ * the detail player. The backdrop itself never transforms into the player cover.
  */
 @Composable
 private fun ExploreFocusBanner(
@@ -1827,7 +2023,7 @@ private fun ExploreFocusBanner(
             withFrameNanos {}
             onOpen(item, cardBounds)
           }
-        },
+        }
     ) {
       // Wide backdrop. It stays put during the shared flight and is covered by the transition's
       // background takeover; only the trailing 16:9 cover flies to the detail player.
@@ -1849,7 +2045,11 @@ private fun ExploreFocusBanner(
           .graphicsLayer { alpha = chromeAlpha.value }
           .background(
             Brush.verticalGradient(
-              listOf(Color.Transparent, Color.Black.copy(alpha = .24f), Color.Black.copy(alpha = .74f))
+              listOf(
+                Color.Transparent,
+                Color.Black.copy(alpha = .24f),
+                Color.Black.copy(alpha = .74f),
+              )
             )
           )
       )
@@ -1889,7 +2089,9 @@ private fun ExploreFocusBanner(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
           ) {
-            item.rating?.takeIf { it > 0.0 }?.let { rating ->
+            item.rating
+              ?.takeIf { it > 0.0 }
+              ?.let { rating ->
               Text(
                 "评分 ${String.format(Locale.US, "%.1f", rating)}",
                 color = Color.White,
@@ -1897,7 +2099,9 @@ private fun ExploreFocusBanner(
                 fontWeight = FontWeight.Bold,
               )
             }
-            item.ratingCount.takeIf { it > 0L }?.let { count ->
+            item.ratingCount
+              .takeIf { it > 0L }
+              ?.let { count ->
               Text(
                 "${formatCompactCount(count)} 人评分",
                 color = Color.White.copy(alpha = .82f),
@@ -1906,10 +2110,16 @@ private fun ExploreFocusBanner(
             }
           }
         }
-        Text("查看详情", color = Color.White.copy(alpha = .94f), style = MaterialTheme.typography.labelLarge)
+        Text(
+          "查看详情",
+          color = Color.White.copy(alpha = .94f),
+          style = MaterialTheme.typography.labelLarge,
+        )
       }
-      // Trailing 16:9 cover card — the shared-flight source. It registers under the raw cover URL so
-      // the LANDSCAPE transition flies this bitmap to the player (same contract as following cards).
+      // Trailing 16:9 cover card — the shared-flight source. It registers under the raw cover URL
+      // so
+      // the LANDSCAPE transition flies this bitmap to the player (same contract as following
+      // cards).
       Surface(
         modifier =
           Modifier.align(Alignment.CenterEnd)
@@ -1923,14 +2133,12 @@ private fun ExploreFocusBanner(
             .onGloballyPositioned { cardBounds = it.boundsInRoot() },
         shape = VideoShapeTokens.Player,
         color = Color.Black,
-        shadowElevation = 12.dp,
+        shadowElevation = 0.dp,
       ) {
         CoverImage(
           coverUrl = bangumiCoverUrl(item.coverUrl, BangumiCoverVariant.HORIZONTAL_CARD),
           contentDescription = item.title,
-          modifier =
-            Modifier.fillMaxSize()
-              .graphicsLayer { alpha = if (hidden) 0f else 1f },
+          modifier = Modifier.fillMaxSize().graphicsLayer { alpha = if (hidden) 0f else 1f },
           shape = VideoShapeTokens.Player,
           enforceAspectRatio = false,
           contentScale = ContentScale.Crop,
@@ -1966,7 +2174,7 @@ private fun ExploreLandscapeCard(
           withFrameNanos {}
           onOpen(item, bounds)
         }
-      },
+      }
   ) {
     Box(
       Modifier.fillMaxWidth()
@@ -1974,14 +2182,12 @@ private fun ExploreLandscapeCard(
         // Landscape covers share the player corner radius so the flying cover lands flush.
         .clip(VideoShapeTokens.Player)
         .background(MaterialTheme.colorScheme.surfaceVariant)
-        .onGloballyPositioned { bounds = it.boundsInRoot() },
+        .onGloballyPositioned { bounds = it.boundsInRoot() }
     ) {
       CoverImage(
         coverUrl = bangumiCoverUrl(item.coverUrl, BangumiCoverVariant.HORIZONTAL_CARD),
         contentDescription = item.title,
-        modifier =
-          Modifier.fillMaxSize()
-            .graphicsLayer { alpha = if (hidden) 0f else 1f },
+        modifier = Modifier.fillMaxSize().graphicsLayer { alpha = if (hidden) 0f else 1f },
         shape = VideoShapeTokens.Player,
         enforceAspectRatio = false,
         contentScale = ContentScale.Crop,
@@ -1992,7 +2198,9 @@ private fun ExploreLandscapeCard(
         useOriginalSource = true,
         retainBitmap = true,
       )
-      item.rating?.takeIf { it > 0.0 }?.let { rating ->
+      item.rating
+        ?.takeIf { it > 0.0 }
+        ?.let { rating ->
         Surface(
           modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
           color = Color.Black.copy(alpha = .52f),

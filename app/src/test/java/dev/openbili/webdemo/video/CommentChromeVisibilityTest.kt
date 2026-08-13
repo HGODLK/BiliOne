@@ -113,6 +113,22 @@ class CommentChromeVisibilityTest {
   }
 
   @Test
+  fun observedReverseJitterDoesNotRestoreSortControls() {
+    val hidden = CommentChromeVisibility(showDockedActions = false, showSortControls = false)
+
+    assertEquals(
+      hidden,
+      commentChromeAfterObservedScroll(
+        currentVisibility = hidden,
+        scrolling = true,
+        direction = -1,
+        isAtTop = false,
+        keepHiddenAtTop = false,
+      ),
+    )
+  }
+
+  @Test
   fun retainedStateKeepsCollapsedActionsAcrossParentRestore() {
     val state = CommentChromeState()
     val hidden = CommentChromeVisibility(showDockedActions = false, showSortControls = false)

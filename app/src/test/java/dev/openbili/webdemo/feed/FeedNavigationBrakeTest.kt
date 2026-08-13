@@ -66,4 +66,19 @@ class FeedNavigationBrakeTest {
 
     assertEquals(-68f, delta, .001f)
   }
+
+  @Test
+  fun cardCoveredByTheGlassHeaderScrollsBelowItsMeasuredHeight() {
+    val delta =
+      feedNavigationScrollDelta(
+        itemOffsetY = 70,
+        itemHeight = 260,
+        viewportStartOffset = -12,
+        viewportEndOffset = 800,
+        bottomClearancePx = 112,
+        topClearancePx = 104,
+      )
+
+    assertEquals(-22f, delta, .001f)
+  }
 }

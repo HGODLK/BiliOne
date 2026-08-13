@@ -10,6 +10,40 @@ import org.robolectric.RobolectricTestRunner
 @RunWith(RobolectricTestRunner::class)
 class SpaceDynamicParsingTest {
   @Test
+  fun `home dynamic portal parses nested uploader page and cursor`() {
+    val response =
+      BiliApi.parseHomeDynamicUploaders(
+        JSONObject(
+          """
+          {
+            "code": 0,
+            "data": {
+              "live_users": [{"mid": 42}],
+              "up_list": {
+                "has_more": true,
+                "offset": "opaque-next-page",
+                "items": [{
+                  "mid": 42,
+                  "uname": "更新的UP主",
+                  "face": "//i.test/face.jpg",
+                  "has_update": true
+                }]
+              }
+            }
+          }
+          """
+        )
+      )
+
+    assertEquals(1, response.items.size)
+    assertEquals("更新的UP主", response.items.single().name)
+    assertTrue(response.items.single().hasUpdate)
+    assertTrue(response.items.single().live)
+    assertEquals("opaque-next-page", response.offset)
+    assertTrue(response.hasMore)
+  }
+
+  @Test
   fun `video dynamic uses archive aid as video comment target`() {
     val response =
       BiliApi.parseSpaceDynamics(

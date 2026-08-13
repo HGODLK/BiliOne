@@ -1009,7 +1009,6 @@ internal fun VideoContent(
                     onFavorite = onFavoriteVideo,
                     onLoadFavoriteFolders = onLoadFavoriteFolders,
                     onLogin = onLogin,
-                    glassBackdrop = glassBackdrop,
                     foregroundColor = pageForegroundColor,
                   )
                   Spacer(Modifier.height(8.dp))
@@ -1211,7 +1210,6 @@ internal fun VideoContent(
                 onFavorite = onFavoriteVideo,
                 onLoadFavoriteFolders = onLoadFavoriteFolders,
                 onLogin = onLogin,
-                glassBackdrop = glassBackdrop,
                 foregroundColor = pageForegroundColor,
                 modifier = Modifier.fillMaxSize().zIndex(25f),
               )
@@ -1443,7 +1441,6 @@ private fun FloatingVideoActions(
   onFavorite: (List<Long>, List<Long>) -> Unit,
   onLoadFavoriteFolders: () -> Unit,
   onLogin: () -> Unit,
-  glassBackdrop: PlaybackPageGlassBackdrop,
   foregroundColor: Color,
   modifier: Modifier = Modifier,
 ) {
@@ -1488,12 +1485,11 @@ private fun FloatingVideoActions(
             ),
         contentAlignment = Alignment.Center,
       ) {
-        PlaybackPageGlassSurface(
-          backdrop = glassBackdrop,
+        Surface(
           modifier = Modifier.width(44.dp).height(32.dp),
           shape = RoundedCornerShape(16.dp),
-          containerColor = MaterialTheme.colorScheme.surface.copy(alpha = .20f),
-          fallbackColor = MaterialTheme.colorScheme.surface.copy(alpha = .90f),
+          color = MaterialTheme.colorScheme.surface.copy(alpha = .90f),
+          contentColor = foregroundColor,
           border =
             androidx.compose.foundation.BorderStroke(
               1.dp,
@@ -1565,7 +1561,6 @@ private fun FloatingVideoActions(
           onFavorite = onFavorite,
           onLoadFavoriteFolders = onLoadFavoriteFolders,
           onLogin = onLogin,
-          glassBackdrop = glassBackdrop,
           foregroundColor = foregroundColor,
         )
       }

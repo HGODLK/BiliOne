@@ -34,7 +34,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathFillType
@@ -143,7 +142,7 @@ fun BottomCapsule(
   GlassSurface(
     // Keep the original sizing chain intact. The previous Box-based attempt had no intrinsic
     // height, which caused the capsule to collapse during measurement.
-    modifier = modifier.navigationBarsPadding().width(438.dp).shadow(22.dp, CircleShape),
+    modifier = modifier.navigationBarsPadding().width(438.dp),
     shape = CircleShape,
     containerColor = Color.Transparent,
     borderColor = Color.White.copy(alpha = .20f),

@@ -80,7 +80,7 @@ fun ArticleCard(
       shape = VideoShapeTokens.Card,
       color = MaterialTheme.colorScheme.surface,
       tonalElevation = 2.dp,
-      shadowElevation = 3.dp,
+      shadowElevation = 0.dp,
     ) {
       if (compact) {
         if (compactHeight != null) {

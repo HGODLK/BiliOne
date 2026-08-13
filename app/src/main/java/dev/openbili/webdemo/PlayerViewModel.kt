@@ -8,36 +8,47 @@ import android.util.Log
 import androidx.annotation.OptIn
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.dash.DashMediaSource
 import androidx.media3.exoplayer.hls.HlsMediaSource
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MergingMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
+import dev.openbili.webdemo.api.AudioStream
 import dev.openbili.webdemo.api.BiliApi
+import dev.openbili.webdemo.api.BiliSubtitleApi
 import dev.openbili.webdemo.api.PlayUrlData
 import dev.openbili.webdemo.api.PremiumAudioMode
 import dev.openbili.webdemo.api.VideoPage
+import dev.openbili.webdemo.api.VideoSubtitleTrack
 import dev.openbili.webdemo.api.VideoStream
 import dev.openbili.webdemo.feed.FeedItem
 import dev.openbili.webdemo.live.LiveStreamFormat
 import dev.openbili.webdemo.live.LiveStreamSource
+import dev.openbili.webdemo.offline.OfflineEntitlementState
+import dev.openbili.webdemo.offline.OfflineMediaEntry
+import dev.openbili.webdemo.offline.OfflineMediaManager
+import dev.openbili.webdemo.offline.OfflineTransferState
 import dev.openbili.webdemo.settings.AdvancedAudioPriority
 import dev.openbili.webdemo.settings.DeviceMediaCapabilities
 import dev.openbili.webdemo.settings.PreferredResolutionMode
 import java.io.File
 import java.net.URI
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -59,12 +70,29 @@ sealed interface PlayerState {
   data class Error(val message: String, val playData: PlayUrlData? = null) : PlayerState
 }
 
+data class PlayerSubtitleState(
+  val mediaId: String? = null,
+  val bvid: String? = null,
+  val aid: Long = 0L,
+  val cid: Long = 0L,
+  val tracks: List<VideoSubtitleTrack> = emptyList(),
+  val selectedTrackId: String? = null,
+  val isLoading: Boolean = false,
+  val message: String? = null,
+)
+
+internal const val STARTUP_PREFERRED_CDN_HOST = "upos-sz-mirroralib.bilivideo.com"
+
 @OptIn(UnstableApi::class)
 class PlayerViewModel(application: Application) : AndroidViewModel(application) {
   private val _playerState = MutableStateFlow<PlayerState>(PlayerState.Idle)
   val playerState: StateFlow<PlayerState> = _playerState.asStateFlow()
   private val _renderedVideoId = MutableStateFlow<String?>(null)
   val renderedVideoId: StateFlow<String?> = _renderedVideoId.asStateFlow()
+  private val _renderedVideoFrameCount = MutableStateFlow(0)
+  val renderedVideoFrameCount: StateFlow<Int> = _renderedVideoFrameCount.asStateFlow()
+  private val _subtitleState = MutableStateFlow(PlayerSubtitleState())
+  val subtitleState: StateFlow<PlayerSubtitleState> = _subtitleState.asStateFlow()
 
   var exoPlayer: ExoPlayer? = null
     private set
@@ -73,23 +101,40 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
   private var lastItem: FeedItem? = null
   private var loadedVideoId: String? = null
   private var liveRoomId: Long? = null
+  private var offlinePlaybackEntry: OfflineMediaEntry? = null
   private var loadJob: Job? = null
   private var loadGeneration = 0L
   private var pendingStartPositionMs = 0L
+  private var failedPlaybackPositionMs = 0L
   private var pendingVideoTrackId: String? = null
   private var pendingAudioTrackId: String? = null
   private var activeManifestFile: File? = null
+  private var activeSubtitles: List<PreparedSubtitle> = emptyList()
+  private var activeSubtitleIdentity: SubtitleMediaIdentity? = null
   private var cdnFallbackJob: Job? = null
   private var cdnFallbackInProgress = false
   private var skipNextCdnBufferingFallback = false
   private var unlockDolbyVision = false
   private var unlockDolbyAtmos = false
+  private var unlockHiRes = false
+  private var defaultSubtitlesEnabled = false
   private var advancedAudioEnabled = false
   private var advancedAudioPriority = AdvancedAudioPriority.DOLBY
+  private var foregroundTrackSelectionParameters: TrackSelectionParameters? = null
+  private var backgroundAudioOnly = false
+  private var appInForeground = true
   private val playbackRoutingPrefs =
     application.getSharedPreferences(PLAYBACK_ROUTING_PREFS, 0)
-  private var preferredCdnHost =
-    playbackRoutingPrefs.getString(KEY_PREFERRED_CDN_HOST, null).orEmpty()
+  private var preferredCdnHost = STARTUP_PREFERRED_CDN_HOST
+
+  init {
+    // A fallback may choose another host for the rest of the current process, but every fresh app
+    // process starts from the explicitly selected Shanghai node again.
+    playbackRoutingPrefs
+      .edit()
+      .putString(KEY_PREFERRED_CDN_HOST, STARTUP_PREFERRED_CDN_HOST)
+      .apply()
+  }
   private val mediaCapabilities by lazy { DeviceMediaCapabilities.detect(getApplication()) }
   private val deviceStreamSupport = mutableMapOf<String, Boolean>()
   private val decoderCodecInfos by lazy {
@@ -117,6 +162,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
       }
       .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
   }
+  private val vodMediaSourceFactory by lazy { DefaultMediaSourceFactory(cachedDataSourceFactory) }
 
   /** Warms local-only playback objects without requesting video metadata or a media URL. */
   suspend fun prewarmLocalInfrastructure() = coroutineScope {
@@ -130,6 +176,11 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     codecJob.await()
   }
 
+  /** Starts a fresh three-presented-frame gate for playback-page cover background artwork. */
+  fun resetRenderedVideoFrameCountForPageEntry() {
+    _renderedVideoFrameCount.value = 0
+  }
+
   fun loadVideo(
     item: FeedItem,
     startPositionMs: Long = 0L,
@@ -139,14 +190,19 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     restoreSavedProgress: Boolean = true,
   ) {
     liveRoomId = null
+    offlinePlaybackEntry = null
     lastItem = item
+    exitBackgroundAudioMode()
+    PlaybackSessionService.publishDetailPlayer(getApplication())
     val requestedStartPositionMs = startPositionMs.coerceAtLeast(0L)
     pendingStartPositionMs = requestedStartPositionMs
+    failedPlaybackPositionMs = 0L
     val generation = ++loadGeneration
     loadJob?.cancel()
     resetCdnBufferingDetector()
     _playerState.value = PlayerState.Loading
     _renderedVideoId.value = null
+    _renderedVideoFrameCount.value = 0
     // The preview Surface is already hidden by its cached cover before this committed switch.
     // Clearing here prevents Samsung SurfaceView from presenting a retained buffer from the old
     // PV while the new URL is being resolved.
@@ -154,6 +210,21 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     exoPlayer?.clearMediaItems()
     loadedVideoId = null
     playData = null
+    clearActiveSubtitles()
+    _subtitleState.value =
+      PlayerSubtitleState(mediaId = item.id, cid = page?.cid ?: 0L, isLoading = true)
+    exoPlayer?.let { player ->
+      player.trackSelectionParameters =
+        player.trackSelectionParameters
+          .buildUpon()
+          .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+          .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+          .build()
+    }
+    if (OfflineMediaManager.isOfflineUri(item.videoUrl)) {
+      loadOfflineVideo(item, requestedStartPositionMs, generation)
+      return
+    }
     loadJob = viewModelScope.launch {
       try {
         val data =
@@ -171,6 +242,17 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             val cid = selectedPage?.cid ?: info.cid
             val durationSeconds =
               selectedPage?.durationSeconds?.takeIf { it > 0L } ?: info.durationSeconds
+            val resolvedBvid = info.bvid.ifBlank { bvid }
+            val subtitleRequest =
+              async {
+                loadSubtitles(
+                  mediaId = item.id,
+                  bvid = resolvedBvid,
+                  aid = info.aid,
+                  cid = cid,
+                  generation = generation,
+                )
+              }
             val rawData =
               (
                 bangumiEpisodeId?.let { episodeId ->
@@ -198,9 +280,20 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                   ?: localPositionMs.takeIf { it > 0L }
                   ?: PlaybackProgressStore.normalize(serverPositionMs, durationMs)
               }
-            LoadedPlayback(data, info.aid, cid, durationMs, resumePositionMs)
+            LoadedPlayback(
+              playData = data,
+              bvid = resolvedBvid,
+              aid = info.aid,
+              cid = cid,
+              durationMs = durationMs,
+              resumePositionMs = resumePositionMs,
+              subtitles = subtitleRequest.await(),
+            )
           }
-        if (generation != loadGeneration) return@launch
+        if (generation != loadGeneration) {
+          deleteSubtitleGenerationFiles(generation)
+          return@launch
+        }
         pendingStartPositionMs = data.resumePositionMs
         val selectedIndex =
           preferredStreamIndex?.takeIf { it in data.playData.streams.indices }
@@ -215,26 +308,184 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             premiumAudioMode = preferredPremiumAudioMode(data.playData),
           )
         playData = selectedData
+        val expectedSubtitleIdentity =
+          SubtitleMediaIdentity(
+            mediaId = item.id,
+            bvid = data.bvid,
+            aid = data.aid,
+            cid = data.cid,
+            generation = generation,
+          )
+        check(data.subtitles.identity == expectedSubtitleIdentity) {
+          "字幕加载结果与当前视频身份不匹配"
+        }
+        activeSubtitleIdentity = expectedSubtitleIdentity
+        activeSubtitles = data.subtitles.prepared
+        val defaultSubtitleId =
+          activeSubtitles.firstOrNull()?.track?.id.takeIf { defaultSubtitlesEnabled }
+        _subtitleState.value =
+          PlayerSubtitleState(
+            mediaId = item.id,
+            bvid = data.bvid,
+            aid = data.aid,
+            cid = data.cid,
+            tracks = activeSubtitles.map(PreparedSubtitle::track),
+            selectedTrackId = defaultSubtitleId,
+            isLoading = false,
+            message = data.subtitles.message,
+          )
         _playerState.value = PlayerState.Ready(selectedData)
       } catch (e: Exception) {
-        if (e is kotlinx.coroutines.CancellationException) throw e
-        if (generation != loadGeneration) return@launch
+        if (e is CancellationException) {
+          deleteSubtitleGenerationFiles(generation)
+          throw e
+        }
+        if (generation != loadGeneration) {
+          deleteSubtitleGenerationFiles(generation)
+          return@launch
+        }
+        deleteSubtitleGenerationFiles(generation)
         Log.e(TAG, "load failed: item=${item.id} url=${item.videoUrl}", e)
+        _subtitleState.value = PlayerSubtitleState(mediaId = item.id, cid = page?.cid ?: 0L)
         _playerState.value = PlayerState.Error(e.message ?: "未知错误")
       }
     }
   }
 
-  fun preparePlayer(): ExoPlayer {
+  private fun loadOfflineVideo(item: FeedItem, startPositionMs: Long, generation: Long) {
+    loadJob =
+      viewModelScope.launch {
+        try {
+          val manager = OfflineMediaManager.get(getApplication())
+          val entry =
+            withContext(Dispatchers.IO) {
+              manager.entryFromPlaybackUri(item.videoUrl) ?: error("找不到对应的缓存视频")
+            }
+          val snapshot =
+            withContext(Dispatchers.IO) {
+              manager.snapshots().firstOrNull { it.entry.id == entry.id }
+                ?: error("缓存状态不存在")
+            }
+          check(snapshot.state == OfflineTransferState.COMPLETED) { "视频尚未缓存完成" }
+          check(
+            !entry.requiresVip ||
+              (
+                entry.entitlementState == OfflineEntitlementState.ACTIVE &&
+                  entry.entitlementValidUntilMs >= System.currentTimeMillis()
+                )
+          ) {
+            "当前账号或会员状态无法播放此缓存"
+          }
+          val identity =
+            SubtitleMediaIdentity(
+              mediaId = item.id,
+              bvid = entry.bvid,
+              aid = entry.aid,
+              cid = entry.cid,
+              generation = generation,
+            )
+          val preparedSubtitles =
+            entry.subtitles.mapNotNull { subtitle ->
+              File(manager.rootDirectory, subtitle.relativePath)
+                .takeIf(File::isFile)
+                ?.let { file ->
+                  PreparedSubtitle(
+                    track =
+                      VideoSubtitleTrack(
+                        id = subtitle.id,
+                        language = subtitle.language,
+                        languageLabel = subtitle.label,
+                        sourceUrl = Uri.fromFile(file).toString(),
+                        type = 0,
+                        aiType = 0,
+                        aiStatus = 0,
+                        aid = entry.aid,
+                        cid = entry.cid,
+                        bvid = entry.bvid,
+                      ),
+                    file = file,
+                    deleteOnClear = false,
+                  )
+                }
+            }
+          val stream =
+            VideoStream(
+              id = entry.qualityId,
+              quality = entry.qualityLabel,
+              url = entry.videoUrl,
+              codecId = 0,
+              codecs = "",
+              mimeType = entry.videoMimeType,
+            )
+          val audio =
+            entry.audioUrl.takeIf(String::isNotBlank)?.let { url ->
+              AudioStream(id = 0, url = url, mimeType = entry.audioMimeType)
+            }
+          val data =
+            PlayUrlData(
+              dashAudioUrl = audio?.url,
+              dashAudio = audio,
+              streams = listOf(stream),
+              currentStreamIndex = 0,
+              durationMs = entry.durationMs,
+            )
+          if (generation != loadGeneration) return@launch
+          offlinePlaybackEntry = entry
+          playData = data
+          pendingStartPositionMs = startPositionMs.coerceIn(0L, entry.durationMs.coerceAtLeast(0L))
+          activeSubtitleIdentity = identity
+          activeSubtitles = preparedSubtitles
+          val defaultSubtitleId =
+            preparedSubtitles.firstOrNull()?.track?.id.takeIf { defaultSubtitlesEnabled }
+          _subtitleState.value =
+            PlayerSubtitleState(
+              mediaId = item.id,
+              bvid = entry.bvid,
+              aid = entry.aid,
+              cid = entry.cid,
+              tracks = preparedSubtitles.map(PreparedSubtitle::track),
+              selectedTrackId = defaultSubtitleId,
+              isLoading = false,
+            )
+          _playerState.value = PlayerState.Ready(data)
+        } catch (e: CancellationException) {
+          throw e
+        } catch (e: Exception) {
+          if (generation != loadGeneration) return@launch
+          Log.e(TAG, "offline load failed: item=${item.id}", e)
+          _subtitleState.value = PlayerSubtitleState(mediaId = item.id)
+          _playerState.value = PlayerState.Error(e.message ?: "缓存视频不可用")
+        }
+      }
+  }
+
+  fun preparePlayer(publishSystemControls: Boolean = true): ExoPlayer {
     exoPlayer?.let {
+      if (publishSystemControls && liveRoomId == null) {
+        PlaybackSessionService.publishDetailPlayer(getApplication())
+      }
       return it
     }
     val app = getApplication<Application>()
     val trackSelector =
       DefaultTrackSelector(app).apply {
-        setParameters(buildUponParameters().setAllowVideoMixedMimeTypeAdaptiveness(true))
+        setParameters(
+          buildUponParameters()
+            .setAllowVideoMixedMimeTypeAdaptiveness(true)
+            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+        )
       }
-    val player = ExoPlayer.Builder(app).setTrackSelector(trackSelector).build()
+    val audioAttributes =
+      AudioAttributes.Builder()
+        .setUsage(C.USAGE_MEDIA)
+        .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+        .build()
+    val player =
+      ExoPlayer.Builder(app, HiResCompatibleRenderersFactory(app))
+        .setTrackSelector(trackSelector)
+        .setAudioAttributes(audioAttributes, true)
+        .setHandleAudioBecomingNoisy(true)
+        .build()
     player.addListener(
       object : Player.Listener {
         override fun onPlaybackStateChanged(playbackState: Int) {
@@ -245,6 +496,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             cdnFallbackJob?.cancel()
             cdnFallbackJob = null
             skipNextCdnBufferingFallback = false
+            failedPlaybackPositionMs = 0L
           } else if (playbackState == Player.STATE_ENDED || playbackState == Player.STATE_IDLE) {
             resetCdnBufferingDetector()
           }
@@ -252,6 +504,10 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
           if (BuildConfig.DEBUG) Log.d(TAG, "isPlaying=$isPlaying")
+          if (isPlaying && liveRoomId == null) {
+            PlaybackSessionService.publishDetailPlayer(app)
+            if (!appInForeground) enterBackgroundAudioMode()
+          }
         }
 
         override fun onRenderedFirstFrame() {
@@ -260,6 +516,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
           // at the new request; using lastItem here falsely marked that stale frame as the new PV.
           _renderedVideoId.value =
             player.currentMediaItem?.mediaId?.takeIf { it.isNotBlank() }
+          _renderedVideoFrameCount.value = 1
         }
 
         override fun onTracksChanged(tracks: Tracks) {
@@ -270,11 +527,24 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
           Log.e(TAG, "playback failed: ${error.errorCodeName}", error)
           resetCdnBufferingDetector()
           if (liveRoomId != null) return
+          failedPlaybackPositionMs =
+            maxOf(failedPlaybackPositionMs, player.currentPosition.coerceAtLeast(0L))
           _playerState.value = PlayerState.Error("视频流加载失败，请重试或切换画质", playData)
         }
       }
     )
+    player.setVideoFrameMetadataListener { _, _, _, _ ->
+      // The metadata callback for frame one precedes onRenderedFirstFrame. Counting only after
+      // that real render callback means values two and three represent subsequent output frames,
+      // rather than decoder input or a prepared-but-never-presented buffer.
+      if (_renderedVideoFrameCount.value in 0..2) {
+        _renderedVideoFrameCount.value += 1
+      }
+    }
     exoPlayer = player
+    if (publishSystemControls && liveRoomId == null) {
+      PlaybackSessionService.publishDetailPlayer(app)
+    }
     return player
   }
 
@@ -288,13 +558,17 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     loadJob = null
     loadGeneration++
     resetCdnBufferingDetector()
+    exitBackgroundAudioMode()
+    PlaybackSessionService.stop(getApplication())
     lastItem = null
     loadedVideoId = null
     playData = null
+    offlinePlaybackEntry = null
     liveRoomId = roomId
     _renderedVideoId.value = null
+    _renderedVideoFrameCount.value = 0
     _playerState.value = PlayerState.Idle
-    val player = preparePlayer()
+    val player = preparePlayer(publishSystemControls = false)
     val liveHttpFactory =
       DefaultHttpDataSource.Factory()
         .setUserAgent(
@@ -401,14 +675,32 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     exoPlayer?.let { applyPendingTrackOverrides(it.currentTracks) }
   }
 
+  fun selectSubtitle(trackId: String?) {
+    val current = _subtitleState.value
+    val identity = activeSubtitleIdentity ?: return
+    if (current.mediaId == null || current.mediaId != lastItem?.id || !current.matches(identity)) return
+    val selectedId = trackId?.takeIf { requested -> activeSubtitles.any { it.track.id == requested } }
+    if (current.selectedTrackId == selectedId) return
+    _subtitleState.value = current.copy(selectedTrackId = selectedId)
+    exoPlayer?.let { applyPendingTrackOverrides(it.currentTracks) }
+  }
+
   fun retry() {
+    val resumePositionMs =
+      maxOf(failedPlaybackPositionMs, exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L)
     val data = playData
     if (data == null) {
-      lastItem?.let(::loadVideo)
+      lastItem?.let { item ->
+        loadVideo(
+          item = item,
+          startPositionMs = resumePositionMs,
+          restoreSavedProgress = false,
+        )
+      }
       return
     }
     _playerState.value = PlayerState.Ready(data)
-    playDash(data)
+    playDash(data, resumePositionMs)
   }
 
   fun retryWithNextQuality() {
@@ -423,14 +715,44 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     _playerState.value = PlayerState.Ready(nextData)
     pendingVideoTrackId = BiliDashManifest.videoTrackId(next)
     if (exoPlayer?.playbackState == Player.STATE_IDLE) {
-      playDash(nextData)
+      val resumePositionMs =
+        maxOf(failedPlaybackPositionMs, exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L)
+      playDash(nextData, resumePositionMs)
     } else {
       exoPlayer?.let { applyPendingTrackOverrides(it.currentTracks) }
     }
   }
 
   fun pauseForBackground() {
+    exitBackgroundAudioMode()
     exoPlayer?.pause()
+  }
+
+  fun setAppInForeground(inForeground: Boolean) {
+    appInForeground = inForeground
+    if (inForeground) exitBackgroundAudioMode()
+  }
+
+  /** Continue the same playback timeline as audio-only while the Activity is not visible. */
+  fun enterBackgroundAudioMode() {
+    val player = exoPlayer ?: return
+    if (backgroundAudioOnly || liveRoomId != null) return
+    foregroundTrackSelectionParameters = player.trackSelectionParameters
+    player.trackSelectionParameters =
+      audioOnlyTrackSelectionParameters(player.trackSelectionParameters)
+    backgroundAudioOnly = true
+  }
+
+  /** Restore the exact foreground track policy without changing play/pause state. */
+  fun exitBackgroundAudioMode() {
+    if (!backgroundAudioOnly) return
+    val player = exoPlayer
+    val foregroundParameters = foregroundTrackSelectionParameters
+    backgroundAudioOnly = false
+    foregroundTrackSelectionParameters = null
+    if (player != null && foregroundParameters != null) {
+      player.trackSelectionParameters = foregroundParameters
+    }
   }
 
   /**
@@ -438,17 +760,27 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
    * engine. Returning to the feed therefore does not make the next video tap rebuild ExoPlayer,
    * while no video stream remains buffered in the background.
    */
-  fun resetForWarmIdle() {
+  fun resetForWarmIdle(stopMediaSession: Boolean = true) {
     cancelPendingLoad()
+    exitBackgroundAudioMode()
     exoPlayer?.stop()
     exoPlayer?.clearMediaItems()
     playData = null
+    offlinePlaybackEntry = null
     loadedVideoId = null
     pendingVideoTrackId = null
     pendingAudioTrackId = null
+    clearActiveSubtitles()
+    _subtitleState.value = PlayerSubtitleState()
     _playerState.value = PlayerState.Idle
     _renderedVideoId.value = null
     resetCdnBufferingDetector()
+    if (
+      stopMediaSession &&
+        getApplication<BiliApplication>().playbackSessionTarget == PlaybackSessionTarget.DETAIL
+    ) {
+      PlaybackSessionService.stop(getApplication())
+    }
   }
 
   /**
@@ -480,9 +812,22 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     return true
   }
 
-  fun setCompatibilityUnlocks(dolbyVision: Boolean, dolbyAtmos: Boolean) {
+  fun setCompatibilityUnlocks(
+    dolbyVision: Boolean,
+    dolbyAtmos: Boolean,
+    hiRes: Boolean = false,
+  ) {
     unlockDolbyVision = dolbyVision
     unlockDolbyAtmos = dolbyAtmos
+    unlockHiRes = hiRes
+  }
+
+  fun setDefaultSubtitlesEnabled(enabled: Boolean) {
+    if (defaultSubtitlesEnabled == enabled) return
+    defaultSubtitlesEnabled = enabled
+    if (_subtitleState.value.tracks.isNotEmpty()) {
+      selectSubtitle(activeSubtitles.firstOrNull()?.track?.id.takeIf { enabled })
+    }
   }
 
   /** Applies the saved default immediately and again whenever a new video is prepared. */
@@ -500,6 +845,10 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
   }
 
   private fun playDash(data: PlayUrlData, startPositionMs: Long? = null) {
+    offlinePlaybackEntry?.let { entry ->
+      playOffline(entry, startPositionMs)
+      return
+    }
     val player = exoPlayer ?: return
     val stream = data.streams.getOrNull(data.currentStreamIndex) ?: return
     pendingVideoTrackId = BiliDashManifest.videoTrackId(data.currentStreamIndex)
@@ -509,7 +858,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         .onFailure { Log.w(TAG, "DASH manifest generation failed; using compatibility source", it) }
         .getOrNull()
     if (manifest == null) {
-      playCompatibilityStream(stream.url, data.selectedAudioUrl())
+      playCompatibilityStream(stream.url, data.selectedAudioUrl(), startPositionMs)
       return
     }
     val manifestDirectory = File(getApplication<Application>().cacheDir, "bili_dash")
@@ -520,7 +869,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         Log.w(TAG, "Unable to write local DASH manifest; using compatibility source", it)
       }
       .getOrElse {
-        playCompatibilityStream(stream.url, data.selectedAudioUrl())
+        playCompatibilityStream(stream.url, data.selectedAudioUrl(), startPositionMs)
         return
       }
     activeManifestFile?.takeIf { it != manifestFile }?.delete()
@@ -529,14 +878,61 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
       MediaItem.Builder()
         .setUri(Uri.fromFile(manifestFile))
         .setMimeType(MimeTypes.APPLICATION_MPD)
-    lastItem?.id?.let(mediaItemBuilder::setMediaId)
+        .setSubtitleConfigurations(subtitleConfigurations())
+    lastItem?.let { item ->
+      mediaItemBuilder
+        .setMediaId(item.id)
+        .setMediaMetadata(playbackMediaMetadata(item))
+    }
     val mediaItem = mediaItemBuilder.build()
-    val mediaSource =
-      DashMediaSource.Factory(cachedDataSourceFactory).createMediaSource(mediaItem)
+    val mediaSource = vodMediaSourceFactory.createMediaSource(mediaItem)
     if (startPositionMs != null) {
       player.setMediaSource(mediaSource, startPositionMs.coerceAtLeast(0L))
     } else {
       player.setMediaSource(mediaSource)
+    }
+    player.prepare()
+    player.playWhenReady = true
+  }
+
+  private fun playOffline(entry: OfflineMediaEntry, startPositionMs: Long? = null) {
+    val player = exoPlayer ?: return
+    val cacheOnlyFactory = OfflineMediaManager.get(getApplication()).cacheOnlyDataSourceFactory
+    // DefaultDataSource routes file:// sidecar subtitles to FileDataSource while every HTTP media
+    // request still goes exclusively through the cache-only upstream.
+    val offlineDataSourceFactory = DefaultDataSource.Factory(getApplication(), cacheOnlyFactory)
+    val offlineMediaSourceFactory = DefaultMediaSourceFactory(offlineDataSourceFactory)
+    val videoItem =
+      MediaItem.Builder()
+        .setUri(entry.videoUrl)
+        .setMimeType(entry.videoMimeType)
+        .setCustomCacheKey(entry.videoCacheKey)
+        .setSubtitleConfigurations(subtitleConfigurations())
+        .apply {
+          lastItem?.let { item ->
+            setMediaId(item.id)
+            setMediaMetadata(playbackMediaMetadata(item))
+          }
+        }
+        .build()
+    val videoSource = offlineMediaSourceFactory.createMediaSource(videoItem)
+    val mergedSource =
+      entry.audioUrl.takeIf(String::isNotBlank)?.let { audioUrl ->
+        val audioItem =
+          MediaItem.Builder()
+            .setUri(audioUrl)
+            .setMimeType(entry.audioMimeType)
+            .setCustomCacheKey(entry.audioCacheKey)
+            .build()
+        MergingMediaSource(
+          videoSource,
+          ProgressiveMediaSource.Factory(offlineDataSourceFactory).createMediaSource(audioItem),
+        )
+      } ?: videoSource
+    if (startPositionMs != null) {
+      player.setMediaSource(mergedSource, startPositionMs.coerceAtLeast(0L))
+    } else {
+      player.setMediaSource(mergedSource)
     }
     player.prepare()
     player.playWhenReady = true
@@ -596,20 +992,30 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     if (clearSeekSuppression) skipNextCdnBufferingFallback = false
   }
 
-  private fun playCompatibilityStream(videoUrl: String, audioUrl: String?) {
+  private fun playCompatibilityStream(
+    videoUrl: String,
+    audioUrl: String?,
+    startPositionMs: Long? = null,
+  ) {
     val player = exoPlayer ?: return
-    val sources = mutableListOf<MediaItem>()
-    if (audioUrl != null) sources.add(cachedMediaItem(audioUrl))
-    sources.add(cachedMediaItem(videoUrl))
-
-    if (sources.size == 2) {
+    val videoItem = cachedMediaItem(videoUrl, includeSubtitles = true)
+    val videoSource = vodMediaSourceFactory.createMediaSource(videoItem)
+    if (audioUrl != null) {
       val audioSource =
-        ProgressiveMediaSource.Factory(cachedDataSourceFactory).createMediaSource(sources[0])
-      val videoSource =
-        ProgressiveMediaSource.Factory(cachedDataSourceFactory).createMediaSource(sources[1])
-      player.setMediaSource(MergingMediaSource(videoSource, audioSource))
+        ProgressiveMediaSource.Factory(cachedDataSourceFactory)
+          .createMediaSource(cachedMediaItem(audioUrl))
+      val source = MergingMediaSource(videoSource, audioSource)
+      if (startPositionMs != null) {
+        player.setMediaSource(source, startPositionMs.coerceAtLeast(0L))
+      } else {
+        player.setMediaSource(source)
+      }
     } else {
-      player.setMediaItem(sources[0])
+      if (startPositionMs != null) {
+        player.setMediaSource(videoSource, startPositionMs.coerceAtLeast(0L))
+      } else {
+        player.setMediaSource(videoSource)
+      }
     }
     player.prepare()
     player.playWhenReady = true
@@ -662,29 +1068,189 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     apply(C.TRACK_TYPE_VIDEO, pendingVideoTrackId)
     apply(C.TRACK_TYPE_AUDIO, pendingAudioTrackId)
+    val selectedSubtitleId = _subtitleState.value.selectedTrackId
+    val desiredSubtitle =
+      activeSubtitles.firstOrNull { subtitle -> subtitle.track.id == selectedSubtitleId }
+    val textGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
+    val subtitleMatch =
+      desiredSubtitle?.let { desired ->
+        textGroups.firstNotNullOfOrNull { group ->
+          (0 until group.length)
+            .firstOrNull { index ->
+              val format = group.getTrackFormat(index)
+              format.id == desired.track.id ||
+                format.label == desired.track.displayLabel ||
+                (
+                  activeSubtitles.count { it.track.language == desired.track.language } == 1 &&
+                    format.language == desired.track.language
+                )
+            }
+            ?.let { index -> group to index }
+        }
+          ?: activeSubtitles
+            .indexOf(desired)
+            .takeIf { it >= 0 }
+            ?.let { desiredIndex ->
+              textGroups
+                .flatMap { group -> (0 until group.length).map { index -> group to index } }
+                .getOrNull(desiredIndex)
+            }
+      }
+    val subtitleParameters =
+      parameters
+        .buildUpon()
+        .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+        .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, selectedSubtitleId == null)
+        .apply {
+          subtitleMatch?.let { (group, index) ->
+            setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, index))
+          }
+        }
+        .build()
+    if (subtitleParameters != parameters) {
+      parameters = subtitleParameters
+      changed = true
+    }
     if (changed) player.trackSelectionParameters = parameters
   }
 
-  private fun cachedMediaItem(url: String): MediaItem {
+  private fun cachedMediaItem(url: String, includeSubtitles: Boolean = false): MediaItem {
     val uri = Uri.parse(url)
     val stablePath = uri.encodedPath?.takeIf { it.isNotBlank() } ?: url.substringBefore('?')
     val builder = MediaItem.Builder().setUri(uri).setCustomCacheKey("bili:$stablePath")
-    lastItem?.id?.let(builder::setMediaId)
+    if (includeSubtitles) builder.setSubtitleConfigurations(subtitleConfigurations())
+    lastItem?.let { item ->
+      builder
+        .setMediaId(item.id)
+        .setMediaMetadata(playbackMediaMetadata(item))
+    }
     return builder.build()
+  }
+
+  private suspend fun loadSubtitles(
+    mediaId: String,
+    bvid: String,
+    aid: Long,
+    cid: Long,
+    generation: Long,
+  ): PreparedSubtitleLoad {
+    val identity =
+      SubtitleMediaIdentity(
+        mediaId = mediaId,
+        bvid = bvid,
+        aid = aid,
+        cid = cid,
+        generation = generation,
+      )
+    return try {
+      Log.d(
+        TAG,
+        "subtitle catalog request: generation=$generation media=$mediaId bvid=$bvid aid=$aid cid=$cid",
+      )
+      val catalog = BiliSubtitleApi.getCatalog(aid = aid, cid = cid, bvid = bvid)
+      val directory = File(getApplication<Application>().cacheDir, "bili_subtitles")
+      if (catalog.tracks.isNotEmpty() && !directory.exists() && !directory.mkdirs()) {
+        throw IllegalStateException("无法创建字幕缓存目录")
+      }
+      val prepared =
+        coroutineScope {
+          catalog.tracks.take(MAX_SUBTITLE_TRACKS).mapIndexed { index, track ->
+            async {
+              try {
+                val cues =
+                  BiliSubtitleApi.getDocument(
+                    track = track,
+                    bvid = bvid,
+                    aid = aid,
+                    cid = cid,
+                  )
+                if (cues.isEmpty()) return@async null
+                val safeId = track.id.replace(Regex("[^0-9A-Za-z_-]"), "_").take(48)
+                val file = File(directory, "subtitle_${generation}_${index}_$safeId.vtt")
+                file.writeText(BiliSubtitleApi.toWebVtt(cues), Charsets.UTF_8)
+                PreparedSubtitle(track = track, file = file)
+              } catch (e: CancellationException) {
+                throw e
+              } catch (e: Exception) {
+                Log.w(TAG, "subtitle download failed: cid=$cid track=${track.id}", e)
+                null
+              }
+            }
+          }.mapNotNull { it.await() }
+        }
+      val message =
+        when {
+          prepared.isNotEmpty() -> null
+          catalog.loginRequired -> "登录后可查看字幕"
+          catalog.tracks.isNotEmpty() -> "字幕加载失败"
+          else -> null
+        }
+      Log.d(
+        TAG,
+        "subtitle catalog result: generation=$generation media=$mediaId bvid=$bvid aid=$aid cid=$cid tracks=${prepared.size}",
+      )
+      PreparedSubtitleLoad(identity = identity, prepared = prepared, message = message)
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      Log.w(
+        TAG,
+        "subtitle catalog failed: generation=$generation media=$mediaId bvid=$bvid aid=$aid cid=$cid",
+        e,
+      )
+      PreparedSubtitleLoad(identity = identity, prepared = emptyList(), message = "字幕加载失败")
+    }
+  }
+
+  private fun subtitleConfigurations(): List<MediaItem.SubtitleConfiguration> =
+    activeSubtitles.takeIf {
+      val identity = activeSubtitleIdentity
+      identity != null &&
+        identity.mediaId == lastItem?.id &&
+        _subtitleState.value.matches(identity)
+    }.orEmpty().map { subtitle ->
+      MediaItem.SubtitleConfiguration.Builder(Uri.fromFile(subtitle.file))
+        .setMimeType(MimeTypes.TEXT_VTT)
+        .setLanguage(subtitle.track.language)
+        .setLabel(subtitle.track.displayLabel)
+        .setId(subtitle.track.id)
+        .setSelectionFlags(0)
+        .setRoleFlags(C.ROLE_FLAG_SUBTITLE)
+        .build()
+    }
+
+  private fun clearActiveSubtitles() {
+    activeSubtitles.filter(PreparedSubtitle::deleteOnClear).forEach { it.file.delete() }
+    activeSubtitles = emptyList()
+    activeSubtitleIdentity = null
+  }
+
+  private fun deleteSubtitleGenerationFiles(generation: Long) {
+    val directory = File(getApplication<Application>().cacheDir, "bili_subtitles")
+    directory
+      .listFiles { file -> file.isFile && file.name.startsWith("subtitle_${generation}_") }
+      ?.forEach { it.delete() }
   }
 
   fun release() {
     loadJob?.cancel()
     loadJob = null
     loadGeneration++
+    exitBackgroundAudioMode()
+    if (getApplication<BiliApplication>().playbackSessionTarget == PlaybackSessionTarget.DETAIL) {
+      PlaybackSessionService.stop(getApplication())
+    }
     exoPlayer?.release()
     exoPlayer = null
     playData = null
+    offlinePlaybackEntry = null
     loadedVideoId = null
     activeManifestFile?.delete()
     activeManifestFile = null
     pendingVideoTrackId = null
     pendingAudioTrackId = null
+    clearActiveSubtitles()
+    _subtitleState.value = PlayerSubtitleState()
     _playerState.value = PlayerState.Idle
     _renderedVideoId.value = null
   }
@@ -738,11 +1304,14 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
       }
     val streams = compatibleStreams.ifEmpty { fallbackStreams }
     val dolbyAvailable = mediaCapabilities.supportsDolbyAtmos || unlockDolbyAtmos
+    val hiResAvailable = mediaCapabilities.supportsHiRes || unlockHiRes
     return data.copy(
       streams = streams,
       currentStreamIndex = BiliApi.defaultStreamIndex(streams),
       dolbyAudioUrl = data.dolbyAudioUrl.takeIf { dolbyAvailable },
       dolbyAudio = data.dolbyAudio.takeIf { dolbyAvailable },
+      hiResAudioUrl = data.hiResAudioUrl.takeIf { hiResAvailable },
+      hiResAudio = data.hiResAudio.takeIf { hiResAvailable },
     )
   }
 
@@ -795,6 +1364,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
   }
 
   private companion object {
+    const val MAX_SUBTITLE_TRACKS = 12
     const val SLOW_CDN_BUFFERING_TIMEOUT_MS = 3_000L
     const val TAG = "PlayerVM"
     const val PLAYBACK_ROUTING_PREFS = "playback_routing"
@@ -803,15 +1373,75 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
   private data class LoadedPlayback(
     val playData: PlayUrlData,
+    val bvid: String,
     val aid: Long,
     val cid: Long,
     val durationMs: Long,
     val resumePositionMs: Long,
+    val subtitles: PreparedSubtitleLoad,
   )
+
+  private data class PreparedSubtitle(
+    val track: VideoSubtitleTrack,
+    val file: File,
+    val deleteOnClear: Boolean = true,
+  )
+
+  private data class PreparedSubtitleLoad(
+    val identity: SubtitleMediaIdentity,
+    val prepared: List<PreparedSubtitle>,
+    val message: String?,
+  )
+
+  private data class SubtitleMediaIdentity(
+    val mediaId: String,
+    val bvid: String,
+    val aid: Long,
+    val cid: Long,
+    val generation: Long,
+  )
+
+  private fun PlayerSubtitleState.matches(identity: SubtitleMediaIdentity): Boolean =
+    mediaId == identity.mediaId &&
+      bvid.equals(identity.bvid, ignoreCase = true) &&
+      aid == identity.aid &&
+      cid == identity.cid
 }
 
 internal fun isReplayTargetCurrent(loadedVideoId: String?, expectedVideoId: String): Boolean =
   loadedVideoId == expectedVideoId
+
+internal fun subtitleStateForMedia(
+  state: PlayerSubtitleState,
+  mediaId: String,
+  cid: Long,
+  bvid: String? = null,
+  aid: Long = 0L,
+): PlayerSubtitleState =
+  state.takeIf {
+    it.mediaId == mediaId &&
+      (cid <= 0L || it.cid == cid) &&
+      (bvid.isNullOrBlank() || it.bvid.equals(bvid, ignoreCase = true)) &&
+      (aid <= 0L || it.aid == aid)
+  } ?: PlayerSubtitleState(mediaId = mediaId, bvid = bvid, aid = aid, cid = cid)
+
+internal fun playbackMediaMetadata(item: FeedItem): MediaMetadata {
+  val artworkUri =
+    UrlPolicy.normalizeImageUrl(item.coverUrl)
+      ?.takeIf(String::isNotBlank)
+      ?.let(Uri::parse)
+  return MediaMetadata.Builder()
+    .setTitle(item.title)
+    .setArtist(item.uploader?.takeIf(String::isNotBlank))
+    .setArtworkUri(artworkUri)
+    .setMediaType(MediaMetadata.MEDIA_TYPE_VIDEO)
+    .build()
+}
+
+internal fun audioOnlyTrackSelectionParameters(
+  parameters: TrackSelectionParameters
+): TrackSelectionParameters =
+  parameters.buildUpon().setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, true).build()
 
 internal data class PrioritizedCdnUrls(val primary: String, val backups: List<String>)
 

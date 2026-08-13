@@ -30,6 +30,9 @@ internal data class ActiveBangumiPage(
   val playbackFallbackEmitted: Boolean = false,
 )
 
+/** Bilibili's PGC heartbeat expects the actual season media type, not only anime vs guochuang. */
+internal fun pgcPlaybackSubType(seasonType: Int): Int = seasonType.takeIf { it > 0 } ?: 1
+
 /** Result of resolving which episode and start position to use when entering a bangumi page. */
 data class BangumiEntryTarget(
   val card: SpaceContentCard,

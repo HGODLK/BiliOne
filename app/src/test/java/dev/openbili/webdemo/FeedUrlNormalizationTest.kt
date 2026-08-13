@@ -70,4 +70,17 @@ class FeedUrlNormalizationTest {
     )
     assertNull(UrlPolicy.normalizeImageUrl("data:image/png;base64,AA=="))
   }
+
+  @Test
+  fun imageNormalizationAllowsOnlyPrivateOfflineCoverFiles() {
+    val cover = "file:///data/user/0/io.github.shuyunr.bilione/files/offline_media/metadata/video_1/cover.jpg"
+    assertEquals(cover, UrlPolicy.normalizeImageUrl(cover))
+    assertNull(UrlPolicy.normalizeImageUrl("file:///data/user/0/io.github.shuyunr.bilione/files/secret.jpg"))
+    assertNull(
+      UrlPolicy.normalizeImageUrl(
+        "file:///data/user/0/io.github.shuyunr.bilione/files/offline_media/metadata/video_1/subtitle.vtt"
+      )
+    )
+    assertNull(UrlPolicy.normalizeImageUrl("$cover?unexpected=query"))
+  }
 }

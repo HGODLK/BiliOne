@@ -15,11 +15,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
+import coil3.compose.AsyncImage
 import dev.openbili.webdemo.R
 import dev.openbili.webdemo.video.bangumiPageLayoutForPane
 import dev.openbili.webdemo.video.videoPaneSpec
@@ -28,10 +30,23 @@ import kotlinx.coroutines.launch
 @Composable
 internal fun BiliOneStartupAnimation(
   reduceMotion: Boolean,
+  customImageUri: String,
   modifier: Modifier = Modifier,
 ) {
-  // Reuse the exact foreground used by the Android adaptive icon so the first visual impression
-  // and the launcher identity cannot drift apart.
+  if (customImageUri.isNotBlank()) {
+    // A user-selected mask owns the complete startup interval. Do not mount the default logo
+    // behind it while Coil opens the persisted URI, and do not inherit the logo's scale/fade-in.
+    // The root startup layer still performs the single full-screen fade-out at the end.
+    AsyncImage(
+      model = customImageUri,
+      contentDescription = null,
+      contentScale = ContentScale.Crop,
+      modifier = modifier.fillMaxSize(),
+    )
+    return
+  }
+  // With no custom image, reuse the exact Android adaptive-icon foreground so the first visual
+  // impression and launcher identity cannot drift apart.
   val logoAlpha = remember(reduceMotion) { Animatable(if (reduceMotion) 1f else 0f) }
   val logoScale = remember(reduceMotion) { Animatable(if (reduceMotion) 1f else .9f) }
   LaunchedEffect(reduceMotion) {
@@ -41,25 +56,28 @@ internal fun BiliOneStartupAnimation(
     launch { logoAlpha.animateTo(1f, animationSpec = tween(150, easing = FastOutSlowInEasing)) }
     logoScale.animateTo(1f, animationSpec = tween(280, easing = FastOutSlowInEasing))
   }
+  val defaultPainter = painterResource(R.drawable.bilione_3d_foreground)
+  val defaultImageModifier =
+    modifier.size(172.dp).graphicsLayer {
+      alpha = logoAlpha.value
+      scaleX = logoScale.value
+      scaleY = logoScale.value
+    }
   Image(
-    painter = painterResource(R.drawable.bilione_icon_foreground_compact),
+    painter = defaultPainter,
     contentDescription = null,
-    modifier =
-      modifier.size(172.dp).graphicsLayer {
-        alpha = logoAlpha.value
-        scaleX = logoScale.value
-        scaleY = logoScale.value
-      },
+    contentScale = ContentScale.Fit,
+    modifier = defaultImageModifier,
   )
 }
 
 /**
- * Measures only the poster destination used by the search-to-bangumi shared transition. Keeping
+ * Measures only the poster destination used by a portrait-to-bangumi shared transition. Keeping
  * this layout independent from VideoScreen prevents the player, comments, and page effects from
  * being composed while the poster is in flight.
  */
 @Composable
-internal fun SearchBangumiTransitionTarget(onPosterBoundsChanged: (Rect) -> Unit) {
+internal fun BangumiPosterTransitionTarget(onPosterBoundsChanged: (Rect) -> Unit) {
   BoxWithConstraints(Modifier.fillMaxSize()) {
     val density = LocalDensity.current
     val contentWidth = maxOf(1.dp, maxWidth - 28.dp)

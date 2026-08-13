@@ -1,5 +1,6 @@
 package dev.openbili.webdemo.ui
 
+import androidx.compose.ui.unit.dp
 import dev.openbili.webdemo.api.BangumiExploreCardStyle
 import dev.openbili.webdemo.api.BangumiExploreCategory
 import dev.openbili.webdemo.api.BangumiExploreItem
@@ -10,6 +11,11 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class AnimeExploreContentTest {
+  @Test
+  fun contentStartsBelowSafeInsetAndTopBar() {
+    assertEquals(102.dp, bangumiExploreContentTopPadding(24.dp))
+  }
+
   @Test
   fun groupsTheAnimePageByModuleRoleAndRemovesTimeline() {
     val hot = item("hot")

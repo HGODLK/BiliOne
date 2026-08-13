@@ -51,6 +51,7 @@ object BiliApi {
   private val videoInfoRequests = ConcurrentHashMap<String, CompletableFuture<VideoInfo?>>()
   private val accountMessageUserStyleCache = ConcurrentHashMap<Long, AccountMessageUserStyle>()
   private val bangumiVideoBvidCache = ConcurrentHashMap<String, String>()
+  private val authoritativePgcSeasonTypeCache = ConcurrentHashMap<Long, Int>()
 
   data class PrivateImageUpload(
     val url: String,
@@ -351,10 +352,10 @@ object BiliApi {
         val p = pagesArr.getJSONObject(i)
         pages.add(
           VideoPage(
-            p.getInt("page"),
-            p.getLong("cid"),
-            p.optString("part", ""),
-            p.optLong("duration", 0),
+            page = p.getInt("page"),
+            cid = p.getLong("cid"),
+            part = p.optString("part", ""),
+            durationSeconds = p.optLong("duration", 0),
           )
         )
       }
@@ -377,6 +378,7 @@ object BiliApi {
                 if (episodeBvid.isBlank()) continue
                 add(
                   VideoCollectionEpisode(
+                    aid = arc.optLong("aid", episode.optLong("aid")),
                     bvid = episodeBvid,
                     cid = episodePage.optLong("cid", episode.optLong("cid")),
                     title = episode.optString("title", arc.optString("title")),
@@ -429,6 +431,7 @@ object BiliApi {
       desc = data.optString("desc", ""),
       pages = pages,
       collection = collection,
+      copyright = data.optInt("copyright", 0),
     )
   }
 
@@ -1352,25 +1355,15 @@ object BiliApi {
 
   fun getVideoEngagement(aid: Long): VideoEngagement {
     require(aid > 0) { "视频参数无效" }
-    fun response(url: String): JSONObject? {
-      val resp = BiliHttpClient.get(url)
-      val json = JSONObject(resp.body?.string().orEmpty())
-      resp.close()
-      if (json.optInt("code") != 0) return null
-      return json
+    val json =
+      BiliHttpClient.get(
+          "https://api.bilibili.com/x/web-interface/archive/relation?aid=$aid"
+        )
+        .use { response -> JSONObject(response.body?.string().orEmpty()) }
+    if (json.optInt("code") != 0) {
+      throw IllegalStateException(json.optString("message", "互动状态获取失败"))
     }
-    val liked =
-      response("https://api.bilibili.com/x/web-interface/archive/has/like?aid=$aid")
-        ?.optInt("data", 0) == 1
-    val coins =
-      response("https://api.bilibili.com/x/web-interface/archive/coins?aid=$aid")
-        ?.optJSONObject("data")
-        ?.optInt("multiply", 0) ?: 0
-    val favorited =
-      response("https://api.bilibili.com/x/v2/fav/video/favoured?aid=$aid")
-        ?.optJSONObject("data")
-        ?.optBoolean("favoured", false) == true
-    return VideoEngagement(liked = liked, coins = coins, favorited = favorited)
+    return parseVideoEngagement(json.getJSONObject("data"))
   }
 
   fun setVideoLike(aid: Long, liked: Boolean) {
@@ -1574,9 +1567,48 @@ object BiliApi {
       level = member.optJSONObject("level_info")?.optInt("current_level", 0) ?: 0,
       vipActive = member.optJSONObject("vip")?.optInt("vipStatus", 0) == 1,
       vipLabel = member.optJSONObject("vip")?.optJSONObject("label")?.optString("text").orEmpty(),
+      officialVerification =
+        parseOfficialVerification(member.optJSONObject("official_verify")),
       upLiked = upAction?.optBoolean("like", false) == true,
       upReplied = upAction?.optBoolean("reply", false) == true,
     )
+  }
+
+  internal fun parseOfficialVerification(
+    primary: JSONObject?,
+    legacy: JSONObject? = null,
+  ): OfficialVerification {
+    val type =
+      when {
+        primary?.has("type") == true -> primary.optInt("type", -1)
+        legacy?.has("type") == true -> legacy.optInt("type", -1)
+        else -> -1
+      }
+    val description =
+      sequenceOf(
+          primary?.optString("title"),
+          primary?.optString("desc"),
+          legacy?.optString("title"),
+          legacy?.optString("desc"),
+        )
+        .filterNotNull()
+        .map(String::trim)
+        .firstOrNull(String::isNotBlank)
+        .orEmpty()
+    return OfficialVerification(type = type, description = description)
+  }
+
+  internal fun parseListedUserOfficialVerification(item: JSONObject): OfficialVerification {
+    val structured =
+      parseOfficialVerification(
+        primary = item.optJSONObject("official_verify"),
+        legacy = item.optJSONObject("official"),
+      )
+    if (structured.verified) return structured
+    val fallbackDescription = item.optString("verify_info").trim()
+    if (fallbackDescription.isBlank()) return structured
+    val fallbackType = item.optInt("official_type", 1).takeIf { it == 0 || it == 1 } ?: 1
+    return OfficialVerification(type = fallbackType, description = fallbackDescription)
   }
 
   private fun parseCommentLocation(reply: JSONObject): String {
@@ -1657,6 +1689,11 @@ object BiliApi {
           baseUrl = "https://i0.hdslb.com/",
         )
         .orEmpty()
+    val officialVerification =
+      parseOfficialVerification(
+        primary = data.optJSONObject("official"),
+        legacy = data.optJSONObject("official_verify"),
+      )
     Log.d(TAG, "space profile: mid=$mid banner=${banner.isNotBlank()}")
     return SpaceProfile(
       mid,
@@ -1679,6 +1716,7 @@ object BiliApi {
               .orEmpty()
           )
           .orEmpty(),
+      officialVerification = officialVerification,
       ipLocation = getSpaceIpLocation(mid),
       followed = data.optBoolean("is_followed", false),
     )
@@ -2186,14 +2224,41 @@ object BiliApi {
     category: BangumiExploreCategory,
     cursor: HistoryCursor = HistoryCursor(),
   ): BangumiWatchingHistoryPage {
-    val seasonType = bangumiSeasonType(category) ?: return BangumiWatchingHistoryPage(emptyList(), cursor, false)
+    if (bangumiSeasonType(category) == null) {
+      return BangumiWatchingHistoryPage(emptyList(), cursor, false)
+    }
     val response = getHistory(cursor)
     val cards =
       response.items
         .filterIsInstance<AccountHistoryItem.Bangumi>()
         .map(AccountHistoryItem.Bangumi::bangumi)
-        .filter { it.seasonType == seasonType }
+        // History occasionally reports Chinese animation as the generic animation type (1).
+        // Keep both animation families until the ViewModel resolves the authoritative season
+        // detail type, then filter the requested rail there.
+        .filter { it.seasonType == 1 || it.seasonType == 4 }
     return BangumiWatchingHistoryPage(cards, response.cursor, response.hasMore)
+  }
+
+  fun getAuthoritativePgcSeasonType(seasonId: Long = 0L, episodeId: Long = 0L): Int {
+    val cacheKey = seasonId.takeIf { it > 0L }
+    cacheKey?.let { authoritativePgcSeasonTypeCache[it] }?.let { return it }
+    val query =
+      when {
+        seasonId > 0L -> "season_id=$seasonId"
+        episodeId > 0L -> "ep_id=$episodeId"
+        else -> return 0
+      }
+    val response = BiliHttpClient.get("https://api.bilibili.com/pgc/view/web/season?$query")
+    val json = JSONObject(response.body?.string().orEmpty())
+    response.close()
+    if (json.optInt("code") != 0) throw IllegalStateException(json.optString("message"))
+    val data = json.optJSONObject("result") ?: return 0
+    val resolvedType = resolveAuthoritativePgcSeasonType(data)
+    val resolvedSeasonId = data.optLong("season_id", seasonId)
+    if (resolvedSeasonId > 0L && resolvedType > 0) {
+      authoritativePgcSeasonTypeCache[resolvedSeasonId] = resolvedType
+    }
+    return resolvedType
   }
 
   /** Load one profile follow-list page for the requested PGC category. */
@@ -2310,6 +2375,17 @@ object BiliApi {
           val episodeId = latestEpisode?.optLong("id") ?: 0L
           val latestLabel = latestEpisode?.optString("index_show").orEmpty()
           val watchProgress = parseBangumiWatchProgress(row)
+          val mediaLabel =
+            historyPgcMediaLabel(
+              row.optString("season_type_name"),
+              row.optString("type_name"),
+              row.optString("badge"),
+              row.optString("tag_name"),
+            )
+          val resolvedSeasonType = resolvePgcSeasonType(row, mediaLabel = mediaLabel)
+          if (seasonId > 0L && resolvedSeasonType == 4) {
+            authoritativePgcSeasonTypeCache[seasonId] = resolvedSeasonType
+          }
           add(
             SpaceContentCard(
               id = "${kind.name.lowercase()}:${seasonId.takeIf { it > 0L } ?: "${page}_$i"}",
@@ -2330,7 +2406,7 @@ object BiliApi {
               watchProgressState =
                 if (watchProgress != null) BangumiWatchProgressState.RESOLVED
                 else BangumiWatchProgressState.UNAVAILABLE,
-              seasonType = row.optInt("season_type"),
+              seasonType = resolvedSeasonType,
             )
           )
         }
@@ -3060,6 +3136,10 @@ object BiliApi {
       remoteStatus?.followed
         ?: inlineUserStatus?.optPositiveFlag("follow")
         ?: false
+    val seasonType = resolveAuthoritativePgcSeasonType(data)
+    if (resolvedSeasonId > 0L && seasonType > 0) {
+      authoritativePgcSeasonTypeCache[resolvedSeasonId] = seasonType
+    }
     return BangumiSeason(
       seasonId = resolvedSeasonId,
       mediaId = data.optLong("media_id"),
@@ -3084,6 +3164,7 @@ object BiliApi {
       episodes = episodes,
       seasons = seasons,
       sections = sections,
+      seasonType = seasonType,
       userRatingScore =
         inlineUserStatus
           ?.optJSONObject("review")
@@ -3138,7 +3219,8 @@ object BiliApi {
 
   /**
    * Maps a normal video URL or a temporary bangumi page URL to the BV id consumed by the native
-   * video page. Bangumi cards currently open their latest available episode in that existing page.
+   * video page. A season URL uses its first playable episode, matching the metadata selection made
+   * by the detail page; an episode URL still resolves that exact episode.
    */
   fun resolveVideoBvid(videoUrl: String): String {
     val pageId = videoUrl.substringAfterLast("/").substringBefore("?").substringBefore("#")
@@ -3173,7 +3255,7 @@ object BiliApi {
         val episode = array.optJSONObject(index) ?: continue
         val bvid = episode.optString("bvid")
         if (bvid.isBlank()) continue
-        if (allowFallback) fallback = bvid
+        if (allowFallback && fallback.isBlank()) fallback = bvid
         if (requestedEpisodeId != null && episode.optLong("id") == requestedEpisodeId) {
           resolved = bvid
           return
@@ -3202,7 +3284,7 @@ object BiliApi {
           for (episodeIndex in 0 until sectionEpisodes.length()) {
             val bvid =
               sectionEpisodes.optJSONObject(episodeIndex)?.optString("bvid").orEmpty()
-            if (bvid.isNotBlank()) {
+            if (bvid.isNotBlank() && fallback.isBlank()) {
               fallback = bvid
               break
             }
@@ -3545,16 +3627,10 @@ object BiliApi {
                 item.optString("title"),
               )
             val seasonType =
-              history.optInt(
-                "season_type",
-                item.optInt(
-                  "season_type",
-                  when {
-                    mediaLabel == "国创" -> 4
-                    mediaLabel.contains("番剧") -> 1
-                    else -> 0
-                  },
-                ),
+              resolvePgcSeasonType(
+                primary = history,
+                secondary = item,
+                mediaLabel = mediaLabel,
               )
             val cover =
               dev.openbili.webdemo.UrlPolicy.normalizeImageUrl(item.optString("cover")).orEmpty()
@@ -3695,6 +3771,9 @@ object BiliApi {
   internal fun historyPgcMediaLabel(vararg hints: String): String {
     val text = hints.joinToString(" ")
     return when {
+      // Bilibili exposes both a broad "动画" hint and the native "国创" category on some rows.
+      // The explicit native category must win or Chinese animation is incorrectly routed to anime.
+      text.contains("国创", ignoreCase = true) -> "国创"
       text.contains("港澳台", ignoreCase = true) &&
         (text.contains("番剧", ignoreCase = true) ||
           text.contains("动画", ignoreCase = true) ||
@@ -3702,7 +3781,6 @@ object BiliApi {
       text.contains("番剧", ignoreCase = true) ||
         text.contains("动画", ignoreCase = true) ||
         text.contains("动漫", ignoreCase = true) -> "番剧"
-      text.contains("国创", ignoreCase = true) -> "国创"
       text.contains("[剧集]", ignoreCase = true) ||
         text.contains("【剧集】", ignoreCase = true) -> "电视剧"
       text.contains("电视剧", ignoreCase = true) -> "电视剧"
@@ -3713,6 +3791,138 @@ object BiliApi {
       else -> "影视"
     }
   }
+
+  fun getHomeDynamicUploaders(offset: String = ""): HomeDynamicUploaderResponse {
+    val offsetQuery =
+      offset.takeIf(String::isNotBlank)?.let {
+        "&offset=${URLEncoder.encode(it, "UTF-8")}"
+      }.orEmpty()
+    val resp =
+      BiliHttpClient.get(
+        "https://api.bilibili.com/x/polymer/web-dynamic/v1/portal?" +
+          "up_list_more=1&web_location=333.1365$offsetQuery"
+      )
+    val json = JSONObject(resp.body?.string().orEmpty())
+    resp.close()
+    if (json.optInt("code") != 0) throw IllegalStateException(json.optString("message"))
+    return parseHomeDynamicUploaders(json)
+  }
+
+  internal fun parseHomeDynamicUploaders(json: JSONObject): HomeDynamicUploaderResponse {
+    val data = json.optJSONObject("data") ?: return HomeDynamicUploaderResponse()
+    val upList = data.optJSONObject("up_list")
+    val array = upList?.optJSONArray("items") ?: data.optJSONArray("up_list") ?: JSONArray()
+    val liveNode = data.opt("live_users")
+    val liveArray =
+      when (liveNode) {
+        is JSONArray -> liveNode
+        is JSONObject -> liveNode.optJSONArray("items") ?: JSONArray()
+        else -> JSONArray()
+      }
+    val liveMids = buildSet {
+      for (index in 0 until liveArray.length()) {
+        val row = liveArray.optJSONObject(index) ?: continue
+        row.optLong("mid", row.optLong("uid")).takeIf { it > 0L }?.let(::add)
+      }
+    }
+    val items = buildList {
+      for (index in 0 until array.length()) {
+        val row = array.optJSONObject(index) ?: continue
+        val mid = row.optLong("mid")
+        if (mid <= 0L) continue
+        add(
+          HomeDynamicUploader(
+            mid = mid,
+            name = row.optString("uname", row.optString("name", "UP主")),
+            face =
+              dev.openbili.webdemo.UrlPolicy.normalizeImageUrl(row.optString("face")).orEmpty(),
+            hasUpdate = row.optBoolean("has_update") || row.optInt("has_update") == 1,
+            live = mid in liveMids,
+          )
+        )
+      }
+    }.distinctBy(HomeDynamicUploader::mid)
+    return HomeDynamicUploaderResponse(
+      items = items,
+      offset = upList?.optString("offset").orEmpty(),
+      hasMore = upList?.optBoolean("has_more") == true,
+    )
+  }
+
+  fun getHomeDynamics(
+    offset: String = "",
+    videoOnly: Boolean = false,
+  ): SpaceDynamicResponse {
+    val offsetQuery =
+      offset.takeIf(String::isNotBlank)?.let {
+        "&offset=${URLEncoder.encode(it, "UTF-8")}"
+      }.orEmpty()
+    val type = if (videoOnly) "video" else "all"
+    val resp =
+      BiliHttpClient.get(
+        "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/all?" +
+          "timezone_offset=-480&type=$type&platform=web$offsetQuery"
+      )
+    val json = JSONObject(resp.body?.string().orEmpty())
+    resp.close()
+    if (json.optInt("code") != 0) throw IllegalStateException(json.optString("message"))
+    return parseSpaceDynamics(json)
+  }
+
+  /**
+   * Dynamic-home's per-UP filter. The official web page deliberately uses feed/all with host_mid
+   * here rather than the personal-space feed; requesting this first page also advances the
+   * server-side update marker represented by portal.up_list.items[].has_update.
+   */
+  fun getHomeUploaderDynamics(mid: Long, offset: String = ""): SpaceDynamicResponse {
+    val offsetQuery =
+      offset.takeIf(String::isNotBlank)?.let {
+        "&offset=${URLEncoder.encode(it, "UTF-8")}"
+      }.orEmpty()
+    val features =
+      URLEncoder.encode(
+        "itemOpusStyle,listOnlyfans,opusBigCover,onlyfansVote,decorationCard," +
+          "onlyfansAssetsV2,forwardListHidden,ugcDelete,onlyfansQaCard,commentsNewVersion," +
+          "avatarAutoTheme,sunflowerStyle,cardsEnhance,eva3CardOpus,eva3CardVideo," +
+          "eva3CardComment,eva3CardVote,eva3CardUser",
+        "UTF-8",
+      )
+    val resp =
+      BiliHttpClient.get(
+        "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/all?" +
+          "host_mid=$mid&platform=web&web_location=333.1365&features=$features$offsetQuery"
+      )
+    val json = JSONObject(resp.body?.string().orEmpty())
+    resp.close()
+    if (json.optInt("code") != 0) throw IllegalStateException(json.optString("message"))
+    return parseSpaceDynamics(json)
+  }
+
+  internal fun resolvePgcSeasonType(
+    primary: JSONObject,
+    secondary: JSONObject? = null,
+    mediaLabel: String,
+  ): Int {
+    // A native "国创" marker is more specific than the generic animation value occasionally
+    // returned by history/follow-list rows.
+    if (mediaLabel == "国创") return 4
+    return sequenceOf(
+        primary.optInt("season_type"),
+        primary.optInt("media_type"),
+        secondary?.optInt("season_type") ?: 0,
+        secondary?.optInt("media_type") ?: 0,
+      )
+      .firstOrNull { it > 0 }
+      ?: when {
+        mediaLabel.contains("番剧") -> 1
+        else -> 0
+      }
+  }
+
+  internal fun resolveAuthoritativePgcSeasonType(data: JSONObject): Int =
+    data.optInt("type", 0).takeIf { it > 0 }
+      ?: data.optInt("show_season_type", 0).takeIf { it > 0 }
+      ?: 0
 
   /** Keep legacy archive-to-drama routing, but never promote animation tags to PGC history. */
   private fun isTypedDramaHistoryHint(value: String): Boolean =
@@ -3791,6 +4001,7 @@ object BiliApi {
               buildList {
                 for (index in 0 until groups.length()) add(groups.optLong(index))
               },
+          officialVerification = parseListedUserOfficialVerification(item),
         )
       )
     }
@@ -3870,7 +4081,181 @@ object BiliApi {
     return InteractionUnreadSummary(
       replyCount = data.optInt("reply").coerceAtLeast(0),
       mentionCount = data.optInt("at").coerceAtLeast(0),
+      likeCount = data.optInt("like").coerceAtLeast(0),
     )
+  }
+
+  fun getLikeMessages(cursor: MessageCursor = MessageCursor()): AccountMessagePage {
+    val cursorQuery =
+      if (cursor.id > 0L && cursor.time > 0L) "&id=${cursor.id}&like_time=${cursor.time}" else ""
+    val resp =
+      BiliHttpClient.get(
+        "https://api.bilibili.com/x/msgfeed/like?" +
+          "platform=web&build=0&mobi_app=web&web_location=333.40164$cursorQuery"
+      )
+    val json = JSONObject(resp.body?.string().orEmpty())
+    resp.close()
+    if (json.optInt("code") != 0) throw IllegalStateException(json.optString("message"))
+    return parseLikeMessagePage(json.optJSONObject("data"), cursor)
+  }
+
+  internal fun parseLikeMessagePage(
+    data: JSONObject?,
+    previousCursor: MessageCursor = MessageCursor(),
+  ): AccountMessagePage {
+    if (data == null) return AccountMessagePage(emptyList())
+    val total = data.optJSONObject("total") ?: data
+    val array = total.optJSONArray("items") ?: JSONArray()
+    val items = buildList {
+      for (index in 0 until array.length()) {
+        val row = array.optJSONObject(index) ?: continue
+        val item = row.optJSONObject("item") ?: JSONObject()
+        val users = row.optJSONArray("users")
+        val user =
+          users?.optJSONObject(0)
+            ?: row.optJSONObject("user")
+            ?: row.optJSONObject("latest")?.optJSONObject("user")
+            ?: JSONObject()
+        val vip = user.optJSONObject("vip") ?: JSONObject()
+        val uri =
+          item
+            .optString("uri")
+            .ifBlank { item.optString("url") }
+            .ifBlank { item.optString("native_uri") }
+        val nativeUri = item.optString("native_uri")
+        val targetHint = "$uri $nativeUri"
+        val businessId =
+          item.optInt("business_id", item.optInt("subject_type", item.optInt("type", 1)))
+        val business = item.optString("business")
+        val targetKind =
+          when {
+            targetHint.contains("/video/", ignoreCase = true) ||
+              targetHint.contains("bilibili://video", ignoreCase = true) -> MessageTargetKind.VIDEO
+            targetHint.contains("/read/", ignoreCase = true) ||
+              targetHint.contains("/opus/", ignoreCase = true) ||
+              targetHint.contains("bilibili://article", ignoreCase = true) -> MessageTargetKind.ARTICLE
+            business.contains("专栏") || business.contains("文章") || businessId == 12 ->
+              MessageTargetKind.ARTICLE
+            business.contains("视频") || businessId == 1 -> MessageTargetKind.VIDEO
+            else -> MessageTargetKind.UNKNOWN
+          }
+        val sourceId = item.optLong("source_id")
+        val rootId = item.optLong("root_id")
+        val itemId = item.optLong("item_id")
+        val itemType = item.optString("type")
+        val isReplyLike = itemType.equals("reply", ignoreCase = true)
+        fun queryLong(name: String): Long =
+          Regex("(?:[?&])${Regex.escape(name)}=(\\d+)", RegexOption.IGNORE_CASE)
+            .find(nativeUri)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.toLongOrNull()
+            ?: 0L
+        val nativeRootId = queryLong("comment_root_id")
+        val nativeSecondaryId = queryLong("comment_secondary_id")
+        val targetCommentId =
+          nativeSecondaryId.takeIf { it > 0L }
+            ?: sourceId.takeIf { it > 0L }
+            ?: nativeRootId.takeIf { it > 0L }
+            ?: rootId.takeIf { it > 0L }
+            ?: itemId.takeIf { isReplyLike && it > 0L }
+            ?: 0L
+        val targetRootId =
+          nativeRootId.takeIf { it > 0L }
+            ?: rootId.takeIf { it > 0L }
+            ?: targetCommentId
+        val count = row.optInt("counts", users?.length() ?: 1).coerceAtLeast(1)
+        val objectLabel =
+          when {
+            itemType.equals("danmu", ignoreCase = true) || business.contains("弹幕") -> "弹幕"
+            isReplyLike -> "评论"
+            itemType.equals("video", ignoreCase = true) -> "视频"
+            business.contains("动态") -> "动态"
+            else -> "评论"
+          }
+        val title = if (count > 1) "等共 $count 人赞了我的$objectLabel" else "赞了我的$objectLabel"
+        val subjectTitle =
+          item
+            .optString("subject_title")
+            .ifBlank { item.optString("source_title") }
+            .ifBlank { item.optString("subject") }
+        add(
+          AccountMessage(
+            id = row.optLong("id"),
+            userMid = user.optLong("mid"),
+            userName = user.optString("nickname", "用户"),
+            userFace =
+              dev.openbili.webdemo.UrlPolicy.normalizeImageUrl(user.optString("avatar")).orEmpty(),
+            title = title,
+            content = title,
+            sourceContent =
+              item
+                .optString("source_content")
+                .ifBlank { item.optString("target_reply_content") }
+                .ifBlank { item.optString("root_reply_content") }
+                .ifBlank { item.optString("title") },
+            oid =
+              item.optLong("subject_id", item.optLong("target_id")).takeIf { it > 0L }
+                ?: Regex("bilibili://video/(?:av)?(\\d+)", RegexOption.IGNORE_CASE)
+                  .find(nativeUri)
+                  ?.groupValues
+                  ?.getOrNull(1)
+                  ?.toLongOrNull()
+                ?: 0L,
+            rootId = targetRootId,
+            parentId = targetCommentId,
+            time = row.optLong("like_time", row.optJSONObject("latest")?.optLong("like_time") ?: 0L),
+            coverUrl =
+              dev.openbili.webdemo.UrlPolicy.normalizeImageUrl(
+                  item.optString("image").ifBlank { item.optString("cover") }
+                )
+                .orEmpty(),
+            linkUrl = uri,
+            messageType = businessId,
+            targetKind = targetKind,
+            subjectTitle = subjectTitle,
+            targetCommentId = targetCommentId,
+            commentType = if (targetKind == MessageTargetKind.ARTICLE) 12 else 1,
+            userLevel = user.optInt("level"),
+            userVipActive =
+              vip.optInt("status") == 1 ||
+                user.optInt("vip_status") == 1 ||
+                user.optInt("vip_type") > 0,
+            userVipLabel =
+              vip.optJSONObject("label")?.optString("text") ?: user.optString("vip_label"),
+          )
+        )
+      }
+    }
+    val cursorObject = total.optJSONObject("cursor")
+    val lastRow = array.optJSONObject(array.length() - 1)
+    val nextCursor =
+      cursorObject?.let {
+        MessageCursor(
+          id = it.optLong("id"),
+          time = it.optLong("time", it.optLong("like_time")),
+        )
+      } ?: MessageCursor(
+        id = lastRow?.optLong("id") ?: 0L,
+        time = lastRow?.optLong("like_time") ?: 0L,
+      )
+    val explicitlyEnded =
+      cursorObject?.let { it.optBoolean("is_end") || it.optInt("is_end") == 1 } == true ||
+        (total.has("has_more") && !total.optBoolean("has_more"))
+    val cursorExplicitlyContinues =
+      cursorObject?.has("is_end") == true &&
+        !cursorObject.optBoolean("is_end") &&
+        cursorObject.optInt("is_end") != 1
+    val hasMore =
+      items.isNotEmpty() &&
+        !explicitlyEnded &&
+        nextCursor.id > 0L &&
+        nextCursor.time > 0L &&
+        nextCursor != previousCursor &&
+        (total.optBoolean("has_more") ||
+          cursorExplicitlyContinues ||
+          !total.has("has_more") && cursorObject == null && array.length() >= 20)
+    return AccountMessagePage(items = items, cursor = nextCursor, hasMore = hasMore)
   }
 
   fun getPrivateMessageUnreadCount(): Int {
@@ -4135,7 +4520,7 @@ object BiliApi {
                 else "对方撤回了一条消息"
               } else parsed.content,
             sourceContent = "",
-            oid = 0,
+            oid = parsed.oid,
             rootId = 0,
             parentId = 0,
             time = row.optLong("session_ts") / 1_000_000L,
@@ -4218,7 +4603,7 @@ object BiliApi {
                 if (outgoing) "你撤回了一条消息" else "对方撤回了一条消息"
               } else parsed.content,
             sourceContent = "",
-            oid = 0L,
+            oid = parsed.oid,
             rootId = 0L,
             parentId = 0L,
             time = timestamp,
@@ -4291,18 +4676,19 @@ object BiliApi {
     }
   }
 
-  private data class ParsedPrivateContent(
+  internal data class ParsedPrivateContent(
     val title: String,
     val content: String,
     val coverUrl: String = "",
     val linkUrl: String = "",
+    val oid: Long = 0L,
     val notifier: Pair<String, String>? = null,
     val mediaWidth: Int = 0,
     val mediaHeight: Int = 0,
     val noticeStyle: Boolean = false,
   )
 
-  private fun parsePrivateContent(type: Int, raw: String): ParsedPrivateContent {
+  internal fun parsePrivateContent(type: Int, raw: String): ParsedPrivateContent {
     parsePrivateNoticeText(raw)?.let { noticeText ->
       return ParsedPrivateContent("提示", noticeText, noticeStyle = true)
     }
@@ -4313,6 +4699,37 @@ object BiliApi {
       }
     val firstSubCard = body.optJSONArray("sub_cards")?.optJSONObject(0)
     fun firstTitle(vararg values: String): String = values.firstOrNull(String::isNotBlank).orEmpty()
+    fun firstPositiveLong(vararg values: Long): Long = values.firstOrNull { it > 0L } ?: 0L
+    val videoContainers =
+      listOfNotNull(
+        body.optJSONObject("video"),
+        body.optJSONObject("item"),
+        body.optJSONObject("card"),
+        firstSubCard,
+      )
+    val videoBvid =
+      firstTitle(
+        body.optString("bvid"),
+        *videoContainers.map { it.optString("bvid") }.toTypedArray(),
+      )
+    val videoOid =
+      firstPositiveLong(
+        body.optLong("aid"),
+        body.optLong("oid"),
+        *videoContainers
+          .flatMap { listOf(it.optLong("aid"), it.optLong("oid")) }
+          .toLongArray(),
+      )
+    val videoLink =
+      firstTitle(
+        body.optString("jump_url"),
+        body.optString("url"),
+        *videoContainers
+          .flatMap { listOf(it.optString("jump_url"), it.optString("url")) }
+          .toTypedArray(),
+        videoBvid,
+        videoOid.takeIf { it > 0L }?.let { "https://www.bilibili.com/video/av$it" }.orEmpty(),
+      )
     val title =
       when (type) {
         1 -> "私信"
@@ -4385,12 +4802,24 @@ object BiliApi {
             body.optJSONObject("biz_content")?.optString("backup_cover").orEmpty()
           }
         11,
-        14 -> body.optString("cover")
+        14 ->
+          firstTitle(
+            body.optString("cover"),
+            *videoContainers
+              .flatMap { listOf(it.optString("cover"), it.optString("cover_url"), it.optString("pic")) }
+              .toTypedArray(),
+          )
         12 -> body.optJSONArray("image_urls")?.optString(0).orEmpty().ifBlank {
           body.optString("cover")
         }
         13 -> body.optString("pic_url")
-        16 -> firstSubCard?.optString("cover_url").orEmpty()
+        16 ->
+          firstTitle(
+            firstSubCard?.optString("cover_url").orEmpty(),
+            *videoContainers
+              .flatMap { listOf(it.optString("cover"), it.optString("cover_url"), it.optString("pic")) }
+              .toTypedArray(),
+          )
         else -> ""
       }
     val link =
@@ -4400,14 +4829,11 @@ object BiliApi {
           body.optJSONObject("jump_uri_config")?.optString("all_uri").orEmpty().ifBlank {
             body.optString("jump_uri")
           }
-        11 ->
-          body.optString("bvid").ifBlank {
-            body.optLong("aid").takeIf { it > 0L }?.let { "https://www.bilibili.com/video/av$it" }.orEmpty()
-          }
+        11 -> videoLink
         12 -> body.optString("url", body.optString("jump_url"))
         13 -> body.optString("jump_url")
         14 -> body.optString("url")
-        16 -> firstSubCard?.optString("jump_url").orEmpty()
+        16 -> videoLink
         else -> ""
       }
     return ParsedPrivateContent(
@@ -4415,6 +4841,7 @@ object BiliApi {
       content = content.ifBlank { title },
       coverUrl = dev.openbili.webdemo.UrlPolicy.normalizeImageUrl(cover).orEmpty(),
       linkUrl = link,
+      oid = if (type == 11 || type == 16) videoOid else 0L,
       notifier = notifier,
       mediaWidth = if (type == 2) body.optInt("width", body.optInt("image_width")) else 0,
       mediaHeight = if (type == 2) body.optInt("height", body.optInt("image_height")) else 0,
@@ -5606,6 +6033,7 @@ object BiliApi {
               item.optString("vip_label").ifBlank {
                 item.optJSONObject("vip")?.optJSONObject("label")?.optString("text").orEmpty()
               },
+            officialVerification = parseListedUserOfficialVerification(item),
           )
         )
       }

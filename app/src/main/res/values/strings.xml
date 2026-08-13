@@ -25,4 +25,7 @@
     <string name="cover_error">封面加载失败</string>
     <string name="recover_webview">恢复 WebView</string>
     <string name="copy_diagnostics_done">诊断信息已复制</string>
+    <string name="offline_download_channel_name">视频缓存</string>
+    <string name="offline_download_channel_description">显示视频离线缓存进度</string>
+    <string name="offline_download_notification_message">正在缓存视频</string>
 </resources>

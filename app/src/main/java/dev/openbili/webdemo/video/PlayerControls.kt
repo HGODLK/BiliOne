@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
@@ -52,10 +53,13 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import dev.openbili.webdemo.PlayerSubtitleState
 import dev.openbili.webdemo.api.DANMAKU_COLORFUL_NONE
 import dev.openbili.webdemo.api.DANMAKU_COLORFUL_VIP_GRADIENT
 import dev.openbili.webdemo.api.PlayUrlData
 import dev.openbili.webdemo.api.PremiumAudioMode
+import dev.openbili.webdemo.settings.SubtitleHorizontalPosition
+import dev.openbili.webdemo.settings.SubtitleStyle
 import kotlin.math.roundToInt
 
 @Composable
@@ -257,6 +261,16 @@ private val VIP_DANMAKU_COLORS =
     Color(0xFFC792EA),
   )
 
+private val SUBTITLE_TEXT_COLORS =
+  listOf(0xFFFFFF, 0xFFF176, 0x80DEEA, 0xA5D6A7, 0xF48FB1, 0xFFB74D, 0x212121)
+
+@Composable
+private fun SubtitlePositionOption(text: String, selected: Boolean, onClick: () -> Unit) {
+  TextButton(onClick = onClick) {
+    Text(text, color = if (selected) MaterialTheme.colorScheme.primary else Color.Unspecified)
+  }
+}
+
 @Composable
 internal fun ModernPlayerControls(
   playData: PlayUrlData,
@@ -275,6 +289,7 @@ internal fun ModernPlayerControls(
   onFullscreenPress: () -> Unit = {},
   onToggleDanmaku: () -> Unit,
   onDanmakuSmartBlockingChange: (Boolean) -> Unit,
+  danmakuComposerEnabled: Boolean,
   onComposeDanmaku: () -> Unit,
   danmakuDisplayArea: Float,
   danmakuDensity: Int,
@@ -294,18 +309,27 @@ internal fun ModernPlayerControls(
   onProgressScrubChanged: (Boolean) -> Unit,
   onSwitchQuality: (Int) -> Unit,
   onSwitchPremiumAudio: (PremiumAudioMode) -> Unit,
+  subtitleState: PlayerSubtitleState,
+  onSelectSubtitle: (String?) -> Unit,
+  subtitleStyle: SubtitleStyle,
+  onSubtitleStyleChange: (SubtitleStyle) -> Unit,
   modifier: Modifier = Modifier,
   showCenterAction: Boolean = true,
   fullscreenTitle: String? = null,
+  onlineViewerText: String? = null,
   onOpenSelection: (() -> Unit)? = null,
 ) {
   val displayedPositionMs = currentPositionMs()
   var speedMenu by remember { mutableStateOf(false) }
   var qualityMenu by remember { mutableStateOf(false) }
+  var subtitleMenu by remember { mutableStateOf(false) }
   var danmakuMenu by remember { mutableStateOf(false) }
   var sliderPreviewMs by remember { mutableStateOf<Long?>(null) }
-  LaunchedEffect(speedMenu, qualityMenu, danmakuMenu) {
-    onMenuVisibilityChanged(speedMenu || qualityMenu || danmakuMenu)
+  LaunchedEffect(speedMenu, qualityMenu, subtitleMenu, danmakuMenu) {
+    onMenuVisibilityChanged(speedMenu || qualityMenu || subtitleMenu || danmakuMenu)
+  }
+  LaunchedEffect(subtitleState.mediaId, subtitleState.tracks.isNotEmpty()) {
+    if (subtitleState.tracks.isEmpty()) subtitleMenu = false
   }
   DisposableEffect(Unit) { onDispose { onMenuVisibilityChanged(false) } }
   Box(modifier) {
@@ -320,6 +344,15 @@ internal fun ModernPlayerControls(
         style = MaterialTheme.typography.titleMedium,
         maxLines = 1,
         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+      )
+    }
+    if (isFullscreen && !onlineViewerText.isNullOrBlank()) {
+      Text(
+        text = "${onlineViewerText}人在看",
+        modifier = Modifier.align(Alignment.TopEnd).padding(horizontal = 28.dp, vertical = 20.dp),
+        color = Color.White,
+        style = MaterialTheme.typography.labelLarge,
+        maxLines = 1,
       )
     }
     if (showCenterAction) {
@@ -432,6 +465,125 @@ internal fun ModernPlayerControls(
             }
           }
         }
+        if (subtitleState.tracks.isNotEmpty()) {
+          Box {
+            TextButton(onClick = { subtitleMenu = true }) {
+              Text(
+                "字幕",
+                color =
+                  if (subtitleState.selectedTrackId != null) MaterialTheme.colorScheme.primary
+                  else Color.White,
+              )
+            }
+            DropdownMenu(
+              expanded = subtitleMenu,
+              onDismissRequest = { subtitleMenu = false },
+              modifier = Modifier.width(330.dp),
+            ) {
+              DropdownMenuItem(
+                text = { Text("关闭字幕") },
+                trailingIcon = {
+                  Checkbox(checked = subtitleState.selectedTrackId == null, onCheckedChange = null)
+                },
+                onClick = {
+                  subtitleMenu = false
+                  onSelectSubtitle(null)
+                },
+              )
+              subtitleState.tracks.forEach { track ->
+                DropdownMenuItem(
+                  text = { Text(track.displayLabel) },
+                  trailingIcon = {
+                    Checkbox(
+                      checked = subtitleState.selectedTrackId == track.id,
+                      onCheckedChange = null,
+                    )
+                  },
+                  onClick = {
+                    subtitleMenu = false
+                    onSelectSubtitle(track.id)
+                  },
+                )
+              }
+              Column(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+              ) {
+                Text(
+                  "背景不透明度  ${(subtitleStyle.backgroundOpacity * 100).roundToInt()}%",
+                  style = MaterialTheme.typography.labelMedium,
+                )
+                Slider(
+                  value = subtitleStyle.backgroundOpacity,
+                  onValueChange = {
+                    onSubtitleStyleChange(subtitleStyle.copy(backgroundOpacity = it))
+                  },
+                  valueRange = 0f..1f,
+                  steps = 9,
+                )
+                Text(
+                  "字体不透明度  ${(subtitleStyle.textOpacity * 100).roundToInt()}%",
+                  style = MaterialTheme.typography.labelMedium,
+                )
+                Slider(
+                  value = subtitleStyle.textOpacity,
+                  onValueChange = { onSubtitleStyleChange(subtitleStyle.copy(textOpacity = it)) },
+                  valueRange = .1f..1f,
+                  steps = 8,
+                )
+                Text(
+                  "字体大小  ${(subtitleStyle.fontScale * 100).roundToInt()}%",
+                  style = MaterialTheme.typography.labelMedium,
+                )
+                Slider(
+                  value = subtitleStyle.fontScale,
+                  onValueChange = { onSubtitleStyleChange(subtitleStyle.copy(fontScale = it)) },
+                  valueRange = .4f..1.8f,
+                  steps = 13,
+                )
+                Text("字体颜色", style = MaterialTheme.typography.labelMedium)
+                Row(
+                  Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                  horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                  SUBTITLE_TEXT_COLORS.forEach { colorValue ->
+                    val selected = subtitleStyle.textColor == colorValue
+                    Box(
+                      Modifier.size(28.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF000000L or colorValue.toLong()))
+                        .border(
+                          width = if (selected) 3.dp else 1.dp,
+                          color =
+                            if (selected) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.outline,
+                          shape = CircleShape,
+                        )
+                        .clickable {
+                          onSubtitleStyleChange(subtitleStyle.copy(textColor = colorValue))
+                        }
+                    )
+                  }
+                }
+                Text("字幕对齐", style = MaterialTheme.typography.labelMedium)
+                Row(
+                  Modifier.fillMaxWidth(),
+                  horizontalArrangement = Arrangement.SpaceEvenly,
+                ) {
+                  SubtitleHorizontalPosition.entries.forEach { position ->
+                    SubtitlePositionOption(
+                      text = position.label,
+                      selected = subtitleStyle.horizontalPosition == position,
+                      onClick = {
+                        onSubtitleStyleChange(subtitleStyle.copy(horizontalPosition = position))
+                      },
+                    )
+                  }
+                }
+              }
+            }
+          }
+        }
         Box {
           IconButton(onClick = { danmakuMenu = true }, modifier = Modifier.size(38.dp)) {
             DanmakuControlIcon(
@@ -476,8 +628,8 @@ internal fun ModernPlayerControls(
               Slider(
                 value = danmakuDisplayArea,
                 onValueChange = onDanmakuDisplayAreaChange,
-                valueRange = .25f..1f,
-                steps = 2,
+                valueRange = .1f..1f,
+                steps = 8,
               )
               Text(
                 "弹幕密度（左右）  ${danmakuDensityLabel(danmakuDensity)}",
@@ -528,14 +680,16 @@ internal fun ModernPlayerControls(
               Slider(
                 value = danmakuSpeed,
                 onValueChange = onDanmakuSpeedChange,
-                valueRange = .6f..1.8f,
-                steps = 5,
+                valueRange = .5f..2f,
+                steps = 14,
               )
             }
           }
         }
-        IconButton(onClick = onComposeDanmaku, modifier = Modifier.size(38.dp)) {
-          Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "发送弹幕", tint = Color.White)
+        if (danmakuComposerEnabled) {
+          IconButton(onClick = onComposeDanmaku, modifier = Modifier.size(38.dp)) {
+            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "发送弹幕", tint = Color.White)
+          }
         }
         IconButton(
           onClick = onFullscreen,
@@ -563,16 +717,13 @@ internal fun PlayerCenterPlayPauseButton(
   onPlayPause: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  Surface(
-    modifier = modifier,
-    shape = CircleShape,
-    color = Color.Black.copy(alpha = .64f),
-    contentColor = Color.White,
-  ) {
-    IconButton(onClick = onPlayPause, modifier = Modifier.size(68.dp)) {
-      if (isPlaying) Text("Ⅱ", style = MaterialTheme.typography.headlineMedium)
-      else Icon(Icons.Default.PlayArrow, "播放", modifier = Modifier.size(38.dp))
-    }
+  IconButton(onClick = onPlayPause, modifier = modifier.size(68.dp)) {
+    Icon(
+      imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+      contentDescription = if (isPlaying) "暂停" else "播放",
+      modifier = Modifier.size(38.dp),
+      tint = Color.White,
+    )
   }
 }
 

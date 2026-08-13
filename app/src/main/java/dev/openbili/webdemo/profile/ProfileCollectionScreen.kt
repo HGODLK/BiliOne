@@ -540,7 +540,7 @@ private fun CollectionDetailTransition(
       color = MaterialTheme.colorScheme.background,
       border = BorderStroke(.75.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = .72f)),
       tonalElevation = 1.dp,
-      shadowElevation = 6.dp,
+      shadowElevation = 0.dp,
     ) {
       AnimatedVisibility(
         visible = contentReady,

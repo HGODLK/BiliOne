@@ -63,6 +63,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -74,8 +75,8 @@ import dev.openbili.webdemo.feed.FeedImageLoadMode
 import dev.openbili.webdemo.feed.FeedItem
 import dev.openbili.webdemo.feed.LocalFeedImageLoadPolicy
 import dev.openbili.webdemo.feed.rememberGridFeedImageLoadPolicy
-import dev.openbili.webdemo.ui.PressableVideoCard
 import dev.openbili.webdemo.ui.NavigationCardBottomClearance
+import dev.openbili.webdemo.ui.PressableVideoCard
 import dev.openbili.webdemo.ui.PullRefreshContainer
 import dev.openbili.webdemo.ui.VideoCardReveal
 import dev.openbili.webdemo.ui.VideoShapeTokens
@@ -100,6 +101,7 @@ fun LiveHomeScreen(
   hiddenCoverItemId: String? = null,
   backgroundWorkAllowed: Boolean = true,
   detailActive: Boolean = false,
+  topContentPadding: Dp = 10.dp,
 ) {
   val previewViewModel: LivePreviewPlayerViewModel = viewModel()
   val previewState by previewViewModel.state.collectAsState()
@@ -156,6 +158,7 @@ fun LiveHomeScreen(
   PullRefreshContainer(
     refreshing = state.isRefreshing,
     onRefresh = onRefresh,
+    indicatorTopPadding = topContentPadding + 8.dp,
     modifier = Modifier.fillMaxSize(),
   ) {
     when (state) {
@@ -185,6 +188,7 @@ fun LiveHomeScreen(
             onTransitionActiveChanged = onTransitionActiveChanged,
             onAreaIndex = { areaIndexVisible = true },
             onHorizontalRailInteractionChanged = onHorizontalRailInteractionChanged,
+            topContentPadding = topContentPadding,
           )
         }
     }
@@ -207,6 +211,7 @@ private fun LiveHomeGrid(
   onTransitionActiveChanged: (Boolean) -> Unit,
   onAreaIndex: () -> Unit,
   onHorizontalRailInteractionChanged: (Boolean) -> Unit,
+  topContentPadding: Dp,
 ) {
   val selectedHero =
     state.heroRooms.firstOrNull { it.roomId == state.selectedHeroRoomId }
@@ -231,7 +236,7 @@ private fun LiveHomeGrid(
       PaddingValues(
         start = 16.dp,
         end = 16.dp,
-        top = 10.dp,
+        top = topContentPadding,
         bottom = NavigationCardBottomClearance,
       ),
     horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -248,8 +253,7 @@ private fun LiveHomeGrid(
         active = backgroundWorkAllowed,
         detailActive = detailActive,
         coverVisible =
-          selectedHero?.let { LiveHomeSourceAnchor.hero(it.roomId).stableId } !=
-            hiddenCoverItemId,
+          selectedHero?.let { LiveHomeSourceAnchor.hero(it.roomId).stableId } != hiddenCoverItemId,
         gridState = gridState,
         viewportBounds = gridViewportBounds,
         onSelect = onHeroRoomSelected,
@@ -502,7 +506,7 @@ private fun LivePreviewPanel(
         .clickable(onClick = onClick),
     shape = VideoShapeTokens.Player,
     color = Color.Black,
-    shadowElevation = 10.dp,
+    shadowElevation = 0.dp,
   ) {
     Box(
       Modifier.fillMaxSize().graphicsLayer {

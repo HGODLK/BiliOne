@@ -20,10 +20,14 @@ import dev.openbili.webdemo.api.FavoriteFolder
 import dev.openbili.webdemo.api.MentionSuggestion
 import dev.openbili.webdemo.api.VideoEngagement
 import dev.openbili.webdemo.api.VideoInfo
+import dev.openbili.webdemo.api.VideoPage
 import dev.openbili.webdemo.api.commentTimeHasMore
 import dev.openbili.webdemo.api.commentTimeStartPage
 import dev.openbili.webdemo.api.orderCommentsByTime
+import dev.openbili.webdemo.api.remainingVideoCoins
+import dev.openbili.webdemo.api.videoCoinLimit
 import dev.openbili.webdemo.feed.FeedItem
+import dev.openbili.webdemo.offline.OfflineMediaManager
 import java.util.LinkedHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -44,6 +48,7 @@ internal class AppRootVideoState {
   var videoDescription by mutableStateOf("")
   var videoInfo by mutableStateOf<VideoInfo?>(null)
   var videoEngagement by mutableStateOf(VideoEngagement())
+  var videoEngagementAccountMid by mutableStateOf(0L)
   var favoriteFolders by mutableStateOf<List<FavoriteFolder>>(emptyList())
   var favoriteFoldersLoading by mutableStateOf(false)
   var videoActionBusy by mutableStateOf(false)
@@ -153,6 +158,7 @@ internal class AppRootVideoState {
           ?: 0,
       dataReady = videoPageDataReadyId == item.id,
       playbackEnded = playbackEnded,
+      engagementAccountMid = videoEngagementAccountMid,
     )
   }
 
@@ -476,7 +482,15 @@ internal class AppRootVideoState {
     scope: CoroutineScope,
   ) {
     val expected = videoInfo
-    if (expected == null || videoActionBusy) return
+    val expectedAccountMid = videoEngagementAccountMid
+    if (
+      expected == null ||
+        expectedAccountMid <= 0L ||
+        !videoEngagement.loaded ||
+        videoActionBusy
+    ) {
+      return
+    }
     val previousEngagement = videoEngagement
     val previousInfo = expected
     videoActionBusy = true
@@ -492,21 +506,30 @@ internal class AppRootVideoState {
         }
       result
         .onSuccess {
-          Toast.makeText(
-              context,
-              if (targetLiked) "已点赞" else "已取消点赞",
-              Toast.LENGTH_SHORT,
-            )
-            .show()
+          if (videoInfo?.aid == expected.aid && videoEngagementAccountMid == expectedAccountMid) {
+            Toast.makeText(
+                context,
+                if (targetLiked) "已点赞" else "已取消点赞",
+                Toast.LENGTH_SHORT,
+              )
+              .show()
+          }
         }
         .onFailure {
-          if (videoInfo?.aid == expected.aid) {
+          if (
+            videoInfo?.aid == expected.aid &&
+              videoEngagementAccountMid == expectedAccountMid
+          ) {
             videoEngagement = previousEngagement
             videoInfo = previousInfo
+            Toast.makeText(context, it.message ?: "点赞失败", Toast.LENGTH_SHORT).show()
           }
-          Toast.makeText(context, it.message ?: "点赞失败", Toast.LENGTH_SHORT).show()
         }
-      if (videoInfo?.aid == expected.aid) videoActionBusy = false
+      if (
+        videoInfo?.aid == expected.aid && videoEngagementAccountMid == expectedAccountMid
+      ) {
+        videoActionBusy = false
+      }
     }
   }
 
@@ -517,8 +540,18 @@ internal class AppRootVideoState {
     scope: CoroutineScope,
   ) {
     val expected = videoInfo
-    val remaining = (2 - videoEngagement.coins).coerceAtLeast(0)
-    if (expected == null || videoActionBusy || count !in 1..remaining) return
+    val expectedAccountMid = videoEngagementAccountMid
+    val remaining =
+      expected?.let { remainingVideoCoins(it.copyright, videoEngagement.coins) } ?: 0
+    if (
+      expected == null ||
+        expectedAccountMid <= 0L ||
+        !videoEngagement.loaded ||
+        videoActionBusy ||
+        count !in 1..remaining
+    ) {
+      return
+    }
     videoActionBusy = true
     scope.launch {
       val result =
@@ -527,11 +560,17 @@ internal class AppRootVideoState {
         }
       result
         .onSuccess {
-          if (videoInfo?.aid == expected.aid) {
+          if (
+            videoInfo?.aid == expected.aid &&
+              videoEngagementAccountMid == expectedAccountMid
+          ) {
             val wasLiked = videoEngagement.liked
             videoEngagement =
               videoEngagement.copy(
-                coins = (videoEngagement.coins + count).coerceAtMost(2),
+                coins =
+                  (videoEngagement.coins + count).coerceAtMost(
+                    videoCoinLimit(expected.copyright)
+                  ),
                 liked = videoEngagement.liked || alsoLike,
               )
             videoInfo =
@@ -540,12 +579,20 @@ internal class AppRootVideoState {
                 likeCount = expected.likeCount + if (alsoLike && !wasLiked) 1 else 0,
               )
           }
-          Toast.makeText(context, "已投 $count 枚硬币", Toast.LENGTH_SHORT).show()
+          if (videoInfo?.aid == expected.aid && videoEngagementAccountMid == expectedAccountMid) {
+            Toast.makeText(context, "已投 $count 枚硬币", Toast.LENGTH_SHORT).show()
+          }
         }
         .onFailure {
-          Toast.makeText(context, it.message ?: "投币失败", Toast.LENGTH_SHORT).show()
+          if (videoInfo?.aid == expected.aid && videoEngagementAccountMid == expectedAccountMid) {
+            Toast.makeText(context, it.message ?: "投币失败", Toast.LENGTH_SHORT).show()
+          }
         }
-      if (videoInfo?.aid == expected.aid) videoActionBusy = false
+      if (
+        videoInfo?.aid == expected.aid && videoEngagementAccountMid == expectedAccountMid
+      ) {
+        videoActionBusy = false
+      }
     }
   }
 
@@ -556,7 +603,15 @@ internal class AppRootVideoState {
     scope: CoroutineScope,
   ) {
     val expected = videoInfo
-    if (expected == null || videoActionBusy) return
+    val expectedAccountMid = videoEngagementAccountMid
+    if (
+      expected == null ||
+        expectedAccountMid <= 0L ||
+        !videoEngagement.loaded ||
+        videoActionBusy
+    ) {
+      return
+    }
     val previousFolders = favoriteFolders
     val wasFavorited = previousFolders.any { it.favorited }
     videoActionBusy = true
@@ -567,7 +622,10 @@ internal class AppRootVideoState {
         }
       result
         .onSuccess {
-          if (videoInfo?.aid == expected.aid) {
+          if (
+            videoInfo?.aid == expected.aid &&
+              videoEngagementAccountMid == expectedAccountMid
+          ) {
             favoriteFolders =
               previousFolders.map { folder ->
                 when (folder.id) {
@@ -594,9 +652,15 @@ internal class AppRootVideoState {
           }
         }
         .onFailure {
-          Toast.makeText(context, it.message ?: "收藏失败", Toast.LENGTH_SHORT).show()
+          if (videoInfo?.aid == expected.aid && videoEngagementAccountMid == expectedAccountMid) {
+            Toast.makeText(context, it.message ?: "收藏失败", Toast.LENGTH_SHORT).show()
+          }
         }
-      if (videoInfo?.aid == expected.aid) videoActionBusy = false
+      if (
+        videoInfo?.aid == expected.aid && videoEngagementAccountMid == expectedAccountMid
+      ) {
+        videoActionBusy = false
+      }
     }
   }
 
@@ -615,15 +679,19 @@ internal class AppRootVideoState {
         }
       result
         .onSuccess { folders ->
-          if (videoInfo?.aid == aid) {
+          if (videoInfo?.aid == aid && videoEngagementAccountMid == accountMid) {
             favoriteFolders = folders
             videoEngagement = videoEngagement.copy(favorited = folders.any { it.favorited })
           }
         }
         .onFailure {
-          Toast.makeText(context, it.message ?: "收藏夹加载失败", Toast.LENGTH_SHORT).show()
+          if (videoInfo?.aid == aid && videoEngagementAccountMid == accountMid) {
+            Toast.makeText(context, it.message ?: "收藏夹加载失败", Toast.LENGTH_SHORT).show()
+          }
         }
-      if (videoInfo?.aid == aid) favoriteFoldersLoading = false
+      if (videoInfo?.aid == aid && videoEngagementAccountMid == accountMid) {
+        favoriteFoldersLoading = false
+      }
     }
   }
 
@@ -696,11 +764,20 @@ internal class AppRootVideoState {
     }
   }
 
-  fun restoreEntry(entry: VideoPageEntry, playerSession: AppRootPlayerSessionState) {
+  fun restoreEntry(
+    entry: VideoPageEntry,
+    playerSession: AppRootPlayerSessionState,
+    currentAccountMid: Long,
+  ) {
+    val restoreAccountState =
+      currentAccountMid > 0L &&
+        entry.engagementAccountMid == currentAccountMid &&
+        entry.engagement.loaded
     videoRecommendations = entry.recommendations
     videoInfo = entry.info
-    videoEngagement = entry.engagement
-    favoriteFolders = entry.favoriteFolders
+    videoEngagement = if (restoreAccountState) entry.engagement else VideoEngagement()
+    videoEngagementAccountMid = if (restoreAccountState) currentAccountMid else 0L
+    favoriteFolders = if (restoreAccountState) entry.favoriteFolders else emptyList()
     videoDescription = entry.description
     onlineViewerText = entry.onlineViewerText
     commentItems = entry.comments
@@ -729,6 +806,7 @@ internal class AppRootVideoState {
     videoDescription = ""
     videoInfo = null
     videoEngagement = VideoEngagement()
+    videoEngagementAccountMid = 0L
     favoriteFolders = emptyList()
     favoriteFoldersLoading = false
     videoActionBusy = false
@@ -770,16 +848,20 @@ internal class AppRootVideoState {
       try {
         val entry =
           withContext(Dispatchers.IO) {
-            coroutineScope {
-              val bvid = BiliApi.resolveVideoBvid(item.videoUrl)
+            val cached = OfflineMediaManager.resolveLoadedEntry(item.videoUrl)
+            val cachedDanmaku = cached?.let(OfflineMediaManager::loadLoadedDanmaku).orEmpty()
+            val bvid = cached?.bvid?.takeIf(String::isNotBlank) ?: BiliApi.resolveVideoBvid(item.videoUrl)
+            val onlineEntry =
+              runCatching {
+                coroutineScope {
               val recommendationsDeferred = async {
                 runCatching { BiliApi.getRelated(bvid) }
                   .getOrDefault(emptyList())
                   .map(::feedItemFromCard)
               }
-              val info = BiliApi.getVideoInfo(bvid)
+              val info = BiliApi.getVideoInfo(bvid) ?: error("视频资料暂时不可用")
               val commentsDeferred = async {
-                info?.let { runCatching { BiliApi.getComments(it.aid, 1) }.getOrNull() }
+                runCatching { BiliApi.getComments(info.aid, 1) }.getOrNull()
               }
               val comments = commentsDeferred.await()
               VideoPageEntry(
@@ -788,23 +870,27 @@ internal class AppRootVideoState {
                 info = info,
                 engagement = VideoEngagement(),
                 favoriteFolders = emptyList(),
-                description = info?.desc.orEmpty(),
+                description = info.desc,
                 onlineViewerText = null,
                 comments = comments?.items.orEmpty(),
-                commentTotalCount = comments?.totalCount ?: info?.replyCount ?: 0L,
+                commentTotalCount = comments?.totalCount ?: info.replyCount,
                 commentPage = 1,
                 commentHasMore = comments?.hasMore == true,
-                commentOid = info?.aid ?: 0L,
-                danmaku = emptyList(),
+                commentOid = info.aid,
+                danmaku = cachedDanmaku,
                 danmakuMask = null,
                 emotes = emptyList(),
-                cid = info?.cid ?: 0L,
-                durationSeconds = info?.durationSeconds ?: 0L,
+                cid = cached?.cid ?: info.cid,
+                durationSeconds = cached?.durationMs?.div(1_000L) ?: info.durationSeconds,
                 savedPositionMs = 0L,
                 qualityIndex = 0,
                 dataReady = true,
               )
             }
+              }
+                .getOrNull()
+            onlineEntry ?: cached?.let { offlineVideoPageEntry(item, it, cachedDanmaku) }
+              ?: error("视频资料加载失败")
           }
         cacheEntry(entry, selectedVideoId())
         if (selectedVideoId() == item.id && dataCommitAllowedId() == item.id) onRestore(entry)
@@ -817,6 +903,65 @@ internal class AppRootVideoState {
       }
     }
   }
+}
+
+private fun offlineVideoPageEntry(
+  item: FeedItem,
+  cached: dev.openbili.webdemo.offline.OfflineMediaEntry,
+  cachedDanmaku: List<DanmakuItem>,
+): VideoPageEntry {
+  val info =
+    VideoInfo(
+      bvid = cached.bvid,
+      aid = cached.aid,
+      cid = cached.cid,
+      title = cached.title,
+      coverUrl = item.coverUrl,
+      uploaderName = "",
+      uploaderFace = "",
+      uploaderMid = 0L,
+      durationSeconds = cached.durationMs / 1_000L,
+      playCount = 0L,
+      danmakuCount = cachedDanmaku.size.toLong(),
+      replyCount = 0L,
+      likeCount = 0L,
+      coinCount = 0L,
+      favoriteCount = 0L,
+      shareCount = 0L,
+      publishedAt = 0L,
+      desc = "离线缓存 · ${cached.qualityLabel}",
+      pages =
+        listOf(
+          VideoPage(
+            page = cached.pageNumber,
+            cid = cached.cid,
+            part = cached.partTitle,
+            durationSeconds = cached.durationMs / 1_000L,
+          )
+        ),
+    )
+  return VideoPageEntry(
+    item = item,
+    recommendations = emptyList(),
+    info = info,
+    engagement = VideoEngagement(),
+    favoriteFolders = emptyList(),
+    description = info.desc,
+    onlineViewerText = null,
+    comments = emptyList(),
+    commentTotalCount = 0L,
+    commentPage = 1,
+    commentHasMore = false,
+    commentOid = 0L,
+    danmaku = cachedDanmaku,
+    danmakuMask = null,
+    emotes = emptyList(),
+    cid = cached.cid,
+    durationSeconds = cached.durationMs / 1_000L,
+    savedPositionMs = 0L,
+    qualityIndex = 0,
+    dataReady = true,
+  )
 }
 
 private fun uploadCommentImage(context: Context, uri: Uri): BiliApi.PrivateImageUpload {

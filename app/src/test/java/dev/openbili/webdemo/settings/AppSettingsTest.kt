@@ -35,15 +35,59 @@ class AppSettingsTest {
   }
 
   @Test
+  fun `pausing when leaving the app defaults to enabled`() {
+    assertTrue(AppSettings().pauseWhenLeavingApp)
+  }
+
+  @Test
+  fun `subtitles default to off until the user opts in`() {
+    val settings = AppSettings()
+
+    assertFalse(settings.defaultShowSubtitles)
+    assertEquals(.5f, settings.subtitleStyle.backgroundOpacity)
+    assertEquals(1f, settings.subtitleStyle.textOpacity)
+    assertEquals(1f, settings.subtitleStyle.fontScale)
+    assertEquals(0xFFFFFF, settings.subtitleStyle.textColor)
+    assertEquals(SubtitleHorizontalPosition.CENTER, settings.subtitleStyle.horizontalPosition)
+  }
+
+  @Test
+  fun `image loading speed is unrestricted by default`() {
+    assertFalse(AppSettings().limitImageLoadingSpeed)
+  }
+
+  @Test
+  fun `returning from search clears the query by default`() {
+    assertFalse(AppSettings().retainLastSearchQuery)
+  }
+
+  @Test
+  fun `new layout and page background settings use safe defaults`() {
+    val settings = AppSettings()
+
+    assertEquals(3, settings.homeGridColumns)
+    assertTrue(settings.showPlaybackDeviceStatus)
+    assertTrue(settings.homeBackgroundUri.isEmpty())
+    assertTrue(settings.videoBackgroundUri.isEmpty())
+    assertTrue(settings.startupMaskUri.isEmpty())
+    assertEquals(0L, settings.musicFavoriteFolderId)
+    assertFalse(settings.musicFavoriteFolderConfigured)
+    assertEquals(PreferredResolutionMode.ULTRA_HIGH, settings.musicPreferredResolutionMode)
+    assertEquals(.6f, settings.homeBackgroundTransparency)
+    assertEquals(.6f, settings.videoBackgroundTransparency)
+  }
+
+  @Test
   fun `video and live danmaku settings are independent`() {
     val videoChanged =
-      AppSettings().copy(
-        defaultShowDanmaku = false,
-        danmakuDisplayArea = .25f,
-        danmakuOpacity = .2f,
-        danmakuFontScale = .7f,
-        danmakuSpeed = .6f,
-      )
+      AppSettings()
+        .copy(
+          defaultShowDanmaku = false,
+          danmakuDisplayArea = .25f,
+          danmakuOpacity = .2f,
+          danmakuFontScale = .7f,
+          danmakuSpeed = .6f,
+        )
 
     assertFalse(videoChanged.defaultShowDanmaku)
     assertTrue(videoChanged.liveShowDanmaku)
@@ -53,13 +97,14 @@ class AppSettingsTest {
     assertEquals(1f, videoChanged.liveDanmakuSpeed)
 
     val liveChanged =
-      AppSettings().copy(
-        liveShowDanmaku = false,
-        liveDanmakuDisplayArea = .25f,
-        liveDanmakuOpacity = .2f,
-        liveDanmakuFontScale = .7f,
-        liveDanmakuSpeed = .6f,
-      )
+      AppSettings()
+        .copy(
+          liveShowDanmaku = false,
+          liveDanmakuDisplayArea = .25f,
+          liveDanmakuOpacity = .2f,
+          liveDanmakuFontScale = .7f,
+          liveDanmakuSpeed = .6f,
+        )
 
     assertTrue(liveChanged.defaultShowDanmaku)
     assertEquals(.75f, liveChanged.danmakuDisplayArea)
@@ -92,10 +137,11 @@ class AppSettingsTest {
       SimAvailability.PRESENT,
       classifySimAvailability(
         hasTelephony = true,
-        simStates = listOf(
-          TelephonyManager.SIM_STATE_ABSENT,
-          TelephonyManager.SIM_STATE_READY,
-        ),
+        simStates =
+          listOf(
+            TelephonyManager.SIM_STATE_ABSENT,
+            TelephonyManager.SIM_STATE_READY,
+          ),
       ),
     )
   }

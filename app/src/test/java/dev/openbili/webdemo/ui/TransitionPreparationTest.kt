@@ -22,6 +22,34 @@ class TransitionPreparationTest {
   }
 
   @Test
+  fun recommendationCoverFlightSuppressesTopSurfaceDanmaku() {
+    assertFalse(
+      shouldSuppressDanmakuForCardTransition(
+        TransitionKind.ENTER_RECOMMENDATION,
+        SessionPhase.PREPARING,
+      )
+    )
+    assertTrue(
+      shouldSuppressDanmakuForCardTransition(
+        TransitionKind.ENTER_RECOMMENDATION,
+        SessionPhase.READY,
+      )
+    )
+    assertTrue(
+      shouldSuppressDanmakuForCardTransition(
+        TransitionKind.ENTER_RECOMMENDATION,
+        SessionPhase.FLYING,
+      )
+    )
+    assertFalse(
+      shouldSuppressDanmakuForCardTransition(
+        TransitionKind.ENTER_ROOT,
+        SessionPhase.FLYING,
+      )
+    )
+  }
+
+  @Test
   fun rootExitKeepsVideoPageHiddenWhileCoverFliesHome() {
     assertFalse(shouldHideVideoPageBehindExitCover(TransitionKind.EXIT_ROOT, SessionPhase.READY))
     assertTrue(shouldHideVideoPageBehindExitCover(TransitionKind.EXIT_ROOT, SessionPhase.FLYING))
@@ -33,6 +61,125 @@ class TransitionPreparationTest {
     )
     assertFalse(
       shouldHideVideoPageBehindExitCover(TransitionKind.EXIT_RECOMMENDATION, SessionPhase.FLYING)
+    )
+  }
+
+  @Test
+  fun rootEntryBackdropCoversAllRootPlaybackButNotNestedRecommendations() {
+    assertTrue(shouldUseRootVideoEntryBackdrop(kind = TransitionKind.ENTER_ROOT))
+    assertFalse(shouldUseRootVideoEntryBackdrop(kind = TransitionKind.ENTER_RECOMMENDATION))
+
+    assertEquals(0f, rootVideoEntryContentAlpha(SessionPhase.READY))
+    assertEquals(0f, rootVideoEntryContentAlpha(SessionPhase.FLYING))
+    assertEquals(1f, rootVideoEntryContentAlpha(SessionPhase.REVEALING_BACKGROUND))
+    assertEquals(1f, rootVideoEntryContentAlpha(SessionPhase.WAITING_FIRST_FRAME))
+    assertEquals(
+      .15625f,
+      rootVideoEntryContentAlpha(SessionPhase.REVEALING_BACKGROUND, .25f),
+    )
+  }
+
+  @Test
+  fun profileBangumiKeepsLightweightPosterTargetMountedUntilFlightLands() {
+    listOf(SessionPhase.PREPARING, SessionPhase.READY, SessionPhase.FLYING).forEach { phase ->
+      assertTrue(
+        shouldUseProfileBangumiTransitionTarget(
+          sourceProfileEntryId = 7L,
+          kind = TransitionKind.ENTER_PROFILE,
+          phase = phase,
+        )
+      )
+    }
+    assertFalse(
+      shouldUseProfileBangumiTransitionTarget(
+        sourceProfileEntryId = 7L,
+        kind = TransitionKind.ENTER_PROFILE,
+        phase = SessionPhase.REVEALING_BACKGROUND,
+      )
+    )
+    assertFalse(
+      shouldUseProfileBangumiTransitionTarget(
+        sourceProfileEntryId = 0L,
+        kind = TransitionKind.ENTER_PROFILE,
+        phase = SessionPhase.PREPARING,
+      )
+    )
+    assertFalse(
+      shouldUseProfileBangumiTransitionTarget(
+        sourceProfileEntryId = 7L,
+        kind = TransitionKind.ENTER_ROOT,
+        phase = SessionPhase.PREPARING,
+      )
+    )
+  }
+
+  @Test
+  fun entryWaitsHaveHardInteractionBounds() {
+    assertTrue(MAIN_QUEUE_IDLE_WAIT_TIMEOUT_MS in 1L..499L)
+    assertTrue(NAVIGATION_BRING_INTO_VIEW_TIMEOUT_MS in 1L..499L)
+  }
+
+  @Test
+  fun enteringVideoDefersAuxiliaryPanelsUntilCoverHasLanded() {
+    assertTrue(
+      shouldDeferVideoAuxiliaryContent(
+        preparingRootEnter = false,
+        kind = TransitionKind.ENTER_ROOT,
+        phase = SessionPhase.FLYING,
+      )
+    )
+    assertFalse(
+      shouldDeferVideoAuxiliaryContent(
+        preparingRootEnter = false,
+        kind = TransitionKind.ENTER_ROOT,
+        phase = SessionPhase.REVEALING_BACKGROUND,
+      )
+    )
+    assertFalse(
+      shouldDeferVideoAuxiliaryContent(
+        preparingRootEnter = false,
+        kind = TransitionKind.ENTER_RECOMMENDATION,
+        phase = SessionPhase.FLYING,
+      )
+    )
+    assertFalse(
+      shouldDeferVideoAuxiliaryContent(
+        preparingRootEnter = false,
+        kind = TransitionKind.EXIT_ROOT,
+        phase = SessionPhase.FLYING,
+      )
+    )
+    assertTrue(
+      shouldDeferVideoAuxiliaryContent(
+        preparingRootEnter = true,
+        kind = null,
+        phase = null,
+      )
+    )
+  }
+
+  @Test
+  fun rootEntryStagesCommentsWithoutChangingRecommendationNavigation() {
+    assertTrue(
+      shouldDeferVideoCommentContent(
+        deferAllAuxiliaryContent = false,
+        kind = TransitionKind.ENTER_ROOT,
+        deferRootEnterComments = true,
+      )
+    )
+    assertFalse(
+      shouldDeferVideoCommentContent(
+        deferAllAuxiliaryContent = false,
+        kind = TransitionKind.ENTER_ROOT,
+        deferRootEnterComments = false,
+      )
+    )
+    assertFalse(
+      shouldDeferVideoCommentContent(
+        deferAllAuxiliaryContent = false,
+        kind = TransitionKind.ENTER_RECOMMENDATION,
+        deferRootEnterComments = true,
+      )
     )
   }
 

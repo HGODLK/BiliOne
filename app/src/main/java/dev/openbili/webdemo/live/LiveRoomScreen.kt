@@ -4,6 +4,7 @@ import android.app.Activity
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
@@ -52,6 +53,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -61,6 +63,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -124,6 +127,8 @@ import dev.openbili.webdemo.video.GestureIndicator
 import dev.openbili.webdemo.video.GestureIndicatorOverlay
 import dev.openbili.webdemo.video.PlaybackHeader
 import dev.openbili.webdemo.video.PlaybackHeaderUiModel
+import dev.openbili.webdemo.video.PlaybackPageGlassBackdrop
+import dev.openbili.webdemo.video.PlaybackPageGlassSurface
 import dev.openbili.webdemo.video.PlayerGestureLayer
 import dev.openbili.webdemo.video.RecommendationCard
 import dev.openbili.webdemo.video.floatingPlayerLayout
@@ -132,9 +137,10 @@ import dev.openbili.webdemo.video.videoPageLayoutForPane
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 @Composable
-fun LiveRoomScreen(
+internal fun LiveRoomScreen(
   entry: LiveSearchRoom,
   navigationEntryId: Long = 0L,
   account: UserInfo,
@@ -144,6 +150,7 @@ fun LiveRoomScreen(
   onStopPlayback: (Long) -> Unit,
   onSeekLiveEdge: () -> Unit,
   onFullscreenTransitionChanged: (Boolean) -> Unit = {},
+  pageTransitionSuppressed: Boolean = false,
   onBack: () -> Unit,
   onHome: () -> Unit,
   onLogin: () -> Unit,
@@ -154,6 +161,9 @@ fun LiveRoomScreen(
   settings: AppSettings,
   onSettingsChange: ((AppSettings) -> AppSettings) -> Unit,
   onPlayerBoundsChanged: (Rect) -> Unit = {},
+  headerForegroundColor: Color = MaterialTheme.colorScheme.onBackground,
+  contentForegroundColor: Color = MaterialTheme.colorScheme.onBackground,
+  glassBackdrop: PlaybackPageGlassBackdrop = PlaybackPageGlassBackdrop(),
   active: Boolean = true,
   viewModel: LiveRoomViewModel = viewModel(),
 ) {
@@ -167,7 +177,16 @@ fun LiveRoomScreen(
   val fullscreenScope = rememberCoroutineScope()
   var fullscreenTransitionBusy by remember(entry.roomId) { mutableStateOf(false) }
   var fullscreenLayerVisible by remember(entry.roomId) { mutableStateOf(false) }
+  var recommendationTransitionRequested by
+    remember(entry.roomId, navigationEntryId) { mutableStateOf(false) }
   var embeddedPlayerBounds by remember(entry.roomId) { mutableStateOf(Rect.Zero) }
+
+  LaunchedEffect(recommendationTransitionRequested, pageTransitionSuppressed) {
+    if (recommendationTransitionRequested && !pageTransitionSuppressed) {
+      delay(300L)
+      if (!pageTransitionSuppressed) recommendationTransitionRequested = false
+    }
+  }
   var frozenEmbeddedPlayerBounds by remember(entry.roomId) { mutableStateOf(Rect.Zero) }
   var showInfo by remember(entry.roomId) { mutableStateOf(false) }
   val showDanmaku = settings.liveShowDanmaku
@@ -248,18 +267,19 @@ fun LiveRoomScreen(
     danmakuBlockWords = LiveDanmakuBlockWordsStore.read(context, danmakuBlockRoomId)
   }
 
-  LaunchedEffect(entry.roomId, navigationEntryId) {
+  LaunchedEffect(entry.roomId, navigationEntryId, active) {
     if (
-      state.entryRoomId != entry.roomId ||
-        state.navigationEntryId != navigationEntryId ||
-        state.roomInfo == null
+      active &&
+        (state.entryRoomId != entry.roomId ||
+          state.navigationEntryId != navigationEntryId ||
+          state.roomInfo == null)
     ) {
       viewModel.open(entry, navigationEntryId)
     }
     viewModel.setForeground(active)
   }
-  LaunchedEffect(secondaryTab) {
-    if (secondaryTab == LiveSecondaryTab.RANK) viewModel.ensureRankLoaded()
+  LaunchedEffect(secondaryTab, active) {
+    if (active && secondaryTab == LiveSecondaryTab.RANK) viewModel.ensureRankLoaded()
   }
   LaunchedEffect(active) {
     viewModel.setForeground(active)
@@ -274,8 +294,8 @@ fun LiveRoomScreen(
   val source = state.playback?.sources?.getOrNull(state.activeSourceIndex)
   val realRoomId = state.roomInfo?.roomId ?: entry.roomId
   val latestRealRoomId by rememberUpdatedState(realRoomId)
-  LaunchedEffect(realRoomId, state.playback?.currentQn, state.activeSourceIndex, source) {
-    source?.let { onPlaySource(realRoomId, it) }
+  LaunchedEffect(realRoomId, state.playback?.currentQn, state.activeSourceIndex, source, active) {
+    if (active) source?.let { onPlaySource(realRoomId, it) }
   }
   DisposableEffect(entry.roomId) {
     onDispose {
@@ -366,7 +386,8 @@ fun LiveRoomScreen(
       }
       .joinToString("  ·  ")
 
-  Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+  Box(Modifier.fillMaxSize()) {
+  Surface(Modifier.fillMaxSize(), color = Color.Transparent) {
     Box(Modifier.fillMaxSize()) {
       Column(Modifier.fillMaxSize()) {
         PlaybackHeader(
@@ -396,6 +417,9 @@ fun LiveRoomScreen(
           onUnfollow = viewModel::unfollow,
           onLogin = onLogin,
           onShowInfo = { showInfo = true },
+          showDeviceStatus = settings.showPlaybackDeviceStatus,
+          foregroundColor = headerForegroundColor,
+          glassBackdrop = glassBackdrop,
         )
         AdaptiveVideoPanes(
           modifier = Modifier.fillMaxSize().padding(12.dp),
@@ -414,7 +438,10 @@ fun LiveRoomScreen(
               danmaku = renderedLiveDanmaku,
               danmakuStartedAtElapsedMs = danmakuStartedAtElapsedMs,
               danmakuRenderingEnabled = danmakuRenderStartPositionMs != null,
-              danmakuTransitionSuppressed = fullscreenTransitionBusy,
+              danmakuTransitionSuppressed =
+                fullscreenTransitionBusy ||
+                  pageTransitionSuppressed ||
+                  recommendationTransitionRequested,
               settings = settings,
               onSettingsChange = onSettingsChange,
               onPlayerBoundsChanged = { bounds ->
@@ -429,10 +456,14 @@ fun LiveRoomScreen(
               onPlaybackError = viewModel::onPlaybackError,
               onPlaybackReady = viewModel::onPlaybackReady,
               onSeekLiveEdge = onSeekLiveEdge,
-              onRecommendedRoom = onRecommendedRoom,
+              onRecommendedRoom = { room, bounds ->
+                recommendationTransitionRequested = true
+                onRecommendedRoom(room, bounds)
+              },
               onRecommendedRoomBoundsChanged = onRecommendedRoomBoundsChanged,
               hiddenRecommendationCoverItemId = hiddenRecommendationCoverItemId,
               onRetryRecommendations = viewModel::retryRecommendations,
+              foregroundColor = contentForegroundColor,
             )
           },
           secondary = {
@@ -452,6 +483,8 @@ fun LiveRoomScreen(
               onAudienceRank = viewModel::selectAudienceRank,
               onGuardType = viewModel::selectGuardType,
               onLoadMoreGuards = viewModel::loadMoreGuards,
+              foregroundColor = contentForegroundColor,
+              glassBackdrop = glassBackdrop,
             )
           },
         )
@@ -478,7 +511,10 @@ fun LiveRoomScreen(
           danmaku = renderedLiveDanmaku,
           danmakuStartedAtElapsedMs = danmakuStartedAtElapsedMs,
           danmakuRenderingEnabled = danmakuRenderStartPositionMs != null,
-          danmakuTransitionSuppressed = fullscreenTransitionBusy,
+          danmakuTransitionSuppressed =
+            fullscreenTransitionBusy ||
+              pageTransitionSuppressed ||
+              recommendationTransitionRequested,
           settings = settings,
           onSettingsChange = onSettingsChange,
           fullscreen = true,
@@ -506,6 +542,7 @@ fun LiveRoomScreen(
         )
       }
     }
+  }
   }
 
   if (showInfo) {
@@ -561,7 +598,13 @@ private fun LivePrimaryPane(
   onRecommendedRoomBoundsChanged: (LiveSearchRoom, Rect) -> Unit,
   hiddenRecommendationCoverItemId: String?,
   onRetryRecommendations: () -> Unit,
+  foregroundColor: Color,
 ) {
+  Surface(
+    modifier = Modifier.fillMaxSize(),
+    color = Color.Transparent,
+    contentColor = foregroundColor,
+  ) {
   BoxWithConstraints(Modifier.fillMaxSize()) {
     val pageLayout = videoPageLayoutForPane(maxWidth.value, maxHeight.value)
     val playerHeight = pageLayout.playerHeight.coerceAtLeast(96.dp)
@@ -615,9 +658,11 @@ private fun LivePrimaryPane(
         cardWidth = pageLayout.recommendationCardWidth,
         compactHorizontal = pageLayout.compactHorizontalRecommendations,
         compactHeight = pageLayout.compactRecommendationCardHeight,
+        foregroundColor = foregroundColor,
         modifier = Modifier.fillMaxWidth().weight(1f),
       )
     }
+  }
   }
 }
 
@@ -721,7 +766,7 @@ private fun LivePlayerCard(
       ),
     shape = if (fullscreen) RoundedCornerShape(0.dp) else VideoShapeTokens.Player,
     color = Color.Black,
-    shadowElevation = if (fullscreen) 0.dp else 5.dp,
+    shadowElevation = 0.dp,
   ) {
     Box(Modifier.fillMaxSize()) {
       playerView(Modifier.fillMaxSize(), fullscreenProgress, fullscreen)
@@ -793,6 +838,7 @@ private fun LivePlayerCard(
           fullscreen = fullscreen,
           opacity = settings.liveDanmakuOpacity,
           displayArea = settings.liveDanmakuDisplayArea,
+          densityLevel = settings.danmakuDensity,
           fontScale = settings.liveDanmakuFontScale,
           speed = settings.liveDanmakuSpeed,
           positionEpoch = state.generation,
@@ -947,8 +993,20 @@ private fun LivePlayerCard(
                   onValueChange = { value ->
                     onSettingsChange { it.copy(liveDanmakuDisplayArea = value) }
                   },
-                  valueRange = .25f..1f,
-                  steps = 2,
+                  valueRange = .1f..1f,
+                  steps = 8,
+                )
+                Text(
+                  "弹幕密度  ${settings.danmakuDensity} 级",
+                  style = MaterialTheme.typography.labelMedium,
+                )
+                Slider(
+                  value = settings.danmakuDensity.toFloat(),
+                  onValueChange = { value ->
+                    onSettingsChange { it.copy(danmakuDensity = value.roundToInt()) }
+                  },
+                  valueRange = 1f..5f,
+                  steps = 3,
                 )
                 Text(
                   "不透明度  ${(settings.liveDanmakuOpacity * 100).toInt()}%",
@@ -1020,6 +1078,7 @@ private fun LiveDanmakuLayer(
   fullscreen: Boolean,
   opacity: Float,
   displayArea: Float,
+  densityLevel: Int,
   fontScale: Float,
   speed: Float,
   positionEpoch: Long,
@@ -1039,7 +1098,7 @@ private fun LiveDanmakuLayer(
         highDynamicRange = false,
         opacity = opacity,
         displayArea = displayArea,
-        densityLevel = LIVE_DANMAKU_DENSITY,
+        densityLevel = densityLevel,
         blockLevel = 1,
         fontScale = fontScale,
         speed = speed,
@@ -1068,8 +1127,10 @@ private fun LiveRecommendationSection(
   cardWidth: androidx.compose.ui.unit.Dp,
   compactHorizontal: Boolean,
   compactHeight: androidx.compose.ui.unit.Dp,
+  foregroundColor: Color,
   modifier: Modifier = Modifier,
 ) {
+  CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides foregroundColor) {
   Column(
     modifier = modifier,
     verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -1095,7 +1156,7 @@ private fun LiveRecommendationSection(
             TextButton(onClick = onRetry) { Text("重试") }
           }
         state.recommendations.isEmpty() ->
-          Text("暂时没有更多推荐", color = MaterialTheme.colorScheme.onSurfaceVariant)
+          Text("暂时没有更多推荐", color = foregroundColor.copy(alpha = .72f))
         else ->
           LazyRow(
             modifier = Modifier.fillMaxSize(),
@@ -1127,6 +1188,7 @@ private fun LiveRecommendationSection(
       }
     }
   }
+  }
 }
 
 private data class AudienceRankOption(
@@ -1154,14 +1216,16 @@ private fun LiveRankSection(
   onAudienceRank: (String, String) -> Unit,
   onGuardType: (Int) -> Unit,
   onLoadMoreGuards: () -> Unit,
+  foregroundColor: Color,
   modifier: Modifier = Modifier,
 ) {
   Surface(
     modifier = modifier,
     shape = VideoShapeTokens.Card,
-    color = MaterialTheme.colorScheme.surfaceContainerLow,
-    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    color = Color.Transparent,
+    contentColor = foregroundColor,
   ) {
+    val chipColors = liveAdaptiveFilterChipColors(foregroundColor)
     Column(Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 7.dp)) {
       LazyRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1171,6 +1235,7 @@ private fun LiveRankSection(
           FilterChip(
             selected = state.rankTab == tab,
             onClick = { onRankTab(tab) },
+            colors = chipColors,
             label = {
               val suffix =
                 when (tab) {
@@ -1189,6 +1254,7 @@ private fun LiveRankSection(
                 state.audienceRank.type == option.type &&
                   state.audienceRank.switch == option.switch,
               onClick = { onAudienceRank(option.type, option.switch) },
+              colors = chipColors,
               label = { Text(option.title) },
             )
           }
@@ -1197,6 +1263,7 @@ private fun LiveRankSection(
             FilterChip(
               selected = state.guardRank.typ == type,
               onClick = { onGuardType(type) },
+              colors = chipColors,
               label = { Text(label) },
             )
           }
@@ -1215,7 +1282,7 @@ private fun LiveRankSection(
         when {
           loading -> CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
           error != null && users.isEmpty() -> Text(error, color = MaterialTheme.colorScheme.error)
-          users.isEmpty() -> Text("暂时没有榜单数据", color = MaterialTheme.colorScheme.onSurfaceVariant)
+          users.isEmpty() -> Text("暂时没有榜单数据", color = foregroundColor.copy(alpha = .72f))
           else ->
             LazyRow(
               modifier = Modifier.fillMaxSize(),
@@ -1223,7 +1290,7 @@ private fun LiveRankSection(
               horizontalArrangement = Arrangement.spacedBy(9.dp),
             ) {
               itemsIndexed(users, key = { _, user -> user.uid }) { index, user ->
-                LiveRankUserCard(user)
+                LiveRankUserCard(user, foregroundColor)
                 if (state.rankTab == LiveRankTab.GUARD && index >= users.lastIndex - 3) {
                   LaunchedEffect(user.uid, state.guardRank.nextPage) { onLoadMoreGuards() }
                 }
@@ -1243,12 +1310,13 @@ private fun LiveRankSection(
 }
 
 @Composable
-private fun LiveRankUserCard(user: LiveRankUser) {
+private fun LiveRankUserCard(user: LiveRankUser, foregroundColor: Color) {
   Surface(
     modifier = Modifier.width(188.dp).fillMaxHeight(),
     shape = RoundedCornerShape(16.dp),
-    color = MaterialTheme.colorScheme.surface,
-    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    color = MaterialTheme.colorScheme.surface.copy(alpha = .26f),
+    contentColor = foregroundColor,
+    border = BorderStroke(1.dp, foregroundColor.copy(alpha = .16f)),
   ) {
     Row(
       Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 8.dp),
@@ -1296,7 +1364,7 @@ private fun LiveRankUserCard(user: LiveRankUser) {
           Text(
             it,
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = foregroundColor.copy(alpha = .72f),
             maxLines = 1,
           )
         }
@@ -1322,16 +1390,32 @@ private fun LiveSecondaryPane(
   onAudienceRank: (String, String) -> Unit,
   onGuardType: (Int) -> Unit,
   onLoadMoreGuards: () -> Unit,
+  foregroundColor: Color,
+  glassBackdrop: PlaybackPageGlassBackdrop,
 ) {
+  val animatedForeground by
+    animateColorAsState(foregroundColor, tween(220), label = "liveSecondaryForeground")
+  val chipColors = liveAdaptiveFilterChipColors(animatedForeground)
+  PlaybackPageGlassSurface(
+    backdrop = glassBackdrop,
+    modifier = Modifier.fillMaxSize(),
+    shape = VideoShapeTokens.Card,
+    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = .18f),
+    fallbackColor = MaterialTheme.colorScheme.surface.copy(alpha = .92f),
+    border = BorderStroke(1.dp, animatedForeground.copy(alpha = .18f)),
+    blurRadius = 18.dp,
+  ) {
+  CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides animatedForeground) {
   Column(
-    Modifier.fillMaxSize(),
+    Modifier.fillMaxSize().padding(8.dp),
     verticalArrangement = Arrangement.spacedBy(8.dp),
   ) {
     Surface(
       modifier = Modifier.fillMaxWidth(),
       shape = RoundedCornerShape(18.dp),
-      color = MaterialTheme.colorScheme.surfaceContainerLow,
-      border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+      color = MaterialTheme.colorScheme.surface.copy(alpha = .18f),
+      contentColor = animatedForeground,
+      border = BorderStroke(1.dp, animatedForeground.copy(alpha = .14f)),
     ) {
       Row(
         Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 5.dp),
@@ -1341,6 +1425,7 @@ private fun LiveSecondaryPane(
           FilterChip(
             selected = selectedTab == tab,
             onClick = { onSelectedTabChange(tab) },
+            colors = chipColors,
             label = { Text(tab.title) },
           )
         }
@@ -1359,6 +1444,7 @@ private fun LiveSecondaryPane(
             onEmoji = onEmoji,
             onJoinLottery = onJoinLottery,
             onLogin = onLogin,
+            foregroundColor = animatedForeground,
           )
         LiveSecondaryTab.RANK ->
           LiveRankSection(
@@ -1367,10 +1453,13 @@ private fun LiveSecondaryPane(
             onAudienceRank = onAudienceRank,
             onGuardType = onGuardType,
             onLoadMoreGuards = onLoadMoreGuards,
+            foregroundColor = animatedForeground,
             modifier = Modifier.fillMaxSize(),
           )
       }
     }
+  }
+  }
   }
 }
 
@@ -1385,6 +1474,7 @@ private fun LiveMessagePane(
   onEmoji: (LiveEmoji) -> Unit,
   onJoinLottery: () -> Unit,
   onLogin: () -> Unit,
+  foregroundColor: Color,
 ) {
   val listState = rememberLazyListState()
   val lastMessageId = state.messages.lastOrNull()?.stableId
@@ -1396,9 +1486,9 @@ private fun LiveMessagePane(
   Surface(
     Modifier.fillMaxSize(),
     shape = VideoShapeTokens.Card,
-    color = MaterialTheme.colorScheme.background,
+    color = Color.Transparent,
+    contentColor = foregroundColor,
     tonalElevation = 2.dp,
-    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
   ) {
     Column(Modifier.fillMaxSize()) {
       LiveMessageHeader(state.connectionError)
@@ -1409,13 +1499,14 @@ private fun LiveMessagePane(
         verticalArrangement = Arrangement.spacedBy(7.dp),
       ) {
         items(state.messages, key = LiveChatMessage::stableId) { message ->
-          LiveMessageCard(message)
+          LiveMessageCard(message, foregroundColor)
         }
       }
       state.interactiveLottery?.let { lottery ->
         LiveInteractiveLotteryCard(
           lottery = lottery,
           onJoin = onJoinLottery,
+          foregroundColor = foregroundColor,
         )
       }
       if (state.composer.emojiPanelVisible) {
@@ -1423,6 +1514,7 @@ private fun LiveMessagePane(
           state = state,
           onSelectPack = onSelectEmojiPack,
           onEmoji = onEmoji,
+          foregroundColor = foregroundColor,
         )
       }
       Box(Modifier.imePadding().navigationBarsPadding()) {
@@ -1433,6 +1525,7 @@ private fun LiveMessagePane(
           onSend = onSend,
           onToggleEmoji = onToggleEmoji,
           onLogin = onLogin,
+          foregroundColor = foregroundColor,
         )
       }
     }
@@ -1462,6 +1555,7 @@ private fun LiveMessageHeader(error: String?) {
 private fun LiveInteractiveLotteryCard(
   lottery: LiveInteractiveLottery,
   onJoin: () -> Unit,
+  foregroundColor: Color,
 ) {
   var remainingMs by remember(lottery.id, lottery.endAtEpochMs) {
     mutableLongStateOf((lottery.endAtEpochMs - System.currentTimeMillis()).coerceAtLeast(0L))
@@ -1492,8 +1586,9 @@ private fun LiveInteractiveLotteryCard(
   Surface(
     modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 5.dp),
     shape = RoundedCornerShape(16.dp),
-    color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = .72f),
-    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = .34f),
+    contentColor = foregroundColor,
+    border = BorderStroke(1.dp, foregroundColor.copy(alpha = .16f)),
   ) {
     Row(
       modifier = Modifier.fillMaxWidth().padding(horizontal = 11.dp, vertical = 9.dp),
@@ -1521,14 +1616,14 @@ private fun LiveInteractiveLotteryCard(
             lottery.command.takeIf(String::isNotBlank) ?: "发送指定弹幕参与"
           },
           style = MaterialTheme.typography.labelSmall,
-          color = MaterialTheme.colorScheme.onTertiaryContainer,
+          color = foregroundColor.copy(alpha = .82f),
           maxLines = 2,
         )
         Text(
           lottery.error ?: statusText,
           style = MaterialTheme.typography.labelSmall,
           color =
-            if (lottery.error == null) MaterialTheme.colorScheme.onSurfaceVariant
+            if (lottery.error == null) foregroundColor.copy(alpha = .72f)
             else MaterialTheme.colorScheme.error,
           maxLines = 2,
         )
@@ -1546,23 +1641,24 @@ private fun LiveInteractiveLotteryCard(
 }
 
 @Composable
-private fun LiveMessageCard(message: LiveChatMessage) {
+private fun LiveMessageCard(message: LiveChatMessage, foregroundColor: Color) {
   val pending = message.delivery is LiveMessageDelivery.Pending
   Surface(
     modifier = Modifier.fillMaxWidth(),
     shape = RoundedCornerShape(16.dp),
     color =
       if (message.content is LiveChatContent.System)
-        MaterialTheme.colorScheme.secondaryContainer.copy(alpha = .58f)
-      else MaterialTheme.colorScheme.surfaceContainerLow,
-    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        MaterialTheme.colorScheme.secondaryContainer.copy(alpha = .38f)
+      else MaterialTheme.colorScheme.surface.copy(alpha = .22f),
+    contentColor = foregroundColor,
+    border = BorderStroke(1.dp, foregroundColor.copy(alpha = .14f)),
   ) {
     if (message.content is LiveChatContent.System) {
       Text(
         message.content.text,
         modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
         style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSecondaryContainer,
+        color = foregroundColor,
       )
     } else {
       Row(
@@ -1648,10 +1744,13 @@ private fun LiveEmojiPanel(
   state: LiveRoomUiState,
   onSelectPack: (String) -> Unit,
   onEmoji: (LiveEmoji) -> Unit,
+  foregroundColor: Color,
 ) {
+  val chipColors = liveAdaptiveFilterChipColors(foregroundColor)
   Surface(
     modifier = Modifier.fillMaxWidth().heightIn(min = 160.dp, max = 236.dp),
-    color = MaterialTheme.colorScheme.surfaceContainer,
+    color = MaterialTheme.colorScheme.surface.copy(alpha = .28f),
+    contentColor = foregroundColor,
     tonalElevation = 4.dp,
   ) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 7.dp)) {
@@ -1660,6 +1759,7 @@ private fun LiveEmojiPanel(
           FilterChip(
             selected = state.composer.selectedEmojiPackId == pack.id,
             onClick = { onSelectPack(pack.id) },
+            colors = chipColors,
             label = {
               Text(
                 when (pack.kind) {
@@ -1732,6 +1832,7 @@ private fun LiveComposer(
   onSend: () -> Unit,
   onToggleEmoji: () -> Unit,
   onLogin: () -> Unit,
+  foregroundColor: Color,
 ) {
   val editorState = rememberTextFieldState()
   val focusRequester = remember { FocusRequester() }
@@ -1778,7 +1879,8 @@ private fun LiveComposer(
   }
   Surface(
     modifier = Modifier.fillMaxWidth(),
-    color = MaterialTheme.colorScheme.surface,
+    color = MaterialTheme.colorScheme.surface.copy(alpha = .28f),
+    contentColor = foregroundColor,
     tonalElevation = 5.dp,
   ) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 9.dp, vertical = 7.dp)) {
@@ -1802,8 +1904,8 @@ private fun LiveComposer(
         Surface(
           modifier = Modifier.weight(1f),
           shape = RoundedCornerShape(16.dp),
-          color = MaterialTheme.colorScheme.surfaceContainerLow,
-          border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+          color = MaterialTheme.colorScheme.surface.copy(alpha = .34f),
+          border = BorderStroke(1.dp, foregroundColor.copy(alpha = .18f)),
         ) {
           CommentTextEditor(
             state = editorState,
@@ -1811,6 +1913,8 @@ private fun LiveComposer(
             emoteMarkers = markerSnapshot.markerToEmote,
             focusRequester = focusRequester,
             enabled = account.isLogin && !state.composer.sending,
+            contentColor = foregroundColor,
+            placeholderColor = foregroundColor.copy(alpha = .68f),
             maxLines = 1,
             modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp, max = 54.dp),
           )
@@ -1847,7 +1951,7 @@ private fun LiveRoomInfoDialog(
       shape = RoundedCornerShape(28.dp),
       color = MaterialTheme.colorScheme.surface,
       tonalElevation = 8.dp,
-      shadowElevation = 18.dp,
+      shadowElevation = 0.dp,
     ) {
       Column(
         Modifier.padding(horizontal = 26.dp, vertical = 22.dp),
@@ -1897,6 +2001,18 @@ private fun liveColor(value: Long?, fallback: Color): Color =
   value?.takeIf { it > 0L }?.let { Color((0xff000000L or (it and 0x00ffffffL)).toInt()) }
     ?: fallback
 
+@Composable
+private fun liveAdaptiveFilterChipColors(foregroundColor: Color) =
+  FilterChipDefaults.filterChipColors(
+    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = .18f),
+    labelColor = foregroundColor,
+    iconColor = foregroundColor,
+    selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = .72f),
+    selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
+    selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimary,
+    selectedTrailingIconColor = MaterialTheme.colorScheme.onPrimary,
+  )
+
 private fun guardLevelName(level: Int): String =
   when (level) {
     1 -> "总督"
@@ -1904,8 +2020,6 @@ private fun guardLevelName(level: Int): String =
     3 -> "舰长"
     else -> "大航海"
   }
-
-private const val LIVE_DANMAKU_DENSITY = 3
 
 private fun Player?.isLiveBuffering(): Boolean =
   this == null || playbackState == Player.STATE_IDLE || playbackState == Player.STATE_BUFFERING

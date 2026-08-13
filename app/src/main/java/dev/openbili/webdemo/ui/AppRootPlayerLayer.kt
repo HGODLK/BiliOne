@@ -169,9 +169,9 @@ internal fun RootPlayerLayer(
         Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = .36f)))
       }
     }
-    // Keep the sole AndroidView mounted after warmup. Parking it off-screen avoids the stale
-    // SurfaceView buffer size seen when a PV-sized host was detached and later reused by a larger
-    // homepage player.
+    // Keep the sole AndroidView mounted after warmup so it can be reused without reinflation. The
+    // idle root host deliberately leaves Media3 unbound; otherwise an old decoder can continue
+    // producing into this one-pixel SurfaceView and exhaust Samsung's buffer queue.
     playerContent(
       SharedPlayerHostConfig(
         modifier = Modifier.fillMaxSize(),
@@ -225,8 +225,8 @@ internal fun RootPlayerLayer(
 }
 
 /**
- * Tracks the last danmaku parameters so we can skip [PlayerView.updateDanmakuOverlay] when nothing
- * has changed across recompositions.
+ * Tracks the last danmaku parameters so the hosted overlay is not updated when nothing changed
+ * across recompositions.
  */
 internal class DanmakuUpdateState {
   private var itemsRef: List<DanmakuItem>? = null

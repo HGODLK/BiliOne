@@ -38,6 +38,20 @@ enum class AdvancedAudioPriority(val title: String, val description: String) {
   HI_RES("优先 HiRes", "优先 HiRes 无损；不可用时自动改用 Dolby"),
 }
 
+enum class SubtitleHorizontalPosition(val label: String) {
+  LEFT("居左"),
+  CENTER("居中"),
+  RIGHT("居右"),
+}
+
+data class SubtitleStyle(
+  val backgroundOpacity: Float = .5f,
+  val textOpacity: Float = 1f,
+  val fontScale: Float = 1f,
+  val textColor: Int = 0xFFFFFF,
+  val horizontalPosition: SubtitleHorizontalPosition = SubtitleHorizontalPosition.CENTER,
+)
+
 internal fun canSelectPreferredResolution(
   mode: PreferredResolutionMode,
   vipActive: Boolean,
@@ -47,6 +61,7 @@ internal fun canSelectPreferredResolution(
 
 data class AppSettings(
   val keepScreenOn: Boolean = true,
+  val pauseWhenLeavingApp: Boolean = true,
   val brightnessGesture: Boolean = true,
   val volumeGesture: Boolean = true,
   val horizontalSeekGesture: Boolean = true,
@@ -55,6 +70,24 @@ data class AppSettings(
   val fullscreenInfoGesture: Boolean = true,
   val reduceMotion: Boolean = false,
   val glassEffects: Boolean = true,
+  val limitImageLoadingSpeed: Boolean = false,
+  val retainLastSearchQuery: Boolean = false,
+  val homeGridColumns: Int = 3,
+  val showPlaybackDeviceStatus: Boolean = true,
+  val homeBackgroundUri: String = "",
+  val videoBackgroundUri: String = "",
+  /** Empty keeps the bundled BiliOne foreground on the local startup warmup mask. */
+  val startupMaskUri: String = "",
+  val homeBackgroundBlur: Boolean = false,
+  val videoBackgroundBlur: Boolean = false,
+  val useHomeBackgroundForMusic: Boolean = false,
+  /** 0 keeps the default behavior: resolve the personal folder whose trimmed title is “音乐”. */
+  val musicFavoriteFolderId: Long = 0L,
+  /** False until the user has explicitly chosen how the music library should be sourced. */
+  val musicFavoriteFolderConfigured: Boolean = false,
+  val useVideoCoverBackground: Boolean = true,
+  val homeBackgroundTransparency: Float = .6f,
+  val videoBackgroundTransparency: Float = .6f,
   /** Brightness of the cover-derived letterbox around fullscreen on-demand video. */
   val fullscreenBackgroundBrightness: Float = 1f,
   val showCommentLocation: Boolean = true,
@@ -64,8 +97,12 @@ data class AppSettings(
   val themeAccent: ThemeAccent = ThemeAccent.CYAN,
   val preferredResolutionMode: PreferredResolutionMode = PreferredResolutionMode.HIGH,
   val cellularPreferredResolutionMode: PreferredResolutionMode = PreferredResolutionMode.MEDIUM,
+  /** Music video is capped at the 1080P+/1080P60 tier even for VIP accounts. */
+  val musicPreferredResolutionMode: PreferredResolutionMode = PreferredResolutionMode.ULTRA_HIGH,
   val autoPlayNext: Boolean = true,
   val autoNextCountdownSeconds: Int = 5,
+  val defaultShowSubtitles: Boolean = false,
+  val subtitleStyle: SubtitleStyle = SubtitleStyle(),
   val defaultShowDanmaku: Boolean = true,
   val danmakuColor: Int = 0xFFFFFF,
   val danmakuColorful: Int = DANMAKU_COLORFUL_NONE,
@@ -84,6 +121,7 @@ data class AppSettings(
   val liveDanmakuSpeed: Float = 1f,
   val unlockDolbyVision: Boolean = false,
   val unlockDolbyAtmos: Boolean = false,
+  val unlockHiRes: Boolean = false,
   val advancedAudioEnabled: Boolean = false,
   val advancedAudioPriority: AdvancedAudioPriority = AdvancedAudioPriority.DOLBY,
 )
@@ -99,6 +137,7 @@ class AppSettingsViewModel(application: Application) : AndroidViewModel(applicat
     prefs
       .edit()
       .putBoolean("keep_screen_on", value.keepScreenOn)
+      .putBoolean("pause_when_leaving_app", value.pauseWhenLeavingApp)
       .putBoolean("brightness_gesture", value.brightnessGesture)
       .putBoolean("volume_gesture", value.volumeGesture)
       .putBoolean("horizontal_seek_gesture", value.horizontalSeekGesture)
@@ -107,6 +146,21 @@ class AppSettingsViewModel(application: Application) : AndroidViewModel(applicat
       .putBoolean("fullscreen_info_gesture", value.fullscreenInfoGesture)
       .putBoolean("reduce_motion", value.reduceMotion)
       .putBoolean("glass_effects", value.glassEffects)
+      .putBoolean("limit_image_loading_speed", value.limitImageLoadingSpeed)
+      .putBoolean("retain_last_search_query", value.retainLastSearchQuery)
+      .putInt("home_grid_columns", value.homeGridColumns.coerceIn(3, 6))
+      .putBoolean("show_playback_device_status", value.showPlaybackDeviceStatus)
+      .putString("home_background_uri", value.homeBackgroundUri)
+      .putString("video_background_uri", value.videoBackgroundUri)
+      .putString("startup_mask_uri", value.startupMaskUri)
+      .putBoolean("home_background_blur", value.homeBackgroundBlur)
+      .putBoolean("video_background_blur", value.videoBackgroundBlur)
+      .putBoolean("use_home_background_for_music", value.useHomeBackgroundForMusic)
+      .putLong("music_favorite_folder_id", value.musicFavoriteFolderId.coerceAtLeast(0L))
+      .putBoolean("music_favorite_folder_configured", value.musicFavoriteFolderConfigured)
+      .putBoolean("use_video_cover_background", value.useVideoCoverBackground)
+      .putFloat("home_background_transparency", value.homeBackgroundTransparency.coerceIn(0f, 1f))
+      .putFloat("video_background_transparency", value.videoBackgroundTransparency.coerceIn(0f, 1f))
       .putFloat(
         "fullscreen_background_brightness",
         value.fullscreenBackgroundBrightness.coerceIn(0f, 1f),
@@ -123,8 +177,18 @@ class AppSettingsViewModel(application: Application) : AndroidViewModel(applicat
         "cellular_preferred_resolution_mode",
         value.cellularPreferredResolutionMode.name,
       )
+      .putString("music_preferred_resolution_mode", value.musicPreferredResolutionMode.name)
       .putBoolean("auto_play_next", value.autoPlayNext)
       .putInt("auto_next_countdown_seconds", value.autoNextCountdownSeconds)
+      .putBoolean("default_show_subtitles", value.defaultShowSubtitles)
+      .putFloat(
+        "subtitle_background_opacity",
+        value.subtitleStyle.backgroundOpacity.coerceIn(0f, 1f),
+      )
+      .putFloat("subtitle_text_opacity", value.subtitleStyle.textOpacity.coerceIn(.1f, 1f))
+      .putFloat("subtitle_font_scale", value.subtitleStyle.fontScale.coerceIn(.4f, 1.8f))
+      .putInt("subtitle_text_color", value.subtitleStyle.textColor and 0xFFFFFF)
+      .putString("subtitle_horizontal_position", value.subtitleStyle.horizontalPosition.name)
       .putBoolean("default_show_danmaku", value.defaultShowDanmaku)
       .putInt("danmaku_color", value.danmakuColor and 0xFFFFFF)
       .putInt(
@@ -133,19 +197,20 @@ class AppSettingsViewModel(application: Application) : AndroidViewModel(applicat
         else DANMAKU_COLORFUL_NONE,
       )
       .putBoolean("danmaku_smart_blocking", value.danmakuSmartBlocking)
-      .putFloat("danmaku_display_area", value.danmakuDisplayArea)
+      .putFloat("danmaku_display_area", value.danmakuDisplayArea.coerceIn(.1f, 1f))
       .putInt("danmaku_density", value.danmakuDensity.coerceIn(1, 5))
       .putInt("danmaku_block_level", value.danmakuBlockLevel.coerceIn(1, 5))
       .putFloat("danmaku_opacity", value.danmakuOpacity)
       .putFloat("danmaku_font_scale", value.danmakuFontScale)
       .putFloat("danmaku_speed", value.danmakuSpeed)
       .putBoolean("live_show_danmaku", value.liveShowDanmaku)
-      .putFloat("live_danmaku_display_area", value.liveDanmakuDisplayArea)
+      .putFloat("live_danmaku_display_area", value.liveDanmakuDisplayArea.coerceIn(.1f, 1f))
       .putFloat("live_danmaku_opacity", value.liveDanmakuOpacity)
       .putFloat("live_danmaku_font_scale", value.liveDanmakuFontScale)
       .putFloat("live_danmaku_speed", value.liveDanmakuSpeed)
       .putBoolean("unlock_dolby_vision", value.unlockDolbyVision)
       .putBoolean("unlock_dolby_atmos", value.unlockDolbyAtmos)
+      .putBoolean("unlock_hi_res", value.unlockHiRes)
       .putBoolean("advanced_audio_enabled", value.advancedAudioEnabled)
       .putString("advanced_audio_priority", value.advancedAudioPriority.name)
       .apply()
@@ -154,6 +219,7 @@ class AppSettingsViewModel(application: Application) : AndroidViewModel(applicat
   private fun read() =
     AppSettings(
       keepScreenOn = prefs.getBoolean("keep_screen_on", true),
+      pauseWhenLeavingApp = prefs.getBoolean("pause_when_leaving_app", true),
       brightnessGesture = prefs.getBoolean("brightness_gesture", true),
       volumeGesture = prefs.getBoolean("volume_gesture", true),
       horizontalSeekGesture = prefs.getBoolean("horizontal_seek_gesture", true),
@@ -167,6 +233,25 @@ class AppSettingsViewModel(application: Application) : AndroidViewModel(applicat
       fullscreenInfoGesture = prefs.getBoolean("fullscreen_info_gesture", true),
       reduceMotion = prefs.getBoolean("reduce_motion", false),
       glassEffects = prefs.getBoolean("glass_effects", true),
+      limitImageLoadingSpeed = prefs.getBoolean("limit_image_loading_speed", false),
+      retainLastSearchQuery = prefs.getBoolean("retain_last_search_query", false),
+      homeGridColumns = prefs.getInt("home_grid_columns", 3).coerceIn(3, 6),
+      showPlaybackDeviceStatus = prefs.getBoolean("show_playback_device_status", true),
+      homeBackgroundUri = prefs.getString("home_background_uri", "").orEmpty(),
+      videoBackgroundUri = prefs.getString("video_background_uri", "").orEmpty(),
+      startupMaskUri = prefs.getString("startup_mask_uri", "").orEmpty(),
+      homeBackgroundBlur = prefs.getBoolean("home_background_blur", false),
+      videoBackgroundBlur = prefs.getBoolean("video_background_blur", false),
+      useHomeBackgroundForMusic = prefs.getBoolean("use_home_background_for_music", false),
+      musicFavoriteFolderId = prefs.getLong("music_favorite_folder_id", 0L).coerceAtLeast(0L),
+      musicFavoriteFolderConfigured =
+        prefs.getBoolean("music_favorite_folder_configured", false) ||
+          prefs.getLong("music_favorite_folder_id", 0L) > 0L,
+      useVideoCoverBackground = prefs.getBoolean("use_video_cover_background", true),
+      homeBackgroundTransparency =
+        prefs.getFloat("home_background_transparency", .6f).coerceIn(0f, 1f),
+      videoBackgroundTransparency =
+        prefs.getFloat("video_background_transparency", .6f).coerceIn(0f, 1f),
       fullscreenBackgroundBrightness =
         prefs.getFloat("fullscreen_background_brightness", 1f).coerceIn(0f, 1f),
       showCommentLocation = prefs.getBoolean("comment_location", true),
@@ -198,18 +283,40 @@ class AppSettingsViewModel(application: Application) : AndroidViewModel(applicat
             )
           }
           .getOrDefault(PreferredResolutionMode.MEDIUM),
+      musicPreferredResolutionMode =
+        runCatching {
+            PreferredResolutionMode.valueOf(
+              prefs.getString("music_preferred_resolution_mode", null).orEmpty()
+            )
+          }
+          .getOrDefault(PreferredResolutionMode.ULTRA_HIGH),
       autoPlayNext = prefs.getBoolean("auto_play_next", true),
       autoNextCountdownSeconds = prefs.getInt("auto_next_countdown_seconds", 5).coerceIn(3, 10),
+      defaultShowSubtitles = prefs.getBoolean("default_show_subtitles", false),
+      subtitleStyle =
+        SubtitleStyle(
+          backgroundOpacity = prefs.getFloat("subtitle_background_opacity", .5f).coerceIn(0f, 1f),
+          textOpacity = prefs.getFloat("subtitle_text_opacity", 1f).coerceIn(.1f, 1f),
+          fontScale = prefs.getFloat("subtitle_font_scale", 1f).coerceIn(.4f, 1.8f),
+          textColor = prefs.getInt("subtitle_text_color", 0xFFFFFF) and 0xFFFFFF,
+          horizontalPosition =
+            runCatching {
+                SubtitleHorizontalPosition.valueOf(
+                  prefs.getString("subtitle_horizontal_position", null).orEmpty()
+                )
+              }
+              .getOrDefault(SubtitleHorizontalPosition.CENTER),
+        ),
       defaultShowDanmaku = prefs.getBoolean("default_show_danmaku", true),
       danmakuFontScale = prefs.getFloat("danmaku_font_scale", 1f).coerceIn(.7f, 1.5f),
-      danmakuSpeed = prefs.getFloat("danmaku_speed", 1f).coerceIn(.6f, 1.8f),
+      danmakuSpeed = prefs.getFloat("danmaku_speed", 1f).coerceIn(.5f, 2f),
       danmakuColor = prefs.getInt("danmaku_color", 0xFFFFFF) and 0xFFFFFF,
       danmakuColorful =
         prefs.getInt("danmaku_colorful", DANMAKU_COLORFUL_NONE).takeIf {
           it == DANMAKU_COLORFUL_VIP_GRADIENT
         } ?: DANMAKU_COLORFUL_NONE,
       danmakuSmartBlocking = prefs.getBoolean("danmaku_smart_blocking", true),
-      danmakuDisplayArea = prefs.getFloat("danmaku_display_area", .75f).coerceIn(.25f, 1f),
+      danmakuDisplayArea = prefs.getFloat("danmaku_display_area", .75f).coerceIn(.1f, 1f),
       danmakuDensity = prefs.getInt("danmaku_density", 3).coerceIn(1, 5),
       danmakuBlockLevel = prefs.getInt("danmaku_block_level", 1).coerceIn(1, 5),
       danmakuOpacity = prefs.getFloat("danmaku_opacity", .72f).coerceIn(.2f, 1f),
@@ -225,7 +332,7 @@ class AppSettingsViewModel(application: Application) : AndroidViewModel(applicat
             "live_danmaku_display_area",
             prefs.getFloat("danmaku_display_area", .75f),
           )
-          .coerceIn(.25f, 1f),
+          .coerceIn(.1f, 1f),
       liveDanmakuOpacity =
         prefs
           .getFloat("live_danmaku_opacity", prefs.getFloat("danmaku_opacity", .72f))
@@ -240,6 +347,7 @@ class AppSettingsViewModel(application: Application) : AndroidViewModel(applicat
           .coerceIn(.6f, 1.8f),
       unlockDolbyVision = prefs.getBoolean("unlock_dolby_vision", false),
       unlockDolbyAtmos = prefs.getBoolean("unlock_dolby_atmos", false),
+      unlockHiRes = prefs.getBoolean("unlock_hi_res", false),
       advancedAudioEnabled = prefs.getBoolean("advanced_audio_enabled", false),
       advancedAudioPriority =
         runCatching {

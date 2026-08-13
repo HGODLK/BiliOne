@@ -12,6 +12,7 @@ data class DeviceMediaCapabilities(
   val supportsHdr10: Boolean,
   val supportsDolbyVision: Boolean,
   val supportsDolbyAtmos: Boolean,
+  val supportsHiRes: Boolean,
 ) {
   companion object {
     fun detect(context: Context): DeviceMediaCapabilities {
@@ -56,10 +57,12 @@ data class DeviceMediaCapabilities(
               .getOrDefault(false)
         }
       val hasAtmosDecoder = codecInfos.supportsMime(MediaFormat.MIMETYPE_AUDIO_EAC3_JOC)
+      val hasHiResDecoder = codecInfos.supportsMime(MediaFormat.MIMETYPE_AUDIO_FLAC)
       return DeviceMediaCapabilities(
         supportsHdr10 = hasHdr10Display && hasHdr10Decoder,
         supportsDolbyVision = hasDolbyVisionDisplay && hasDolbyVisionDecoder,
         supportsDolbyAtmos = hasAtmosDecoder,
+        supportsHiRes = hasHiResDecoder,
       )
     }
 

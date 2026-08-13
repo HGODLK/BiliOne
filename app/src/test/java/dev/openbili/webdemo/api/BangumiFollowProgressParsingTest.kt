@@ -13,6 +13,20 @@ import org.robolectric.RobolectricTestRunner
 class BangumiFollowProgressParsingTest {
 
   @Test
+  fun `authoritative season response identifies guochuang even without history tag`() {
+    val response = JSONObject("""{"type":4,"show_season_type":4,"title":"记忆管理局"}""")
+
+    assertEquals(4, BiliApi.resolveAuthoritativePgcSeasonType(response))
+  }
+
+  @Test
+  fun `authoritative season response falls back to show season type`() {
+    val response = JSONObject("""{"type":0,"show_season_type":4}""")
+
+    assertEquals(4, BiliApi.resolveAuthoritativePgcSeasonType(response))
+  }
+
+  @Test
   fun `merged following card prefers the watched episode cover`() {
     val followed =
       SpaceContentCard(

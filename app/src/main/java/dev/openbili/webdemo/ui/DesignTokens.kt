@@ -118,6 +118,38 @@ object GlassTokens {
   val MediaLabelContent = Color(0xFFFFFFFF)
 }
 
+/** Alpha levels for video-page surfaces drawn above a user-selected page background. */
+object VideoPageSurfaceTokens {
+  const val LightTopScrimAlpha = 0.62f
+  const val DarkTopScrimAlpha = 0.58f
+  const val LightAmbientScrimAlpha = 0.10f
+  const val DarkAmbientScrimAlpha = 0.14f
+
+  const val LightCommentCardAlpha = 0.74f
+  const val DarkCommentCardAlpha = 0.68f
+  const val LightCommentGradientAlpha = 0.78f
+  const val DarkCommentGradientAlpha = 0.72f
+  const val LightActionPanelAlpha = 0.78f
+  const val DarkActionPanelAlpha = 0.74f
+  const val LightInputDockAlpha = 0.88f
+  const val DarkInputDockAlpha = 0.84f
+  const val LightInputFieldAlpha = 0.78f
+  const val DarkInputFieldAlpha = 0.72f
+  const val LightDialogAlpha = 0.96f
+  const val DarkDialogAlpha = 0.97f
+}
+
+object HomeGlassTokens {
+  val BlurRadius = 30.dp
+
+  const val LightContainerAlpha = 0.52f
+  const val DarkContainerAlpha = 0.58f
+  const val LightControlAlpha = 0.42f
+  const val DarkControlAlpha = 0.48f
+  const val LightBorderAlpha = 0.58f
+  const val DarkBorderAlpha = 0.68f
+}
+
 object MotionTokens {
   const val Quick = 120
   const val Standard = 220

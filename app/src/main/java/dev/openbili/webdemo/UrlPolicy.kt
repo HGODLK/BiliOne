@@ -70,8 +70,20 @@ object UrlPolicy {
     baseUrl: String = "https://www.bilibili.com/",
   ): String? {
     val uri = resolve(rawUrl, baseUrl) ?: return null
-    // Accept http (force-upgrade to https) and https; reject everything else.
+    // The offline-media subsystem owns this exact app-private path and never exposes it outside the
+    // app. Allow only its persisted cover file; continue rejecting every other local/active scheme.
     val scheme = uri.scheme?.lowercase(Locale.ROOT)
+    if (scheme == "file") {
+      val path = uri.path.orEmpty().replace('\\', '/')
+      return uri.toASCIIString().takeIf {
+        uri.rawQuery == null &&
+          uri.rawFragment == null &&
+          uri.rawUserInfo == null &&
+          path.contains("/files/offline_media/metadata/") &&
+          path.endsWith("/cover.jpg")
+      }
+    }
+    // Accept http (force-upgrade to https) and https; reject everything else.
     if (scheme != "https" && scheme != "http") return null
     if (uri.rawUserInfo != null) return null
     val host = uri.host?.trimEnd('.')?.lowercase(Locale.ROOT) ?: return null

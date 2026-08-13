@@ -2,7 +2,6 @@ package dev.openbili.webdemo.video
 
 import android.graphics.Bitmap
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -53,8 +52,9 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -63,6 +63,7 @@ import coil3.BitmapImage
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.allowHardware
+import coil3.size.Precision
 import dev.openbili.webdemo.api.BiliApi
 import dev.openbili.webdemo.api.BiliEmote
 import dev.openbili.webdemo.api.ArticleItem
@@ -73,6 +74,9 @@ import dev.openbili.webdemo.feed.LocalFeedImageLoadPolicy
 import dev.openbili.webdemo.feed.LoadedFeedImageRegistry
 import dev.openbili.webdemo.article.ArticleCard
 import dev.openbili.webdemo.ui.NavigationCardBottomClearance
+import dev.openbili.webdemo.ui.OfficialVerificationIcon
+import dev.openbili.webdemo.ui.OfficialVerificationIconSize
+import dev.openbili.webdemo.ui.VideoPageSurfaceTokens
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -162,19 +166,48 @@ internal fun CommentImageThumbnail(
   modifier: Modifier = Modifier,
 ) {
   val bounds = remember(image.url) { CommentBoundsHolder() }
-  AsyncImage(
-    model = image.url,
-    contentDescription = contentDescription,
+  val context = LocalContext.current
+  BoxWithConstraints(
     modifier =
       modifier
         .then(
           if (trackBounds) Modifier.onGloballyPositioned { bounds.coordinates = it } else Modifier
         )
         .clip(RoundedCornerShape(12.dp))
-        .background(MaterialTheme.colorScheme.surfaceVariant)
-        .clickable { onPreview(image, bounds.rect()) },
-    contentScale = contentScale,
-  )
+        .background(MaterialTheme.colorScheme.surfaceVariant),
+  ) {
+    val targetWidthPx = constraints.maxWidth.coerceAtLeast(1)
+    val targetHeightPx =
+      if (constraints.hasBoundedHeight) constraints.maxHeight.coerceAtLeast(1) else targetWidthPx
+    val thumbnail =
+      remember(image, targetWidthPx, targetHeightPx, contentScale) {
+        commentImageThumbnailSpec(
+          rawUrl = image.url,
+          imageWidth = image.width,
+          imageHeight = image.height,
+          targetWidthPx = targetWidthPx,
+          targetHeightPx = targetHeightPx,
+          crop = contentScale == ContentScale.Crop,
+        )
+      }
+    val request =
+      remember(context, thumbnail) {
+        ImageRequest.Builder(context)
+          .data(thumbnail.url)
+          .size(thumbnail.widthPx, thumbnail.heightPx)
+          .precision(Precision.INEXACT)
+          .build()
+      }
+    AsyncImage(
+      model = request,
+      contentDescription = contentDescription,
+      modifier =
+        Modifier.fillMaxSize().clickable {
+          onPreview(image.copy(url = thumbnail.url), bounds.rect())
+        },
+      contentScale = contentScale,
+    )
+  }
 }
 
 data class CommentProfileAnchor(
@@ -204,6 +237,7 @@ internal fun CommentRow(
   onImagePreview: (CommentImage, Rect) -> Unit,
   onReplies: (CommentItem, Rect) -> Unit,
   onReply: (CommentItem) -> Unit,
+  replyEnabled: Boolean = true,
   bottomClearancePx: Float = 0f,
   viewportHeightPx: Float = 0f,
   flat: Boolean = false,
@@ -291,11 +325,13 @@ internal fun CommentRow(
       openingProfile = false
     }
   }
-  fun openLinkedVideoAfterReveal(video: FeedItem, clickedBounds: Rect) {
+  fun openLinkedVideo(video: FeedItem, clickedBounds: Rect) {
     if (openingLinkedVideo || openingLinkedArticle || openingProfile) return
     openingLinkedVideo = true
     paletteScope.launch {
-      revealCommentForNavigation()
+      // RecommendationCard has already brought its own cover into view and waited for the updated
+      // root bounds. Moving the whole comment again here can push that cover back into a clipped
+      // area, so linked videos must use the same single source-preparation path as recommendations.
       val bounds =
         linkedVideoBounds[video.id]?.takeIf { it.width > 0f && it.height > 0f } ?: clickedBounds
       if (bounds.width > 0f && bounds.height > 0f) onLinkedVideoClick(video, bounds)
@@ -342,13 +378,22 @@ internal fun CommentRow(
     remember(comment.face, darkTheme) {
       mutableStateOf(CommentAvatarPaletteCache.get(comment.face).orEmpty())
     }
-  val surfaceColor = MaterialTheme.colorScheme.surface
+  val opaqueSurfaceColor = MaterialTheme.colorScheme.surface
+  val surfaceColor =
+    opaqueSurfaceColor.copy(
+      alpha =
+        if (darkTheme) VideoPageSurfaceTokens.DarkCommentCardAlpha
+        else VideoPageSurfaceTokens.LightCommentCardAlpha
+    )
+  val gradientAlpha =
+    if (darkTheme) VideoPageSurfaceTokens.DarkCommentGradientAlpha
+    else VideoPageSurfaceTokens.LightCommentGradientAlpha
   val cardGradientColors =
-    remember(avatarColors, surfaceColor, darkTheme) {
+    remember(avatarColors, opaqueSurfaceColor, darkTheme, gradientAlpha) {
       if (avatarColors.isEmpty()) emptyList()
       else
         avatarColors.take(2).map {
-          readableCommentCardColor(it, surfaceColor, darkTheme)
+          readableCommentCardColor(it, opaqueSurfaceColor, darkTheme).copy(alpha = gradientAlpha)
         }
     }
   val cardGradient =
@@ -494,12 +539,9 @@ internal fun CommentRow(
         Column(
           modifier =
             Modifier.fillMaxWidth()
-              .animateContentSize(
-                animationSpec = androidx.compose.animation.core.tween(220),
-              )
               .combinedClickable(
                 enabled = !deletionSelected,
-                onClick = { onReply(comment) },
+                onClick = { if (replyEnabled) onReply(comment) },
                 onLongClick =
                   onDeleteRequest?.let { request -> { request(measuredBounds.card.rect()) } },
               )
@@ -541,6 +583,10 @@ internal fun CommentRow(
                   verticalAlignment = Alignment.CenterVertically,
                   horizontalArrangement = Arrangement.spacedBy(5.dp),
                 ) {
+                  OfficialVerificationIcon(
+                    verification = comment.officialVerification,
+                    modifier = Modifier.size(OfficialVerificationIconSize),
+                  )
                   Text(
                     text = comment.name,
                     modifier =
@@ -583,7 +629,7 @@ internal fun CommentRow(
                   emotes = rowEmotes,
                   mentions = comment.mentions,
                   onMentionClick = ::openMentionProfile,
-                  onTextClick = { onReply(comment) },
+                  onTextClick = { if (replyEnabled) onReply(comment) },
                   style =
                     if (largeText) MaterialTheme.typography.bodyMedium
                     else MaterialTheme.typography.bodySmall,
@@ -655,7 +701,7 @@ internal fun CommentRow(
                       RecommendationCard(
                         item = video,
                         onClick = {
-                          openLinkedVideoAfterReveal(
+                          openLinkedVideo(
                             video,
                             linkedVideoBounds[video.id] ?: Rect.Zero,
                           )

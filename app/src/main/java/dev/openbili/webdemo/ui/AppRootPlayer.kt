@@ -44,13 +44,23 @@ internal class AppRootPlayerSessionState(
   private var retainRestoredPlaybackEnd = false
   private var seekGeneration = 0L
   private var seekConfirmationJob: Job? = null
+  private var scrubFrameSeekJob: Job? = null
+  private var scrubStartPositionMs: Long? = null
+  private var latestScrubFrameTargetMs: Long? = null
+  private var lastScrubFrameSeekAtNanos = Long.MIN_VALUE
   private var speedBeforeTemporaryBoost: Float? = null
+  private var playbackMediaKey: String? = null
 
-  fun previewSeek(playerViewModel: PlayerViewModel, targetMs: Long) {
+  fun previewSeek(
+    playerViewModel: PlayerViewModel,
+    targetMs: Long,
+    scope: CoroutineScope,
+  ) {
     val player = playerViewModel.exoPlayer ?: return
     if (scrubPreviewMs == null && pendingSeekTargetMs == null) {
       playerViewModel.resetCdnBufferingDetectorForUserSeek()
       seekWasPlaying = player.isPlaying
+      scrubStartPositionMs = player.currentPosition
       player.pause()
     }
     seekConfirmationJob?.cancel()
@@ -62,6 +72,7 @@ internal class AppRootPlayerSessionState(
     // the thumb is dragged and only return after release.
     if (scrubPreviewMs != target) advanceDanmakuPositionEpoch()
     scrubPreviewMs = target
+    requestScrubFrame(player, target, scope)
   }
 
   fun setTemporarySpeedBoost(playerViewModel: PlayerViewModel, active: Boolean) {
@@ -88,6 +99,14 @@ internal class AppRootPlayerSessionState(
     }
   }
 
+  fun resetPlaybackSpeedForMedia(playerViewModel: PlayerViewModel, mediaKey: String) {
+    if (playbackMediaKey == mediaKey) return
+    playbackMediaKey = mediaKey
+    speedBeforeTemporaryBoost = null
+    playbackSpeed = 1f
+    playerViewModel.exoPlayer?.setPlaybackSpeed(1f)
+  }
+
   /** Keeps a restored parent's end overlay mounted while its media is prepared back at the end. */
   fun restorePlaybackEnded(ended: Boolean) {
     playbackEnded = ended
@@ -110,13 +129,20 @@ internal class AppRootPlayerSessionState(
 
   fun cancelSeekPreview(playerViewModel: PlayerViewModel) {
     val player = playerViewModel.exoPlayer
+    val restorePositionMs = scrubStartPositionMs
     seekConfirmationJob?.cancel()
     seekConfirmationJob = null
+    clearScrubFrameSeek()
     seekGeneration++
     advanceDanmakuPositionEpoch()
     scrubPreviewMs = null
     pendingSeekTargetMs = null
-    currentPositionMs = player?.currentPosition ?: currentPositionMs
+    if (player != null && restorePositionMs != null) {
+      currentPositionMs = restorePositionMs
+      player.seekTo(restorePositionMs)
+    } else {
+      currentPositionMs = player?.currentPosition ?: currentPositionMs
+    }
     if (seekWasPlaying) player?.play()
     seekWasPlaying = false
   }
@@ -136,6 +162,7 @@ internal class AppRootPlayerSessionState(
     val target = targetMs.coerceIn(0L, (durationSeconds * 1000L).coerceAtLeast(0L))
     val generation = ++seekGeneration
     advanceDanmakuPositionEpoch()
+    clearScrubFrameSeek()
     scrubPreviewMs = null
     pendingSeekTargetMs = target
     currentPositionMs = target
@@ -165,6 +192,7 @@ internal class AppRootPlayerSessionState(
   fun resetSeek() {
     seekConfirmationJob?.cancel()
     seekConfirmationJob = null
+    clearScrubFrameSeek()
     seekGeneration++
     advanceDanmakuPositionEpoch()
     scrubPreviewMs = null
@@ -172,9 +200,53 @@ internal class AppRootPlayerSessionState(
     seekWasPlaying = false
   }
 
+  /**
+   * A paused ExoPlayer renders the frame reached by a seek, which makes the video follow the
+   * progress thumb in both directions. Pointer input can arrive at 120 Hz, so coalesce it to a
+   * small trailing stream instead of asking a remote DASH source to perform every intermediate
+   * seek. The progress bar and danmaku remain immediate through [scrubPreviewMs].
+   */
+  private fun requestScrubFrame(player: Player, targetMs: Long, scope: CoroutineScope) {
+    latestScrubFrameTargetMs = targetMs
+    val nowNanos = System.nanoTime()
+    val delayMs = scrubFrameSeekDelayMs(lastScrubFrameSeekAtNanos, nowNanos)
+    if (scrubFrameSeekJob == null && delayMs == 0L) {
+      player.seekTo(targetMs)
+      lastScrubFrameSeekAtNanos = nowNanos
+      return
+    }
+
+    scrubFrameSeekJob?.cancel()
+    scrubFrameSeekJob =
+      scope.launch {
+        if (delayMs > 0L) delay(delayMs)
+        val latestTarget = latestScrubFrameTargetMs ?: return@launch
+        player.seekTo(latestTarget)
+        lastScrubFrameSeekAtNanos = System.nanoTime()
+        scrubFrameSeekJob = null
+      }
+  }
+
+  private fun clearScrubFrameSeek() {
+    scrubFrameSeekJob?.cancel()
+    scrubFrameSeekJob = null
+    scrubStartPositionMs = null
+    latestScrubFrameTargetMs = null
+    lastScrubFrameSeekAtNanos = Long.MIN_VALUE
+  }
+
   private fun advanceDanmakuPositionEpoch() {
     danmakuPositionEpoch++
   }
+}
+
+private const val SCRUB_FRAME_SEEK_INTERVAL_NANOS = 80_000_000L
+
+internal fun scrubFrameSeekDelayMs(lastSeekAtNanos: Long, nowNanos: Long): Long {
+  if (lastSeekAtNanos == Long.MIN_VALUE) return 0L
+  val elapsedNanos = (nowNanos - lastSeekAtNanos).coerceAtLeast(0L)
+  return ((SCRUB_FRAME_SEEK_INTERVAL_NANOS - elapsedNanos).coerceAtLeast(0L) + 999_999L) /
+    1_000_000L
 }
 
 /**
@@ -201,6 +273,7 @@ internal fun AppRootPlayerEffects(
   bangumiEpisodeId: Long,
   bangumiSeasonId: Long,
   loggedIn: Boolean,
+  pauseWhenLeavingApp: Boolean,
   onCommitPlaybackProgress: () -> Unit,
   onRevealTransitionSession: (CardTransitionSession, Boolean) -> Unit,
 ) {
@@ -210,6 +283,14 @@ internal fun AppRootPlayerEffects(
     }
 
   LaunchedEffect(selectedVideoId) { sessionState.resetSeek() }
+
+  val playbackMediaKey =
+    selectedVideoId?.let { id ->
+      "$id:${historyCid.takeIf { it > 0L } ?: bangumiEpisodeId.takeIf { it > 0L } ?: 0L}"
+    }
+  LaunchedEffect(playbackMediaKey) {
+    playbackMediaKey?.let { sessionState.resetPlaybackSpeedForMedia(playerViewModel, it) }
+  }
 
   LaunchedEffect(isVideoScreen, playerActivationId, selectedVideoId, keepMediaWhileInFeed) {
     if (isVideoScreen && playerActivationId == selectedVideoId) {
@@ -221,8 +302,6 @@ internal fun AppRootPlayerEffects(
       playerViewModel.resetForWarmIdle()
     }
   }
-
-  DisposableEffect(Unit) { onDispose { playerViewModel.release() } }
 
   LaunchedEffect(playerState) {
     if (playerState is PlayerState.Ready) {
@@ -263,14 +342,22 @@ internal fun AppRootPlayerEffects(
     bangumiEpisodeId,
     bangumiSeasonId,
     loggedIn,
+    pauseWhenLeavingApp,
   ) {
     val observer = LifecycleEventObserver { _, event ->
       when (event) {
-        Lifecycle.Event.ON_START -> appInForeground = true
+        Lifecycle.Event.ON_START -> {
+          appInForeground = true
+          playerViewModel.setAppInForeground(true)
+          playerViewModel.exitBackgroundAudioMode()
+          onCommitPlaybackProgress()
+        }
         Lifecycle.Event.ON_STOP -> {
           appInForeground = false
+          playerViewModel.setAppInForeground(false)
           onCommitPlaybackProgress()
-          playerViewModel.pauseForBackground()
+          if (pauseWhenLeavingApp) playerViewModel.pauseForBackground()
+          else playerViewModel.enterBackgroundAudioMode()
         }
         else -> Unit
       }
@@ -289,18 +376,22 @@ internal fun AppRootPlayerEffects(
     playerState,
     loggedIn,
     appInForeground,
+    pauseWhenLeavingApp,
   ) {
     if (
       !isVideoScreen ||
         historyAid <= 0 ||
         historyCid <= 0 ||
-        !appInForeground ||
+        (!appInForeground && pauseWhenLeavingApp) ||
         playerState !is PlayerState.Ready
     )
       return@LaunchedEffect
     while (true) {
       delay(2_000)
-      if (!lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+      if (
+        pauseWhenLeavingApp &&
+          !lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+      ) {
         return@LaunchedEffect
       }
       val player = playerViewModel.exoPlayer
@@ -316,7 +407,7 @@ internal fun AppRootPlayerEffects(
         if (loggedIn) {
           withContext(Dispatchers.IO) {
             runCatching {
-              if (bangumiSubType > 0) {
+              if (bangumiSubType > 0 && bangumiEpisodeId > 0L && bangumiSeasonId > 0L) {
                 BiliApi.reportBangumiPlayback(
                   aid = historyAid,
                   cid = historyCid,

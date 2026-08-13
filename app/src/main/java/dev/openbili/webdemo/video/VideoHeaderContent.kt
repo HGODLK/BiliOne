@@ -1,17 +1,20 @@
 package dev.openbili.webdemo.video
 
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -54,16 +57,24 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import coil3.compose.AsyncImage
 import dev.openbili.webdemo.R
 import dev.openbili.webdemo.api.BiliEmote
@@ -79,11 +90,13 @@ import dev.openbili.webdemo.feed.FeedItem
 import dev.openbili.webdemo.ui.DeviceStatusCluster
 import dev.openbili.webdemo.ui.FollowButton
 import dev.openbili.webdemo.ui.PullRefreshContainer
+import dev.openbili.webdemo.ui.VideoPageSurfaceTokens
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import androidx.compose.runtime.withFrameNanos
 
 @Composable
 internal fun VideoHeader(
@@ -109,6 +122,9 @@ internal fun VideoHeader(
   onLogin: () -> Unit,
   onShowInfo: () -> Unit,
   panelSlideProgress: () -> Float,
+  showDeviceStatus: Boolean,
+  foregroundColor: Color? = null,
+  glassBackdrop: PlaybackPageGlassBackdrop = PlaybackPageGlassBackdrop(),
 ) {
   val collection = info?.collection
   val collectionIndex = collection?.episodes?.indexOfFirst { it.bvid == info.bvid } ?: -1
@@ -168,6 +184,9 @@ internal fun VideoHeader(
     onShowInfo = onShowInfo,
     onOpenSelection = onOpenSelection.takeIf { selectionTitle != null },
     panelSlideProgress = panelSlideProgress,
+    showDeviceStatus = showDeviceStatus,
+    foregroundColor = foregroundColor,
+    glassBackdrop = glassBackdrop,
   )
 }
 
@@ -194,7 +213,7 @@ internal fun VideoSelectionTile(
       shape = RoundedCornerShape(26.dp),
       color = MaterialTheme.colorScheme.surface,
       tonalElevation = 8.dp,
-      shadowElevation = 14.dp,
+      shadowElevation = 0.dp,
     ) {
       Column(Modifier.padding(18.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -319,6 +338,19 @@ internal fun feedItemFromCollectionEpisode(episode: VideoCollectionEpisode) =
     publishedAt = episode.publishedAt,
   )
 
+internal data class VideoInfoTileSize(val width: Dp, val height: Dp)
+
+internal fun videoInfoTileSizeForWindow(maxWidth: Dp, maxHeight: Dp): VideoInfoTileSize {
+  val horizontalMargin = if (maxWidth < 420.dp) 12.dp else 24.dp
+  val verticalMargin = if (maxHeight < 560.dp) 12.dp else 32.dp
+  return VideoInfoTileSize(
+    width =
+      (maxWidth - horizontalMargin - horizontalMargin).coerceAtLeast(1.dp).coerceAtMost(760.dp),
+    height =
+      (maxHeight - verticalMargin - verticalMargin).coerceAtLeast(1.dp).coerceAtMost(620.dp),
+  )
+}
+
 @Composable
 fun VideoInfoTile(
   item: FeedItem,
@@ -326,49 +358,82 @@ fun VideoInfoTile(
   onlineViewerText: String?,
   description: String,
   onDismiss: () -> Unit,
-  onAddToWatchLater: (() -> Unit)? = null,
+  onWatchLaterClick: (() -> Unit)? = null,
   watchLaterAdded: Boolean = false,
   watchLaterBusy: Boolean = false,
+  onCacheClick: (() -> Unit)? = null,
   onNotInterested: (() -> Unit)? = null,
   onNotInterestedUploader: (() -> Unit)? = null,
 ) {
-  var visible by remember { mutableStateOf(false) }
+  val context = LocalContext.current
+  val clipboard = LocalClipboardManager.current
+  val displayedInfo = remember { info }
+  val displayedOnlineViewerText = remember { onlineViewerText }
+  val displayedDescription = remember { description }
+  val revealProgress = remember { Animatable(0f) }
   var dismissing by remember { mutableStateOf(false) }
   val scope = rememberCoroutineScope()
   fun dismissThen(action: () -> Unit) {
     if (dismissing) return
     dismissing = true
-    visible = false
     scope.launch {
-      delay(180)
+      revealProgress.animateTo(
+        0f,
+        tween(durationMillis = 140, easing = FastOutSlowInEasing),
+      )
       action()
     }
   }
-  LaunchedEffect(Unit) { visible = true }
-  Dialog(onDismissRequest = { dismissThen(onDismiss) }) {
-    AnimatedVisibility(
-      visible = visible,
-      enter = fadeIn(tween(180)) + scaleIn(tween(280), initialScale = .86f),
-      exit = fadeOut(tween(120)) + scaleOut(tween(180), targetScale = .92f),
+  LaunchedEffect(Unit) {
+    withFrameNanos {}
+    revealProgress.animateTo(
+      1f,
+      tween(durationMillis = 260, easing = FastOutSlowInEasing),
+    )
+  }
+  Dialog(
+    onDismissRequest = { dismissThen(onDismiss) },
+    properties = DialogProperties(usePlatformDefaultWidth = false),
+  ) {
+    BoxWithConstraints(
+      modifier = Modifier.fillMaxSize(),
+      contentAlignment = Alignment.Center,
     ) {
+      val tileSize = videoInfoTileSizeForWindow(maxWidth, maxHeight)
+      val darkPage = MaterialTheme.colorScheme.background.luminance() < .5f
       Surface(
-        modifier = Modifier.fillMaxWidth(.82f).widthIn(max = 760.dp).heightIn(max = 620.dp),
+        modifier =
+          Modifier.width(tileSize.width).height(tileSize.height).graphicsLayer {
+            val progress = revealProgress.value.coerceIn(0f, 1f)
+            alpha = progress
+            val scale = .92f + .08f * progress
+            scaleX = scale
+            scaleY = scale
+          },
         shape = RoundedCornerShape(28.dp),
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 8.dp,
-        shadowElevation = 20.dp,
+        color =
+          MaterialTheme.colorScheme.surface.copy(
+            alpha =
+              if (darkPage) VideoPageSurfaceTokens.DarkDialogAlpha
+              else VideoPageSurfaceTokens.LightDialogAlpha
+          ),
+        tonalElevation = 4.dp,
+        shadowElevation = 0.dp,
       ) {
         Column(
-          modifier = Modifier.padding(horizontal = 28.dp, vertical = 24.dp),
+          modifier = Modifier.fillMaxSize().padding(horizontal = 28.dp, vertical = 24.dp),
           verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
           Text(
-            text = info?.title ?: item.title,
+            text = displayedInfo?.title ?: item.title,
             style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.SemiBold,
+            maxLines = 4,
+            overflow = TextOverflow.Ellipsis,
           )
-          val uploaderFace = info?.uploaderFace?.takeIf(String::isNotBlank) ?: item.uploaderFace
-          val uploaderName = info?.uploaderName ?: item.uploader.orEmpty()
+          val uploaderFace =
+            displayedInfo?.uploaderFace?.takeIf(String::isNotBlank) ?: item.uploaderFace
+          val uploaderName = displayedInfo?.uploaderName ?: item.uploader.orEmpty()
           Row(
             modifier = Modifier.padding(horizontal = 4.dp, vertical = 3.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -388,45 +453,100 @@ fun VideoInfoTile(
               color = MaterialTheme.colorScheme.onSurface,
             )
           }
-          Text(
-            buildList {
-                add("${formatCompactCount(info?.playCount ?: 0)} 播放")
-                add("${formatCompactCount(info?.danmakuCount ?: item.danmakuCount)} 弹幕")
-                add("${formatCompactCount(info?.replyCount ?: 0)} 评论")
-                onlineViewerText?.takeIf(String::isNotBlank)?.let { add("$it 人在看") }
-                formatPublishDate(info?.publishedAt ?: 0)?.let(::add)
-                (info?.bvid ?: item.id).takeIf { it.startsWith("BV") }?.let(::add)
+          val bvid = (displayedInfo?.bvid ?: item.id).takeIf { it.startsWith("BV") }
+          val publishDate = formatPublishDate(displayedInfo?.publishedAt ?: 0)
+          Column(
+            verticalArrangement = Arrangement.spacedBy(5.dp),
+          ) {
+            Text(
+              buildList {
+                add("${formatCompactCount(displayedInfo?.playCount ?: 0)} 播放")
+                add(
+                  "${formatCompactCount(displayedInfo?.danmakuCount ?: item.danmakuCount)} 弹幕"
+                )
+                add("${formatCompactCount(displayedInfo?.replyCount ?: 0)} 评论")
+                displayedOnlineViewerText?.takeIf(String::isNotBlank)?.let {
+                  add("$it 人在看")
+                }
               }
-              .joinToString("  ·  "),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
+                .joinToString("  ·  "),
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (publishDate != null || bvid != null) {
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+              ) {
+                if (publishDate != null) {
+                  Text(
+                    text = publishDate,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    softWrap = false,
+                  )
+                }
+                if (publishDate != null && bvid != null) {
+                  Text(
+                    text = "·",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                  )
+                }
+                if (bvid != null) {
+                  Text(
+                    text = bvid,
+                    modifier =
+                      Modifier.pointerInput(bvid) {
+                        detectTapGestures(
+                          onLongPress = {
+                            clipboard.setText(AnnotatedString(bvid))
+                            Toast.makeText(context, "已复制 BV 号", Toast.LENGTH_SHORT).show()
+                          }
+                        )
+                      },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                    softWrap = false,
+                  )
+                }
+              }
+            }
+          }
           LazyColumn(
-            modifier = Modifier.fillMaxWidth().weight(1f, fill = false),
+            modifier = Modifier.fillMaxWidth().weight(1f),
             contentPadding = PaddingValues(vertical = 4.dp),
           ) {
             item {
               BiliRichText(
-                text = description.ifBlank { "这个视频暂时没有填写简介。" },
+                text = displayedDescription.ifBlank { "这个视频暂时没有填写简介。" },
                 emotes = emptyMap(),
+                onTextLongClick = {
+                  val copyText =
+                    displayedDescription.ifBlank { "这个视频暂时没有填写简介。" }
+                  clipboard.setText(AnnotatedString(copyText))
+                  Toast.makeText(context, "已复制简介", Toast.LENGTH_SHORT).show()
+                },
                 style = MaterialTheme.typography.bodyLarge,
                 maxLines = Int.MAX_VALUE,
               )
             }
           }
           if (
-            onAddToWatchLater != null || onNotInterested != null || onNotInterestedUploader != null
+            onWatchLaterClick != null || onNotInterested != null || onNotInterestedUploader != null
           ) {
             Row(
               modifier = Modifier.fillMaxWidth(),
               horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End),
             ) {
-              if (onAddToWatchLater != null) {
+              if (onWatchLaterClick != null) {
                 OutlinedButton(
-                  enabled = !watchLaterAdded && !watchLaterBusy,
-                  onClick = { dismissThen(onAddToWatchLater) },
+                  enabled = !watchLaterBusy,
+                  onClick = { dismissThen(onWatchLaterClick) },
                 ) {
-                  Text(if (watchLaterAdded) "已在稍后再看" else "添加到稍后再看")
+                  Text(if (watchLaterAdded) "移出稍后再看" else "添加到稍后再看")
                 }
               }
               if (onNotInterested != null) {
@@ -441,11 +561,16 @@ fun VideoInfoTile(
               }
             }
           }
-          TextButton(
-            onClick = { dismissThen(onDismiss) },
+          Row(
             modifier = Modifier.align(Alignment.End),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
           ) {
-            Text("关闭")
+            if (onCacheClick != null) {
+              TextButton(onClick = { dismissThen(onCacheClick) }) { Text("缓存视频") }
+            }
+            TextButton(onClick = { dismissThen(onDismiss) }) {
+              Text("关闭")
+            }
           }
         }
       }
@@ -521,12 +646,7 @@ internal fun ReplyThreadPanel(
     enabled = backHandlingEnabled && deletionSelectedRpid == null,
     onBack = onDismiss,
   )
-  Box(modifier) {
-    Surface(
-      modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth().height(12.dp),
-      color = MaterialTheme.colorScheme.surface.copy(alpha = .72f),
-      tonalElevation = 1.dp,
-    ) {}
+  Box(modifier.clip(RoundedCornerShape(24.dp))) {
     Surface(
       modifier = Modifier.fillMaxSize(),
       shape = RoundedCornerShape(24.dp),
@@ -683,6 +803,7 @@ internal fun ReplyThreadPanel(
     // area, so the extra surface masks the underlying comment list without covering reply content.
     Surface(
       modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(20.dp),
+      shape = RoundedCornerShape(bottomStart = 24.dp, bottomEnd = 24.dp),
       color = MaterialTheme.colorScheme.surface.copy(alpha = .72f),
       tonalElevation = 1.dp,
     ) {}

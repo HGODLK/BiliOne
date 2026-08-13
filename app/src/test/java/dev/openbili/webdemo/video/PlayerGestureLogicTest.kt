@@ -38,6 +38,19 @@ class PlayerGestureLogicTest {
   }
 
   @Test
+  fun verticalGesturesUseLeftBrightnessAndRightVolumeHalves() {
+    assertEquals(PlayerDragMode.BRIGHTNESS, playerVerticalGestureMode(499f, 1_000f, true, true))
+    assertEquals(PlayerDragMode.VOLUME, playerVerticalGestureMode(500f, 1_000f, true, true))
+    assertEquals(PlayerDragMode.VOLUME, playerVerticalGestureMode(999f, 1_000f, true, true))
+  }
+
+  @Test
+  fun disabledHalfDoesNotBorrowTheOtherGesture() {
+    assertEquals(PlayerDragMode.UNDECIDED, playerVerticalGestureMode(250f, 1_000f, false, true))
+    assertEquals(PlayerDragMode.UNDECIDED, playerVerticalGestureMode(750f, 1_000f, true, false))
+  }
+
+  @Test
   fun commentProfilePreparationStaysUnderThreeTenthsOfASecond() {
     assertTrue(COMMENT_PROFILE_PREPARE_TIMEOUT_MS <= 300L)
   }

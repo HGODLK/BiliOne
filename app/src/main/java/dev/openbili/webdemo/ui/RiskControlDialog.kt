@@ -77,7 +77,7 @@ fun RiskControlDialog(
       shape = RoundedCornerShape(24.dp),
       color = MaterialTheme.colorScheme.surface,
       tonalElevation = 6.dp,
-      shadowElevation = 16.dp,
+      shadowElevation = 0.dp,
     ) {
       Column(
         modifier = Modifier.fillMaxSize().padding(20.dp),

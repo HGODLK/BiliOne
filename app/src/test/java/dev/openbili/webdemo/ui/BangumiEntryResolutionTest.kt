@@ -14,6 +14,14 @@ import org.robolectric.RobolectricTestRunner
 
 @RunWith(RobolectricTestRunner::class)
 class BangumiEntryResolutionTest {
+  @Test
+  fun `heartbeat keeps the actual pgc season subtype`() {
+    assertEquals(1, pgcPlaybackSubType(0))
+    assertEquals(2, pgcPlaybackSubType(2))
+    assertEquals(4, pgcPlaybackSubType(4))
+    assertEquals(7, pgcPlaybackSubType(7))
+  }
+
 
   private val defaultCard = SpaceContentCard(
     id = "bangumi:12345",

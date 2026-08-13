@@ -30,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
@@ -47,7 +48,11 @@ private enum class NetworkKind {
 }
 
 @Composable
-fun DeviceStatusCluster(modifier: Modifier = Modifier) {
+fun DeviceStatusCluster(
+  modifier: Modifier = Modifier,
+  containerColor: Color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .68f),
+  contentColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+) {
   val context = LocalContext.current
   var time by remember { mutableStateOf(currentTime()) }
   var battery by remember { mutableIntStateOf(readBattery(context)) }
@@ -105,8 +110,8 @@ fun DeviceStatusCluster(modifier: Modifier = Modifier) {
   Surface(
     modifier = modifier,
     shape = androidx.compose.foundation.shape.CircleShape,
-    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .68f),
-    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+    color = containerColor,
+    contentColor = contentColor,
     tonalElevation = 0.dp,
   ) {
     Row(
@@ -115,18 +120,15 @@ fun DeviceStatusCluster(modifier: Modifier = Modifier) {
       verticalAlignment = Alignment.CenterVertically,
     ) {
       Text(time, style = MaterialTheme.typography.labelMedium)
-      NetworkGlyph(network)
-      BatteryGlyph(battery, charging)
+      NetworkGlyph(network, contentColor)
+      BatteryGlyph(battery, charging, contentColor)
       Text("$battery%", style = MaterialTheme.typography.labelSmall)
     }
   }
 }
 
 @Composable
-private fun NetworkGlyph(kind: NetworkKind) {
-  val color =
-    if (kind == NetworkKind.OFFLINE) MaterialTheme.colorScheme.onSurfaceVariant
-    else MaterialTheme.colorScheme.onSurface
+private fun NetworkGlyph(kind: NetworkKind, color: Color) {
   val description =
     when (kind) {
       NetworkKind.WIFI -> "Wi-Fi 已连接"
@@ -173,8 +175,7 @@ private fun NetworkGlyph(kind: NetworkKind) {
 }
 
 @Composable
-private fun BatteryGlyph(level: Int, charging: Boolean) {
-  val color = MaterialTheme.colorScheme.onSurface
+private fun BatteryGlyph(level: Int, charging: Boolean, color: Color) {
   val fillColor = if (level <= 15) MaterialTheme.colorScheme.error else color
   Canvas(
     Modifier.size(width = 24.dp, height = 13.dp).semantics {

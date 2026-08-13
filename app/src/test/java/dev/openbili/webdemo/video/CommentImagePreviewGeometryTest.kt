@@ -19,6 +19,18 @@ class CommentImagePreviewGeometryTest {
   }
 
   @Test
+  fun regularPhoneScreenshotIsNotTreatedAsLongImage() {
+    assertEquals(false, isLongCommentImage(width = 1080, height = 2400))
+    assertEquals(false, isLongCommentImage(width = 1080, height = 2699))
+  }
+
+  @Test
+  fun imageAtLeastTwoPointFiveTimesAsTallAsWideUsesLongImagePreview() {
+    assertEquals(true, isLongCommentImage(width = 1080, height = 2700))
+    assertEquals(true, isLongCommentImage(width = 1080, height = 6000))
+  }
+
+  @Test
   fun longScreenshotUsesScrollableTwoFifthsTabletWidth() {
     val layout =
       commentImagePreviewLayout(
@@ -45,6 +57,63 @@ class CommentImagePreviewGeometryTest {
     assertEquals(
       "https://example.com/long.png@720w.webp",
       fullResolutionCommentImageUrl("https://example.com/long.png@720w.webp"),
+    )
+  }
+
+  @Test
+  fun commentGridUsesBoundedCroppedBilibiliThumbnail() {
+    assertEquals(
+      CommentImageThumbnailSpec(
+        url = "https://i0.hdslb.com/bfs/note/photo.jpg@480w_480h_1c.webp?token=x",
+        widthPx = 480,
+        heightPx = 480,
+      ),
+      commentImageThumbnailSpec(
+        rawUrl = "https://i0.hdslb.com/bfs/note/photo.jpg@120w.webp?token=x",
+        imageWidth = 1920,
+        imageHeight = 1080,
+        targetWidthPx = 480,
+        targetHeightPx = 480,
+        crop = true,
+      ),
+    )
+  }
+
+  @Test
+  fun longCommentThumbnailFitsVisibleHeightInsteadOfDownloadingTallOriginal() {
+    assertEquals(
+      CommentImageThumbnailSpec(
+        url = "https://i0.hdslb.com/bfs/note/long.png@80w.webp",
+        widthPx = 80,
+        heightPx = 480,
+      ),
+      commentImageThumbnailSpec(
+        rawUrl = "https://i0.hdslb.com/bfs/note/long.png",
+        imageWidth = 1000,
+        imageHeight = 6000,
+        targetWidthPx = 1200,
+        targetHeightPx = 900,
+        crop = false,
+      ),
+    )
+  }
+
+  @Test
+  fun nonBilibiliThumbnailKeepsSourceUrlButLimitsDecodeSize() {
+    assertEquals(
+      CommentImageThumbnailSpec(
+        url = "https://example.com/photo.jpg@original",
+        widthPx = 480,
+        heightPx = 270,
+      ),
+      commentImageThumbnailSpec(
+        rawUrl = "https://example.com/photo.jpg@original",
+        imageWidth = 1920,
+        imageHeight = 1080,
+        targetWidthPx = 1400,
+        targetHeightPx = 900,
+        crop = false,
+      ),
     )
   }
 

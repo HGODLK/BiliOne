@@ -2,6 +2,7 @@ package dev.openbili.webdemo.my
 
 import dev.openbili.webdemo.feed.FeedItem
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -20,6 +21,23 @@ class WatchLaterViewModelTest {
     assertTrue("BV1xx411c7mD" in keys)
     assertTrue("123" in keys)
     assertTrue("av123" in keys)
+  }
+
+  @Test
+  fun removalDropsTheVideoAndEveryKnownMembershipKey() {
+    val video = item(id = "BV1xx411c7mD")
+    val state =
+      WatchLaterUiState(
+        items = listOf(video),
+        addedVideoKeys = setOf("BV1xx411c7mD", "123", "av123"),
+        loaded = true,
+      )
+
+    val removed = state.withoutWatchLaterItem(video, aid = 123L)
+
+    assertTrue(removed.items.isEmpty())
+    assertFalse(removed.contains(video, aid = 123L))
+    assertTrue(removed.addedVideoKeys.isEmpty())
   }
 
   private fun item(id: String, url: String = "https://www.bilibili.com/video/$id") =

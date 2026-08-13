@@ -48,6 +48,9 @@ internal data class FeedImageLoadPolicy(
 
 internal val LocalFeedImageLoadPolicy = compositionLocalOf { FeedImageLoadPolicy.Normal }
 
+/** When disabled, covers, avatars and cover-derived gradients start as soon as they are composed. */
+internal val LocalLimitImageLoadingSpeed = compositionLocalOf { false }
+
 private data class FeedScrollSample(
   val scrolling: Boolean,
   val positionPx: Long,
@@ -59,10 +62,15 @@ private fun rememberFeedImageLoadPolicy(
   sample: () -> FeedScrollSample,
   slowVisibleLimit: Int,
 ): FeedImageLoadPolicy {
+  val limitLoadingSpeed = LocalLimitImageLoadingSpeed.current
   val thresholdPxPerSecond =
     with(LocalDensity.current) { FeedPerformanceConfig.fastScrollThresholdDpPerSecond.dp.toPx() }
   var policy by remember { mutableStateOf(FeedImageLoadPolicy.Normal) }
-  LaunchedEffect(thresholdPxPerSecond, slowVisibleLimit) {
+  LaunchedEffect(limitLoadingSpeed, thresholdPxPerSecond, slowVisibleLimit) {
+    if (!limitLoadingSpeed) {
+      policy = FeedImageLoadPolicy.Normal
+      return@LaunchedEffect
+    }
     var previousPosition = sample().positionPx
     var previousAt = SystemClock.uptimeMillis()
     var fastUntil = 0L

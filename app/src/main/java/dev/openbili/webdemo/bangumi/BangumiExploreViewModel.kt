@@ -1,17 +1,20 @@
 package dev.openbili.webdemo.bangumi
 
+import android.os.SystemClock
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import dev.openbili.webdemo.api.BangumiExploreCategory
 import dev.openbili.webdemo.api.BangumiEpisode
+import dev.openbili.webdemo.api.BangumiExploreCategory
 import dev.openbili.webdemo.api.BangumiExplorePage
-import dev.openbili.webdemo.api.BangumiWatchingHistoryPage
+import dev.openbili.webdemo.api.BangumiUserStatus
 import dev.openbili.webdemo.api.BangumiWatchProgress
 import dev.openbili.webdemo.api.BangumiWatchProgressState
-import dev.openbili.webdemo.api.BangumiUserStatus
+import dev.openbili.webdemo.api.BangumiWatchingHistoryPage
 import dev.openbili.webdemo.api.BiliApi
 import dev.openbili.webdemo.api.HistoryCursor
 import dev.openbili.webdemo.api.SpaceContentCard
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -27,22 +30,38 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
-import java.util.concurrent.ConcurrentHashMap
 
 /** Cache lifetime for the "正在追" card list. */
 private const val FOLLOWING_CACHE_MS = 60_000L
 private const val EXPLORE_PAGE_CACHE_MS = 5 * 60_000L
 private const val INITIAL_HISTORY_TARGET = 12
-private const val INITIAL_HISTORY_MAX_PAGES = 4
+private const val INITIAL_HISTORY_MAX_PAGES = 8
+private const val INITIAL_FOLLOWED_MAX_PAGES = 4
+private const val FOLLOWING_PAGE_TARGET = 6
+private const val FOLLOWING_PAGE_MAX_PAGES = 4
+private const val FOLLOWING_EMPTY_SCAN_MAX_ROUNDS = 3
 private const val FOLLOWING_COVER_RESOLVE_LIMIT = 18
 private const val FOLLOWING_COVER_RESOLVE_CONCURRENCY = 3
 private const val FOLLOWING_STATUS_RESOLVE_CONCURRENCY = 4
+private const val FOLLOWING_SEASON_TYPE_RESOLVE_CONCURRENCY = 4
+private const val FOLLOWING_LOG_TAG = "BangumiFollowing"
 
 private data class FollowingPlaybackOverride(
   val seasonId: Long,
   val episode: BangumiEpisode,
   val positionMs: Long,
   val viewedAt: Long,
+)
+
+private data class FollowedPageBatch(
+  val cards: List<SpaceContentCard>,
+  val lastPage: Int,
+  val hasMore: Boolean,
+)
+
+private data class FollowingContinuationBatch(
+  val history: BangumiWatchingHistoryPage?,
+  val followed: FollowedPageBatch?,
 )
 
 data class BangumiFollowingUiState(
@@ -75,6 +94,8 @@ data class BangumiExploreUiState(
 
 private class FollowingComponentState {
   var job: Job? = null
+  var enrichmentJob: Job? = null
+  var enrichmentGeneration: Int = 0
   var fetchedAtMillis: Long = 0L
   var history: List<SpaceContentCard> = emptyList()
   var historyCursor: HistoryCursor = HistoryCursor()
@@ -88,6 +109,9 @@ private class FollowingComponentState {
   fun reset() {
     job?.cancel()
     job = null
+    enrichmentJob?.cancel()
+    enrichmentJob = null
+    enrichmentGeneration += 1
     fetchedAtMillis = 0L
     history = emptyList()
     historyCursor = HistoryCursor()
@@ -145,11 +169,18 @@ class BangumiExploreViewModel : ViewModel() {
     _state.update { it.copy(selectedCategory = category) }
     ensureLoaded(category)
     if (accountMid > 0L && BiliApi.bangumiSeasonType(category) != null) {
+      val component = followingComponent(category)
+      val following = _state.value.following(category)
+      val fresh =
+        component.fetchedAtMillis > 0L &&
+          System.currentTimeMillis() - component.fetchedAtMillis < FOLLOWING_CACHE_MS
+      if (following.cards.isEmpty() || !fresh) {
       loadFollowing(
         category = category,
-        silent = _state.value.following(category).cards.isNotEmpty(),
+          silent = following.cards.isNotEmpty(),
       )
     }
+  }
   }
 
   fun ensureLoaded(category: BangumiExploreCategory = _state.value.selectedCategory) {
@@ -170,7 +201,8 @@ class BangumiExploreViewModel : ViewModel() {
     val current = _state.value
     val category = current.selectedCategory
     val component = followingComponent(category)
-    if (!force && System.currentTimeMillis() - component.fetchedAtMillis < FOLLOWING_CACHE_MS) return
+    if (!force && System.currentTimeMillis() - component.fetchedAtMillis < FOLLOWING_CACHE_MS)
+      return
     if (force) {
       component.fetchedAtMillis = 0L
       component.statusCache.clear()
@@ -201,7 +233,10 @@ class BangumiExploreViewModel : ViewModel() {
     loadFollowing(category = category, reset = false)
   }
 
-  /** Clear the cached following season status for a specific season so the next fetch picks up fresh data. */
+  /**
+   * Clear the cached following season status for a specific season so the next fetch picks up fresh
+   * data.
+   */
   fun clearFollowingStatusCache(seasonId: Long) {
     if (seasonId <= 0L) return
     followingComponents.values.forEach { it.statusCache.remove(seasonId) }
@@ -233,7 +268,10 @@ class BangumiExploreViewModel : ViewModel() {
     return matches.ifEmpty { setOf(_state.value.selectedCategory) }
   }
 
-  /** Apply the currently selected episode to the matching category component while the server catches up. */
+  /**
+   * Apply the currently selected episode to the matching category component while the server
+   * catches up.
+   */
   fun applyFollowingPlayback(seasonId: Long, episode: BangumiEpisode, positionMs: Long) {
     if (seasonId <= 0L || episode.id <= 0L) return
     val override =
@@ -252,16 +290,19 @@ class BangumiExploreViewModel : ViewModel() {
           watchProgress = override.toWatchProgress(),
         )
       updateFollowing(category) { following ->
-        following.copy(cards = following.cards.map { applyFollowingPlaybackOverride(it, component) })
+        following.copy(
+          cards = following.cards.map { applyFollowingPlaybackOverride(it, component) }
+        )
       }
     }
   }
 
   /**
    * Move the just-watched season's card to the front of the rail. Only the ordering changes; the
-   * card content is left untouched. With the season-stable LazyRow keys and `Modifier.animateItem()`
-   * this animates the old→new order transition in place instead of rebuilding the rail. The private
-   * history cache is reordered too so a later pagination merge cannot silently revert the move.
+   * card content is left untouched. With the season-stable LazyRow keys and
+   * `Modifier.animateItem()` this animates the old→new order transition in place instead of
+   * rebuilding the rail. The private history cache is reordered too so a later pagination merge
+   * cannot silently revert the move.
    */
   fun moveFollowingToFront(seasonId: Long) {
     if (seasonId <= 0L) return
@@ -313,6 +354,9 @@ class BangumiExploreViewModel : ViewModel() {
     }
     if (reset) {
       component.job?.cancel()
+      component.enrichmentJob?.cancel()
+      component.enrichmentJob = null
+      component.enrichmentGeneration += 1
       component.history = emptyList()
       component.historyCursor = HistoryCursor()
       component.historyHasMore = false
@@ -320,156 +364,372 @@ class BangumiExploreViewModel : ViewModel() {
       component.followedPage = 0
       component.followedHasMore = false
     }
-    component.job =
-      viewModelScope.launch {
-        val result =
-          withContext(Dispatchers.IO) {
-            runCatching {
-              if (reset) {
-                coroutineScope {
-                  val history = async { loadInitialWatchingHistory(requestedCategory) }
-                  val followed = async {
-                    BiliApi.getBangumiWatchingFollowedPage(
-                      requestedMid,
-                      requestedCategory,
-                      page = 1,
-                    )
-                  }
-                  FollowingPageResult.Initial(history.await(), followed.await())
-                }
-              } else if (component.historyHasMore) {
-                FollowingPageResult.History(
-                  BiliApi.getBangumiWatchingHistoryPage(requestedCategory, component.historyCursor)
-                )
-              } else {
-                FollowingPageResult.Followed(
-                  BiliApi.getBangumiWatchingFollowedPage(
-                    requestedMid,
-                    requestedCategory,
-                    page = component.followedPage + 1,
+    component.job = viewModelScope.launch {
+      val pageStartedAt = SystemClock.elapsedRealtime()
+      val historyCursor = component.historyCursor
+      val historyHasMore = component.historyHasMore
+      val historySnapshot = component.history
+      val followedPage = component.followedPage
+      val followedHasMore = component.followedHasMore
+      val followedSnapshot = component.followed
+      val result =
+        withContext(Dispatchers.IO) {
+          runCatching {
+            if (reset) {
+              coroutineScope {
+                val history = async {
+                  loadWatchingHistoryBatch(
+                    category = requestedCategory,
+                    cursor = HistoryCursor(),
+                    existingKeys = emptySet(),
+                    targetNewCards = INITIAL_HISTORY_TARGET,
+                    maxPages = INITIAL_HISTORY_MAX_PAGES,
                   )
-                )
-              }
-            }
-          }
-        if (requestedMid != accountMid) return@launch
-        result
-          .onSuccess { response ->
-            when (response) {
-              is FollowingPageResult.Initial -> {
-                component.history = response.history.cards
-                component.historyCursor = response.history.cursor
-                component.historyHasMore =
-                  response.history.hasMore && response.history.cursor != HistoryCursor()
-                component.followed = response.followed.cards
-                component.followedPage = 1
-                component.followedHasMore = response.followed.hasMore
-                component.fetchedAtMillis = System.currentTimeMillis()
-                // A successful full refresh is authoritative. Any local override has now had
-                // an opportunity to be replaced by the server's latest history.
-                component.playbackOverrides.clear()
-              }
-              is FollowingPageResult.History -> {
-                component.history =
-                  (component.history + response.history.cards).distinctBy(::followingKey)
-                component.historyHasMore =
-                  response.history.hasMore && response.history.cursor != component.historyCursor
-                component.historyCursor = response.history.cursor
-              }
-              is FollowingPageResult.Followed -> {
-                component.followed =
-                  (component.followed + response.followed.cards).distinctBy(::followingKey)
-                component.followedPage += 1
-                component.followedHasMore = response.followed.hasMore
-              }
-            }
-            val seasonType = BiliApi.bangumiSeasonType(requestedCategory) ?: return@onSuccess
-            val cards =
-              BiliApi
-                .mergeBangumiWatchingCards(component.followed, component.history, seasonType)
-                .map { applyFollowingPlaybackOverride(it, component) }
-                .let { merged ->
-                  withContext(Dispatchers.IO) {
-                    resolveFollowingEpisodeCovers(resolveFollowingStatuses(merged, component))
-                  }
                 }
-                .let(::sortFollowingCards)
-            if (requestedMid != accountMid) return@onSuccess
-            updateFollowing(requestedCategory) {
-              val hasMore = component.historyHasMore || component.followedHasMore
+                val followed = async {
+                  loadFollowedBatch(
+                    mid = requestedMid,
+                    category = requestedCategory,
+                    firstPage = 1,
+                    existingKeys = emptySet(),
+                    targetNewCards = INITIAL_HISTORY_TARGET,
+                    maxPages = INITIAL_FOLLOWED_MAX_PAGES,
+                  )
+                }
+                FollowingPageResult.Initial(history.await(), followed.await())
+              }
+            } else {
+              FollowingPageResult.Continuation(
+                loadFollowingContinuationBatch(
+                  mid = requestedMid,
+                  category = requestedCategory,
+                  history = historySnapshot,
+                  historyCursor = historyCursor,
+                  historyHasMore = historyHasMore,
+                  followed = followedSnapshot,
+                  followedPage = followedPage,
+                  followedHasMore = followedHasMore,
+                )
+              )
+            }
+          }
+        }
+      if (requestedMid != accountMid) return@launch
+      result
+        .onSuccess { response ->
+          when (response) {
+            is FollowingPageResult.Initial -> {
+              component.history = response.history.cards
+              component.historyCursor = response.history.cursor
+              component.historyHasMore =
+                response.history.hasMore && response.history.cursor != HistoryCursor()
+              component.followed = response.followed.cards
+              component.followedPage = response.followed.lastPage
+              component.followedHasMore = response.followed.hasMore
+              component.fetchedAtMillis = System.currentTimeMillis()
+            }
+            is FollowingPageResult.Continuation -> {
+              response.batch.history?.let { history ->
+                val previousCursor = component.historyCursor
+                component.history =
+                  (component.history + history.cards).distinctBy(::followingKey)
+                component.historyCursor = history.cursor
+                component.historyHasMore = history.hasMore && history.cursor != previousCursor
+              }
+              response.batch.followed?.let { followed ->
+                component.followed =
+                  (component.followed + followed.cards).distinctBy(::followingKey)
+                component.followedPage = followed.lastPage
+                component.followedHasMore = followed.hasMore
+              }
+            }
+          }
+          component.playbackOverrides.entries.removeAll { (seasonId, override) ->
+            serverHistoryAcknowledgesPlaybackOverride(
+              serverHistoryCard = component.history.firstOrNull { it.seasonId == seasonId },
+              overrideEpisodeId = override.episode.id,
+              overrideViewedAt = override.viewedAt,
+            )
+          }
+          val seasonType = BiliApi.bangumiSeasonType(requestedCategory) ?: return@onSuccess
+          val rawCards =
+            BiliApi.mergeBangumiWatchingCards(component.followed, component.history, seasonType)
+              .map { applyFollowingPlaybackOverride(it, component) }
+          val hasMore = component.historyHasMore || component.followedHasMore
+          Log.d(
+            FOLLOWING_LOG_TAG,
+            "page category=$requestedCategory reset=$reset history=${component.history.size} " +
+              "followed=${component.followed.size} visible=${rawCards.size} hasMore=$hasMore " +
+              "durationMs=${SystemClock.elapsedRealtime() - pageStartedAt}",
+          )
+          updateFollowing(requestedCategory) { following ->
+            val cards =
+              if (reset) sortFollowingCards(rawCards)
+              else mergeFollowingPageStable(following.cards, rawCards)
+            if (
+              keepCurrentContentVisible &&
+                followingSnapshotsEqual(following.cards, cards) &&
+                following.hasMore == hasMore
+            ) {
+              following
+            } else {
+              following.copy(
+                cards = cards,
+                loading = false,
+                refreshing = false,
+                loadingMore = false,
+                hasMore = hasMore,
+                error = null,
+              )
+            }
+          }
+
+          // Do not hold pagination open while per-season status and episode-cover requests finish.
+          // They only enrich stable cards and can be cancelled/restarted from the newest snapshot.
+          val enrichmentGeneration = ++component.enrichmentGeneration
+          val enrichmentStartedAt = SystemClock.elapsedRealtime()
+          component.enrichmentJob?.cancel()
+          component.enrichmentJob =
+            viewModelScope.launch {
+              val resolvedCards =
+                withContext(Dispatchers.IO) {
+                  resolveFollowingEpisodeCovers(resolveFollowingStatuses(rawCards, component))
+                }
               if (
-                keepCurrentContentVisible &&
-                  followingSnapshotsEqual(it.cards, cards) &&
-                  it.hasMore == hasMore
+                requestedMid != accountMid ||
+                  component.enrichmentGeneration != enrichmentGeneration
               ) {
-                // The network and all progress/cover resolution still completed, but no visible
-                // snapshot changed. Preserve the exact StateFlow value so Compose does no work.
-                it
-              } else {
-                it.copy(
-                  cards = cards,
-                  loading = false,
-                  refreshing = false,
-                  loadingMore = false,
-                  hasMore = hasMore,
-                  error = null,
-                )
+                return@launch
               }
+              updateFollowing(requestedCategory) { following ->
+                val cards =
+                  if (reset) sortFollowingCards(resolvedCards)
+                  else mergeFollowingPageStable(following.cards, resolvedCards)
+                if (followingSnapshotsEqual(following.cards, cards)) following
+                else following.copy(cards = cards)
+              }
+              Log.d(
+                FOLLOWING_LOG_TAG,
+                "enriched category=$requestedCategory visible=${resolvedCards.size} " +
+                  "durationMs=${SystemClock.elapsedRealtime() - enrichmentStartedAt}",
+              )
+            }
+        }
+        .onFailure { error ->
+          if (error is CancellationException || requestedMid != accountMid) return@onFailure
+          Log.w(
+            FOLLOWING_LOG_TAG,
+            "page failed category=$requestedCategory reset=$reset " +
+              "durationMs=${SystemClock.elapsedRealtime() - pageStartedAt}",
+            error,
+          )
+          if (!keepCurrentContentVisible) {
+            updateFollowing(requestedCategory) {
+              it.copy(
+                loading = false,
+                refreshing = false,
+                loadingMore = false,
+                error = error.message ?: "正在追加载失败",
+              )
             }
           }
-          .onFailure { error ->
-            if (error is CancellationException || requestedMid != accountMid) {
-              return@onFailure
-            }
-            if (!keepCurrentContentVisible) {
-              updateFollowing(requestedCategory) {
-                it.copy(
-                  loading = false,
-                  refreshing = false,
-                  loadingMore = false,
-                  error = error.message ?: "正在追加载失败",
-                )
-              }
-            }
-          }
-      }
+        }
+    }
   }
 
   private fun followingKey(card: SpaceContentCard): String =
     card.seasonId.takeIf { it > 0L }?.toString() ?: card.id
 
-  private fun sortFollowingCards(cards: List<SpaceContentCard>): List<SpaceContentCard> {
-    val watched =
-      cards.filter { it.lastViewedAt > 0L }.sortedByDescending(SpaceContentCard::lastViewedAt)
-    val withoutTimestamp = cards.filter { it.lastViewedAt <= 0L }
-    return watched + withoutTimestamp
+  private suspend fun loadFollowingContinuationBatch(
+    mid: Long,
+    category: BangumiExploreCategory,
+    history: List<SpaceContentCard>,
+    historyCursor: HistoryCursor,
+    historyHasMore: Boolean,
+    followed: List<SpaceContentCard>,
+    followedPage: Int,
+    followedHasMore: Boolean,
+  ): FollowingContinuationBatch {
+    var nextHistoryCursor = historyCursor
+    var moreHistory = historyHasMore
+    var nextFollowedPage = followedPage + 1
+    var moreFollowed = followedHasMore
+    var historyAttempted = false
+    var followedAttempted = false
+    val historyCards = mutableListOf<SpaceContentCard>()
+    val followedCards = mutableListOf<SpaceContentCard>()
+    val visibleExistingKeys =
+      (history + followed).mapTo(mutableSetOf(), ::followingKey)
+    var rounds = 0
+    var visibleNewCards = 0
+    while (
+      shouldContinueFollowingScan(
+        visibleNewCards = visibleNewCards,
+        hasMore = moreHistory || moreFollowed,
+        completedRounds = rounds,
+        maxRounds = FOLLOWING_EMPTY_SCAN_MAX_ROUNDS,
+      )
+    ) {
+      val (historyBatch, followedBatch) =
+        coroutineScope {
+          val historyRequest =
+            if (moreHistory) {
+              async {
+                loadWatchingHistoryBatch(
+                  category = category,
+                  cursor = nextHistoryCursor,
+                  existingKeys =
+                    (history + historyCards).mapTo(mutableSetOf(), ::followingKey),
+                  targetNewCards = FOLLOWING_PAGE_TARGET,
+                  maxPages = FOLLOWING_PAGE_MAX_PAGES,
+                )
+              }
+            } else null
+          val followedRequest =
+            if (moreFollowed) {
+              async {
+                loadFollowedBatch(
+                  mid = mid,
+                  category = category,
+                  firstPage = nextFollowedPage,
+                  existingKeys =
+                    (followed + followedCards).mapTo(mutableSetOf(), ::followingKey),
+                  targetNewCards = FOLLOWING_PAGE_TARGET,
+                  maxPages = FOLLOWING_PAGE_MAX_PAGES,
+                )
+              }
+            } else null
+          historyRequest?.await() to followedRequest?.await()
+        }
+      historyBatch?.let { batch ->
+        historyAttempted = true
+        historyCards += batch.cards
+        val previousCursor = nextHistoryCursor
+        nextHistoryCursor = batch.cursor
+        moreHistory = batch.hasMore && batch.cursor != previousCursor
+      }
+      followedBatch?.let { batch ->
+        followedAttempted = true
+        followedCards += batch.cards
+        nextFollowedPage = batch.lastPage + 1
+        moreFollowed = batch.hasMore
+      }
+      rounds += 1
+      visibleNewCards =
+        (historyCards + followedCards)
+          .distinctBy(::followingKey)
+          .count { followingKey(it) !in visibleExistingKeys }
+    }
+    return FollowingContinuationBatch(
+      history =
+        if (historyAttempted) {
+          BangumiWatchingHistoryPage(
+            cards = historyCards.distinctBy(::followingKey),
+            cursor = nextHistoryCursor,
+            hasMore = moreHistory,
+          )
+        } else null,
+      followed =
+        if (followedAttempted) {
+          FollowedPageBatch(
+            cards = followedCards.distinctBy(::followingKey),
+            lastPage = (nextFollowedPage - 1).coerceAtLeast(followedPage),
+            hasMore = moreFollowed,
+          )
+        } else null,
+    )
   }
 
-  private fun loadInitialWatchingHistory(
-    category: BangumiExploreCategory
+  private suspend fun loadWatchingHistoryBatch(
+    category: BangumiExploreCategory,
+    cursor: HistoryCursor,
+    existingKeys: Set<String>,
+    targetNewCards: Int,
+    maxPages: Int,
   ): BangumiWatchingHistoryPage {
-    var cursor = HistoryCursor()
+    var currentCursor = cursor
     var hasMore = true
     val cards = mutableListOf<SpaceContentCard>()
     var loadedPages = 0
     while (
-      loadedPages < INITIAL_HISTORY_MAX_PAGES &&
+      loadedPages < maxPages &&
         hasMore &&
-        cards.distinctBy(::followingKey).size < INITIAL_HISTORY_TARGET
+        cards.distinctBy(::followingKey).count { followingKey(it) !in existingKeys } <
+          targetNewCards
     ) {
-      val page = BiliApi.getBangumiWatchingHistoryPage(category, cursor)
-      cards += page.cards
+      val page = BiliApi.getBangumiWatchingHistoryPage(category, currentCursor)
+      val expectedSeasonType = BiliApi.bangumiSeasonType(category) ?: return page
+      cards +=
+        resolveFollowingSeasonTypes(page.cards).filter { it.seasonType == expectedSeasonType }
       val nextCursor = page.cursor
-      hasMore = page.hasMore && nextCursor != cursor && nextCursor != HistoryCursor()
-      cursor = nextCursor
+      hasMore = page.hasMore && nextCursor != currentCursor && nextCursor != HistoryCursor()
+      currentCursor = nextCursor
       loadedPages += 1
     }
     return BangumiWatchingHistoryPage(
-      cards =
-        cards
-          .sortedByDescending(SpaceContentCard::lastViewedAt)
-          .distinctBy(::followingKey),
-      cursor = cursor,
+      cards = cards.sortedByDescending(SpaceContentCard::lastViewedAt).distinctBy(::followingKey),
+      cursor = currentCursor,
+      hasMore = hasMore,
+    )
+  }
+
+  private suspend fun resolveFollowingSeasonTypes(
+    cards: List<SpaceContentCard>
+  ): List<SpaceContentCard> = coroutineScope {
+    val semaphore = Semaphore(FOLLOWING_SEASON_TYPE_RESOLVE_CONCURRENCY)
+    cards
+      .map { card ->
+        async {
+          if (card.seasonType != 1 || (card.seasonId <= 0L && card.episodeId <= 0L)) {
+            return@async card
+          }
+          val authoritativeType =
+            semaphore.withPermit {
+              runCatching {
+                  BiliApi.getAuthoritativePgcSeasonType(
+                    seasonId = card.seasonId,
+                    episodeId = card.episodeId,
+                  )
+                }
+                .getOrDefault(0)
+            }
+          if (authoritativeType > 0 && authoritativeType != card.seasonType) {
+            card.copy(seasonType = authoritativeType)
+          } else card
+        }
+      }
+      .awaitAll()
+  }
+
+  private fun loadFollowedBatch(
+    mid: Long,
+    category: BangumiExploreCategory,
+    firstPage: Int,
+    existingKeys: Set<String>,
+    targetNewCards: Int,
+    maxPages: Int,
+  ): FollowedPageBatch {
+    var page = firstPage
+    var lastPage = firstPage - 1
+    var hasMore = true
+    val cards = mutableListOf<SpaceContentCard>()
+    var loadedPages = 0
+    while (
+      loadedPages < maxPages &&
+        hasMore &&
+        cards.distinctBy(::followingKey).count { followingKey(it) !in existingKeys } <
+          targetNewCards
+    ) {
+      val response = BiliApi.getBangumiWatchingFollowedPage(mid, category, page)
+      cards += response.cards
+      lastPage = page
+      hasMore = response.hasMore
+      page += 1
+      loadedPages += 1
+    }
+    return FollowedPageBatch(
+      cards = cards.distinctBy(::followingKey),
+      lastPage = lastPage.coerceAtLeast(firstPage),
       hasMore = hasMore,
     )
   }
@@ -479,7 +739,8 @@ class BangumiExploreViewModel : ViewModel() {
     component: FollowingComponentState,
   ): List<SpaceContentCard> = coroutineScope {
     val semaphore = Semaphore(FOLLOWING_STATUS_RESOLVE_CONCURRENCY)
-    cards.map { card ->
+    cards
+      .map { card ->
       async {
         if (
           card.watchProgress != null ||
@@ -500,18 +761,19 @@ class BangumiExploreViewModel : ViewModel() {
             }
         applyFollowingUserStatus(card, status)
       }
-    }.awaitAll()
+      }
+      .awaitAll()
   }
 
   private suspend fun resolveFollowingEpisodeCovers(
     cards: List<SpaceContentCard>
   ): List<SpaceContentCard> = coroutineScope {
     val semaphore = Semaphore(FOLLOWING_COVER_RESOLVE_CONCURRENCY)
-    cards.mapIndexed { index, card ->
+    cards
+      .mapIndexed { index, card ->
       async {
         val episodeId =
-          card.watchProgress?.episodeId?.takeIf { it > 0L }
-            ?: card.episodeId.takeIf { it > 0L }
+            card.watchProgress?.episodeId?.takeIf { it > 0L } ?: card.episodeId.takeIf { it > 0L }
         if (
           index >= FOLLOWING_COVER_RESOLVE_LIMIT ||
             episodeId == null ||
@@ -545,7 +807,8 @@ class BangumiExploreViewModel : ViewModel() {
           )
         }
       }
-    }.awaitAll()
+      }
+      .awaitAll()
   }
 
   private fun applyFollowingPlaybackOverride(
@@ -598,12 +861,10 @@ class BangumiExploreViewModel : ViewModel() {
   private sealed interface FollowingPageResult {
     data class Initial(
       val history: dev.openbili.webdemo.api.BangumiWatchingHistoryPage,
-      val followed: dev.openbili.webdemo.api.SpaceBangumiResponse,
+      val followed: FollowedPageBatch,
     ) : FollowingPageResult
 
-    data class History(val history: dev.openbili.webdemo.api.BangumiWatchingHistoryPage) : FollowingPageResult
-
-    data class Followed(val followed: dev.openbili.webdemo.api.SpaceBangumiResponse) : FollowingPageResult
+    data class Continuation(val batch: FollowingContinuationBatch) : FollowingPageResult
   }
 
   private fun load(category: BangumiExploreCategory) {
@@ -614,9 +875,9 @@ class BangumiExploreViewModel : ViewModel() {
         errors = it.errors - category,
       )
     }
-    requests[category] =
-      viewModelScope.launch {
-        val result = withContext(Dispatchers.IO) { runCatching { BiliApi.getBangumiExplorePage(category) } }
+    requests[category] = viewModelScope.launch {
+      val result =
+        withContext(Dispatchers.IO) { runCatching { BiliApi.getBangumiExplorePage(category) } }
         result
           .onSuccess { page ->
             pageFetchedAtMillis[category] = System.currentTimeMillis()
@@ -637,6 +898,59 @@ class BangumiExploreViewModel : ViewModel() {
           }
       }
   }
+}
+
+internal fun sortFollowingCards(cards: List<SpaceContentCard>): List<SpaceContentCard> {
+  val watched =
+    cards.filter { it.lastViewedAt > 0L }.sortedByDescending(SpaceContentCard::lastViewedAt)
+  val withoutTimestamp = cards.filter { it.lastViewedAt <= 0L }
+  return watched + withoutTimestamp
+}
+
+internal fun shouldContinueFollowingScan(
+  visibleNewCards: Int,
+  hasMore: Boolean,
+  completedRounds: Int,
+  maxRounds: Int,
+): Boolean =
+  visibleNewCards <= 0 && hasMore && completedRounds < maxRounds.coerceAtLeast(1)
+
+/**
+ * Cursor pages are older than the snapshot already shown. Update cards that gained progress in
+ * place and append genuinely new rows, instead of globally sorting every positive timestamp ahead
+ * of the followed-only filler cards.
+ */
+internal fun mergeFollowingPageStable(
+  current: List<SpaceContentCard>,
+  resolved: List<SpaceContentCard>,
+): List<SpaceContentCard> {
+  val resolvedByKey = resolved.associateBy(::stableFollowingKey).toMutableMap()
+  return buildList {
+    current.forEach { card ->
+      val key = stableFollowingKey(card)
+      add(resolvedByKey.remove(key) ?: card)
+    }
+    resolved.forEach { card ->
+      if (resolvedByKey.remove(stableFollowingKey(card)) != null) add(card)
+    }
+  }
+}
+
+private fun stableFollowingKey(card: SpaceContentCard): String =
+  card.seasonId.takeIf { it > 0L }?.toString() ?: card.id
+
+internal fun serverHistoryAcknowledgesPlaybackOverride(
+  serverHistoryCard: SpaceContentCard?,
+  overrideEpisodeId: Long,
+  overrideViewedAt: Long,
+): Boolean {
+  val server = serverHistoryCard ?: return false
+  if (server.lastViewedAt < overrideViewedAt) return false
+  val serverEpisodeId =
+    server.watchProgress?.episodeId?.takeIf { it > 0L }
+      ?: server.episodeId.takeIf { it > 0L }
+      ?: return true
+  return serverEpisodeId == overrideEpisodeId
 }
 
 internal fun applyFollowingUserStatus(
@@ -664,10 +978,7 @@ internal fun followingSnapshotsEqual(
 ): Boolean = current == updated
 
 private fun SpaceContentCard.withResolvedProgressState(): SpaceContentCard =
-  if (
-    watchProgress != null &&
-      watchProgressState != BangumiWatchProgressState.RESOLVED
-  ) {
+  if (watchProgress != null && watchProgressState != BangumiWatchProgressState.RESOLVED) {
     copy(watchProgressState = BangumiWatchProgressState.RESOLVED)
   } else {
     this

@@ -34,9 +34,11 @@ data class FeedCard(
         bvid = obj.optString("bvid", ""),
         cid = cid,
         title = obj.optString("title", ""),
-        coverUrl = obj.optString("pic", ""),
+        coverUrl = UrlPolicy.normalizeImageUrl(obj.optString("pic", "")).orEmpty(),
         uploaderName = obj.optJSONObject("owner")?.optString("name") ?: obj.optString("author", ""),
-        uploaderFace = obj.optJSONObject("owner")?.optString("face") ?: "",
+        uploaderFace =
+          UrlPolicy.normalizeImageUrl(obj.optJSONObject("owner")?.optString("face").orEmpty())
+            .orEmpty(),
         uploaderMid = obj.optJSONObject("owner")?.optLong("mid", 0) ?: obj.optLong("mid", 0),
         playCount = obj.optJSONObject("stat")?.optLong("view", 0) ?: obj.optLong("play", 0),
         danmakuCount =
@@ -94,15 +96,48 @@ data class VideoInfo(
   val desc: String,
   val pages: List<VideoPage>,
   val collection: VideoCollection? = null,
+  val copyright: Int = 0,
 )
 
 data class VideoEngagement(
   val liked: Boolean = false,
   val coins: Int = 0,
   val favorited: Boolean = false,
+  val loaded: Boolean = false,
 )
 
-data class VideoPage(val page: Int, val cid: Long, val part: String, val durationSeconds: Long)
+internal fun videoCoinLimit(copyright: Int): Int = if (copyright == 1 || copyright == 3) 2 else 1
+
+internal fun remainingVideoCoins(copyright: Int, alreadyCoined: Int): Int =
+  (videoCoinLimit(copyright) - alreadyCoined).coerceAtLeast(0)
+
+internal fun parseVideoEngagement(data: JSONObject): VideoEngagement {
+  check(data.has("like") && data.has("coin") && data.has("favorite")) {
+    "互动状态响应不完整"
+  }
+
+  fun booleanValue(name: String): Boolean =
+    when (val value = data.opt(name)) {
+      is Boolean -> value
+      is Number -> value.toInt() != 0
+      is String -> value == "1" || value.equals("true", ignoreCase = true)
+      else -> false
+    }
+
+  return VideoEngagement(
+    liked = booleanValue("like"),
+    coins = data.optInt("coin", 0).coerceAtLeast(0),
+    favorited = booleanValue("favorite"),
+    loaded = true,
+  )
+}
+
+data class VideoPage(
+  val page: Int,
+  val cid: Long,
+  val part: String,
+  val durationSeconds: Long,
+)
 
 data class VideoCollection(
   val id: Long,
@@ -111,6 +146,7 @@ data class VideoCollection(
 )
 
 data class VideoCollectionEpisode(
+  val aid: Long = 0L,
   val bvid: String,
   val cid: Long,
   val title: String,
@@ -341,6 +377,14 @@ data class CommentMention(
   val name: String,
 )
 
+data class OfficialVerification(
+  val type: Int = -1,
+  val description: String = "",
+) {
+  val verified: Boolean
+    get() = type == 0 || type == 1
+}
+
 data class CommentItem(
   val rpid: Long,
   val mid: Long,
@@ -358,6 +402,7 @@ data class CommentItem(
   val level: Int = 0,
   val vipActive: Boolean = false,
   val vipLabel: String = "",
+  val officialVerification: OfficialVerification = OfficialVerification(),
   val upLiked: Boolean = false,
   val upReplied: Boolean = false,
 )
@@ -408,6 +453,7 @@ data class SpaceProfile(
   val vipActive: Boolean = false,
   val vipLabel: String = "",
   val vipIconUrl: String = "",
+  val officialVerification: OfficialVerification = OfficialVerification(),
   val ipLocation: String = "",
   val followed: Boolean = false,
 )
@@ -689,6 +735,7 @@ data class BangumiSeason(
   val episodes: List<BangumiEpisode>,
   val seasons: List<BangumiSeasonOption>,
   val sections: List<BangumiSection>,
+  val seasonType: Int = 0,
   val userRatingScore: Int? = null,
 )
 
@@ -735,6 +782,20 @@ data class SpaceDynamicResponse(
   val hasMore: Boolean = false,
 )
 
+data class HomeDynamicUploader(
+  val mid: Long,
+  val name: String,
+  val face: String,
+  val hasUpdate: Boolean = false,
+  val live: Boolean = false,
+)
+
+data class HomeDynamicUploaderResponse(
+  val items: List<HomeDynamicUploader> = emptyList(),
+  val offset: String = "",
+  val hasMore: Boolean = false,
+)
+
 data class SpaceVideoResponse(val cards: List<FeedCard>, val hasMore: Boolean)
 
 data class FavoriteFolder(
@@ -751,6 +812,7 @@ data class FollowingUser(
   val face: String,
   val signature: String,
   val groupIds: List<Long> = emptyList(),
+  val officialVerification: OfficialVerification = OfficialVerification(),
 )
 
 data class FollowingResponse(
@@ -768,6 +830,7 @@ enum class MessageTargetKind {
 data class InteractionUnreadSummary(
   val replyCount: Int = 0,
   val mentionCount: Int = 0,
+  val likeCount: Int = 0,
 ) {
   val interactionCount: Int
     get() = replyCount + mentionCount
@@ -855,6 +918,7 @@ data class SearchUser(
   val level: Int = 0,
   val vipActive: Boolean = false,
   val vipLabel: String = "",
+  val officialVerification: OfficialVerification = OfficialVerification(),
 )
 
 // ── Article / account history ────────────────────────────────────────────────

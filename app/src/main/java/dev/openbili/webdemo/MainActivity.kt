@@ -1,5 +1,7 @@
 package dev.openbili.webdemo
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Build
 import android.os.SystemClock
@@ -7,6 +9,7 @@ import android.util.Log
 import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
@@ -23,11 +26,13 @@ import androidx.compose.ui.unit.Density
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.ViewModelProvider
 import dev.openbili.webdemo.api.BiliHttpClient
 import dev.openbili.webdemo.bangumi.BangumiRecommendationViewModel
 import dev.openbili.webdemo.feed.FeedViewModel
+import dev.openbili.webdemo.feed.LocalLimitImageLoadingSpeed
 import dev.openbili.webdemo.my.MyViewModel
 import dev.openbili.webdemo.search.SearchViewModel
 import dev.openbili.webdemo.settings.AppSettingsViewModel
@@ -50,7 +55,9 @@ class MainActivity : ComponentActivity() {
   private val mainViewModel: MainViewModel by viewModels()
   private val feedViewModel: FeedViewModel by viewModels()
   private val authViewModel: AuthViewModel by viewModels()
-  private val playerViewModel: PlayerViewModel by viewModels()
+  private val playerViewModel: PlayerViewModel by lazy(LazyThreadSafetyMode.NONE) {
+    (application as BiliApplication).sharedPlayerViewModel
+  }
   private val myViewModel: MyViewModel by viewModels()
   private val profileMessageViewModel: MyViewModel by lazy {
     ViewModelProvider(this).get("profile-private-messages", MyViewModel::class.java)
@@ -61,6 +68,9 @@ class MainActivity : ComponentActivity() {
   private var darkShellTheme = false
   private var lastRootBackPressAt: Long? = null
   private var rootExitToast: Toast? = null
+  private var notificationPermissionRequested = false
+  private val notificationPermissionLauncher =
+    registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
@@ -136,6 +146,7 @@ class MainActivity : ComponentActivity() {
         CompositionLocalProvider(
           LocalDensity provides Density(deviceDensity.density, fontScale = 1f),
           LocalGlassEffectsEnabled provides settings.glassEffects,
+          LocalLimitImageLoadingSpeed provides settings.limitImageLoadingSpeed,
           LocalContentColor provides MaterialTheme.colorScheme.onBackground,
         ) {
           WebLinkHost {
@@ -167,10 +178,12 @@ class MainActivity : ComponentActivity() {
 
   override fun onDestroy() {
     rootExitToast?.cancel()
-    try {
-      playerViewModel.release()
-    } catch (_: Exception) {}
     super.onDestroy()
+  }
+
+  override fun onStart() {
+    super.onStart()
+    requestNotificationPermissionIfNeeded()
   }
 
   override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -189,6 +202,19 @@ class MainActivity : ComponentActivity() {
       isAppearanceLightNavigationBars = !darkShellTheme
       hide(WindowInsetsCompat.Type.systemBars())
     }
+  }
+
+  private fun requestNotificationPermissionIfNeeded() {
+    if (
+      Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+        notificationPermissionRequested ||
+        ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
+          PackageManager.PERMISSION_GRANTED
+    ) {
+      return
+    }
+    notificationPermissionRequested = true
+    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
   }
 
   private fun handleRootExitRequest() {
