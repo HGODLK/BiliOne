@@ -56,8 +56,9 @@ android {
     applicationId = "io.github.shuyunr.bilione"
     minSdk = 24
     targetSdk = 37
-    versionCode = 1
-    versionName = "0.3.0-preview.3"
+    // Increment when launcher artwork changes so OEM launchers invalidate their icon cache.
+    versionCode = 6
+    versionName = "0.3.0"
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     vectorDrawables.useSupportLibrary = true
     buildConfigField(
