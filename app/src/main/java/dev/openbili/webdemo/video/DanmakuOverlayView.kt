@@ -1092,12 +1092,13 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
 
   /**
    * A Canvas invalidated by Choreographer can still be compositor-paced at the default 60 Hz on
-   * variable-refresh panels. Ask for the display's current cadence while danmaku is actually
-   * moving, rather than encoding a 120 Hz assumption; a panel that drops to 60 Hz is requested at
-   * 60 Hz on its next draw/state refresh.
+   * variable-refresh panels. Ask for the highest cadence supported at the active mode's resolution
+   * while danmaku is actually moving. Using Display.refreshRate here would create a feedback loop:
+   * once a 60 fps video surface makes the panel select 60 Hz, this animation surface would vote for
+   * 60 Hz too and could never restore the panel's 120 Hz animation mode.
    */
   private fun updateFrameRateHint(rendering: Boolean) {
-    val targetHz = if (rendering) display?.refreshRate?.takeIf { it > 0f } ?: 0f else 0f
+    val targetHz = if (rendering) preferredDanmakuRefreshRateHz() else 0f
     updateSurfaceFrameRateHint(targetHz)
     if (targetHz == requestedFrameRateHz) return
     val window = context.findActivity()?.window ?: return
@@ -1153,7 +1154,25 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
   }
 
   private fun currentFrameBudgetNanos(): Long =
-    danmakuFrameBudgetNanos(display?.refreshRate ?: FALLBACK_REFRESH_RATE_HZ)
+    danmakuFrameBudgetNanos(preferredDanmakuRefreshRateHz())
+
+  private fun preferredDanmakuRefreshRateHz(): Float {
+    val currentDisplay = display ?: return FALLBACK_REFRESH_RATE_HZ
+    val currentMode = currentDisplay.mode
+    val sameResolutionRates =
+      currentDisplay.supportedModes
+        .asSequence()
+        .filter {
+          it.physicalWidth == currentMode.physicalWidth &&
+            it.physicalHeight == currentMode.physicalHeight
+        }
+        .map { it.refreshRate }
+        .toList()
+    return preferredDanmakuRefreshRateHz(
+      currentRefreshRateHz = currentDisplay.refreshRate,
+      supportedRefreshRatesHz = sameResolutionRates,
+    )
+  }
 
   private fun Context.findActivity(): Activity? {
     var current: Context = this
@@ -2006,6 +2025,14 @@ internal fun danmakuFrameBudgetNanos(refreshRateHz: Float): Long {
   val safeRefreshRateHz = refreshRateHz.takeIf { it.isFinite() && it > 0f } ?: 60f
   return (1_000_000_000.0 / safeRefreshRateHz.toDouble()).roundToLong().coerceAtLeast(1L)
 }
+
+internal fun preferredDanmakuRefreshRateHz(
+  currentRefreshRateHz: Float,
+  supportedRefreshRatesHz: List<Float>,
+): Float =
+  supportedRefreshRatesHz.filter { it.isFinite() && it > 0f }.maxOrNull()
+    ?: currentRefreshRateHz.takeIf { it.isFinite() && it > 0f }
+    ?: 60f
 
 internal fun danmakuLaneSpan(
   contentHeight: Float,

@@ -13,6 +13,28 @@ class DanmakuClockInterpolationTest {
   }
 
   @Test
+  fun animationTargetDoesNotFollowVideoInducedSixtyHertzMode() {
+    assertEquals(
+      120f,
+      preferredDanmakuRefreshRateHz(
+        currentRefreshRateHz = 60f,
+        supportedRefreshRatesHz = listOf(60f, 120f),
+      ),
+    )
+  }
+
+  @Test
+  fun animationTargetFallsBackToCurrentModeWhenModesAreUnavailable() {
+    assertEquals(
+      60f,
+      preferredDanmakuRefreshRateHz(
+        currentRefreshRateHz = 60f,
+        supportedRefreshRatesHz = emptyList(),
+      ),
+    )
+  }
+
+  @Test
   fun renderThreadClockAdvancesFromMainThreadSample() {
     val snapshot =
       DanmakuPlaybackClockSnapshot(
