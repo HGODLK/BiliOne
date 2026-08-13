@@ -49,7 +49,8 @@ internal fun createPlayerView(
       // This is the single app-root SurfaceView. Compose changes its real layout bounds for the
       // embedded/fullscreen animation; no surface target handoff is involved.
       setEnableComposeSurfaceSyncWorkaround(true)
-      val roundedOutline = MutableRoundedOutlineProvider(20f * resources.displayMetrics.density)
+      val roundedOutline =
+        MutableRoundedOutlineProvider(PLAYER_CORNER_RADIUS_DP * resources.displayMetrics.density)
       outlineProvider = roundedOutline
       playerOutlineProviders[this] = roundedOutline
       clipToOutline = true
@@ -89,7 +90,8 @@ internal fun createTexturePlayerView(
       player = initialPlayer
       useController = false
       setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
-      val roundedOutline = MutableRoundedOutlineProvider(20f * resources.displayMetrics.density)
+      val roundedOutline =
+        MutableRoundedOutlineProvider(PLAYER_CORNER_RADIUS_DP * resources.displayMetrics.density)
       outlineProvider = roundedOutline
       playerOutlineProviders[this] = roundedOutline
       clipToOutline = true

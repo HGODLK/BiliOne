@@ -39,6 +39,7 @@ import dev.openbili.webdemo.api.DANMAKU_COLORFUL_VIP_GRADIENT
 import dev.openbili.webdemo.api.DanmakuInlineEmote
 import dev.openbili.webdemo.api.DanmakuItem
 import dev.openbili.webdemo.api.DanmakuMaskTimeline
+import dev.openbili.webdemo.ui.PLAYER_CORNER_RADIUS_DP
 import java.util.ArrayDeque
 import java.util.LinkedHashMap
 import kotlin.math.abs
@@ -85,6 +86,9 @@ internal fun splitInlineDanmaku(
     if (textStart < content.length) add(InlineDanmakuSegment.Text(content.substring(textStart)))
   }
 }
+
+internal fun danmakuViewportCornerRadiusPx(fullscreen: Boolean, density: Float): Float =
+  if (fullscreen) 0f else PLAYER_CORNER_RADIUS_DP * density.coerceAtLeast(0f)
 
 /** A main-thread player sample that can be safely advanced by the danmaku render thread. */
 internal data class DanmakuPlaybackClockSnapshot(
@@ -211,6 +215,7 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
   private var lastTextCacheQueueBucket = Long.MIN_VALUE
   private val bitmapTextCache = BitmapTextCache()
   private val renderViewport = RectF()
+  private val renderClipPath = Path()
   private val maskViewport = RectF()
   private val mainHandler = Handler(Looper.getMainLooper())
   private val clockSampleRunnable =
@@ -706,7 +711,16 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
     renderViewport.set(0f, 0f, canvas.width.toFloat(), canvas.height.toFloat())
     val viewport = renderViewport
     val saveCount = canvas.save()
-    canvas.clipRect(viewport)
+    val cornerRadiusPx =
+      danmakuViewportCornerRadiusPx(fullscreen, density)
+        .coerceAtMost(minOf(viewport.width(), viewport.height()) / 2f)
+    if (cornerRadiusPx > 0f) {
+      renderClipPath.rewind()
+      renderClipPath.addRoundRect(viewport, cornerRadiusPx, cornerRadiusPx, Path.Direction.CW)
+      canvas.clipPath(renderClipPath)
+    } else {
+      canvas.clipRect(viewport)
+    }
     applySmartMaskClip(
       canvas = canvas,
       maskPositionMs = maskPositionMs,

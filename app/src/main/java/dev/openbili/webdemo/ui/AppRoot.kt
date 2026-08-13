@@ -1071,7 +1071,9 @@ fun AppRoot(
           surfaceVisible?.let { visible ->
             playerView.updateVideoSurfaceAlpha(if (visible) 1f else 0f)
           }
-          playerView.updatePlayerCornerRadius(20f * (1f - fullscreenProgress.coerceIn(0f, 1f)))
+          playerView.updatePlayerCornerRadius(
+            PLAYER_CORNER_RADIUS_DP * (1f - fullscreenProgress.coerceIn(0f, 1f))
+          )
           playerView.updateSubtitlePresentation(
             visible =
               role == SharedPlayerViewRole.DETAIL &&

@@ -88,9 +88,11 @@ object LayoutTokens {
   val ExpandedGridSpacing = 16.dp
 }
 
+internal const val PLAYER_CORNER_RADIUS_DP = 20f
+
 /** Shapes shared by video cards, cover transitions, and the embedded player. */
 object VideoShapeTokens {
-  val CornerRadius = 20.dp
+  val CornerRadius = PLAYER_CORNER_RADIUS_DP.dp
   val Card = RoundedCornerShape(CornerRadius)
   val Player = Card
 }

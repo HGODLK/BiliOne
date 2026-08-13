@@ -240,6 +240,21 @@ private fun Rect.matchesTransitionAnchor(other: Rect?): Boolean {
     kotlin.math.abs(center.y - other.center.y) <= tolerance
 }
 
+internal fun dynamicAuthorAvatarTransitionBounds(
+  outerBounds: Rect,
+  contentInsetPx: Float,
+): Rect {
+  if (outerBounds.width <= 0f || outerBounds.height <= 0f) return Rect.Zero
+  val inset =
+    contentInsetPx.coerceAtLeast(0f).coerceAtMost(minOf(outerBounds.width, outerBounds.height) / 2f)
+  return Rect(
+    left = outerBounds.left + inset,
+    top = outerBounds.top + inset,
+    right = outerBounds.right - inset,
+    bottom = outerBounds.bottom - inset,
+  )
+}
+
 @Composable
 internal fun ProfileDynamicGrid(
   items: List<SpaceDynamicItem>,
@@ -738,8 +753,11 @@ private fun DynamicAuthorRow(
   onAvatarClick: (Rect) -> Unit = {},
   hiddenAvatarSourceBounds: Rect? = null,
 ) {
+  val avatarContentPadding = 4.dp
   val face = item.authorFace.ifBlank { profile?.face.orEmpty() }
   val name = item.authorName.ifBlank { profile?.name.orEmpty() }
+  val density = LocalDensity.current
+  val avatarContentInsetPx = with(density) { avatarContentPadding.toPx() }
   var avatarBounds by remember(item.id) { mutableStateOf(Rect.Zero) }
   Row(verticalAlignment = Alignment.CenterVertically) {
     AvatarImage(
@@ -749,14 +767,17 @@ private fun DynamicAuthorRow(
       requestSize = 96,
       modifier =
         Modifier.size(48.dp)
-          .onGloballyPositioned { avatarBounds = it.boundsInRoot() }
+          .onGloballyPositioned {
+            avatarBounds =
+              dynamicAuthorAvatarTransitionBounds(it.boundsInRoot(), avatarContentInsetPx)
+          }
           .graphicsLayer {
             alpha = if (avatarBounds.matchesTransitionAnchor(hiddenAvatarSourceBounds)) 0f else 1f
           }
           .clip(CircleShape)
           .background(MaterialTheme.colorScheme.surfaceVariant)
           .clickable { onAvatarClick(avatarBounds) }
-          .padding(4.dp)
+          .padding(avatarContentPadding)
           .clip(CircleShape),
     )
     Column(Modifier.padding(start = 10.dp).weight(1f)) {
