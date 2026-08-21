@@ -23,8 +23,7 @@ class AppSignerTest {
     val signed =
       AppSigner.parseSignedParams(
         params = mapOf("local_id" to "0", "ts" to "0"),
-        responseBody =
-          """{"code":0,"data":{"appkey":"test-app-key","sign":"test-signature"}}""",
+        responseBody = """{"code":0,"data":{"appkey":"test-app-key","sign":"test-signature"}}""",
       )
 
     assertEquals("test-app-key", signed["appkey"])

@@ -5,6 +5,22 @@ import org.junit.Test
 
 class CoverImageRequestFactoryTest {
   @Test
+  fun originalSourceRemainsUncroppedWhenDrawnWithCropScale() {
+    assertEquals(
+      false,
+      coverImageRequestProducesCroppedBitmap(crop = true, useOriginalSource = true),
+    )
+  }
+
+  @Test
+  fun serverCropIsRecordedAsCroppedBitmap() {
+    assertEquals(
+      true,
+      coverImageRequestProducesCroppedBitmap(crop = true, useOriginalSource = false),
+    )
+  }
+
+  @Test
   fun fitRequestReplacesExistingServerCrop() {
     assertEquals(
       "https://i0.hdslb.com/bfs/bangumi/poster.jpg@840w.webp",

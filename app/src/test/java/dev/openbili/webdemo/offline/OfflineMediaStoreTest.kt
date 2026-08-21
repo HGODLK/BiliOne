@@ -17,7 +17,11 @@ class OfflineMediaStoreTest {
   @Before
   fun clearStore() {
     context = RuntimeEnvironment.getApplication()
-    context.getSharedPreferences(OfflineMediaStore.PREFS_NAME, Context.MODE_PRIVATE).edit().clear().commit()
+    context
+      .getSharedPreferences(OfflineMediaStore.PREFS_NAME, Context.MODE_PRIVATE)
+      .edit()
+      .clear()
+      .commit()
   }
 
   @Test

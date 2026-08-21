@@ -18,8 +18,7 @@ internal fun OfficialVerificationIcon(
   val personal = verification.type == 0
   Icon(
     imageVector = Icons.Rounded.Bolt,
-    contentDescription =
-      verification.description.ifBlank { if (personal) "个人认证" else "机构认证" },
+    contentDescription = verification.description.ifBlank { if (personal) "个人认证" else "机构认证" },
     modifier = modifier,
     tint = if (personal) Color(0xFFFFB23F) else Color(0xFF4E9FFF),
   )

@@ -1,5 +1,6 @@
 package dev.openbili.webdemo
 
+import dev.openbili.webdemo.api.AudioStream
 import dev.openbili.webdemo.api.PlayUrlData
 import dev.openbili.webdemo.api.VideoStream
 import org.junit.Assert.assertTrue
@@ -38,5 +39,33 @@ class BiliDashManifestBackupUrlTest {
     assertTrue(backup > primary)
     assertTrue(manifest.contains("priority=\"1\""))
     assertTrue(manifest.contains("priority=\"2\""))
+  }
+
+  @Test
+  fun audioOnlyManifestDoesNotRequireOrExposeVideoTrack() {
+    val audio =
+      AudioStream(
+        id = 30280,
+        url = "https://primary.example/audio.m4s",
+        codecs = "mp4a.40.2",
+        initializationRange = "0-999",
+        indexRange = "1000-1999",
+      )
+    val manifest =
+      requireNotNull(
+        BiliDashManifest.buildAudioOnly(
+          PlayUrlData(
+            dashAudioUrl = audio.url,
+            dashAudio = audio,
+            streams = emptyList(),
+            currentStreamIndex = 0,
+            durationMs = 60_000,
+          )
+        )
+      )
+
+    assertTrue(manifest.contains("contentType=\"audio\""))
+    assertTrue(!manifest.contains("contentType=\"video\""))
+    assertTrue(manifest.contains(audio.url))
   }
 }

@@ -1,6 +1,6 @@
 package dev.openbili.webdemo.profile
 
-import dev.openbili.webdemo.api.BiliApi
+import dev.openbili.webdemo.api.BiliBangumiApi
 import dev.openbili.webdemo.api.SpaceContentCard
 import dev.openbili.webdemo.api.SpaceContentKind
 import org.junit.Assert.assertEquals
@@ -70,7 +70,7 @@ class ProfileBangumiFilterTest {
   fun followRequestUsesRequestedPageInsteadOfRepeatingFirstPage() {
     assertEquals(
       "https://api.bilibili.com/x/space/bangumi/follow/list?type=1&pn=3&ps=30&vmid=42",
-      BiliApi.spaceBangumiFollowUrl(mid = 42, type = 1, page = 3, pageSize = 30),
+      BiliBangumiApi.spaceBangumiFollowUrl(mid = 42, type = 1, page = 3, pageSize = 30),
     )
   }
 }

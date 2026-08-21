@@ -27,8 +27,8 @@ class MainViewModel(private val savedStateHandle: SavedStateHandle) : ViewModel(
 
   fun openVideo(item: FeedItem) {
     saveItem(item)
-    // Safety net: ensure the video URL uses the desktop host even if the feed item was
-    // parsed before a UA-related normalization fix.
+    // 安全网：确保视频 URL 使用桌面主机，即使信息流条目是在与 UA 相关的规范化修复
+    // 之前解析的。
     val url =
       UrlPolicy.normalizeVideoUrl(item.videoUrl)
         ?: item.videoUrl.replace("://m.bilibili.com/", "://www.bilibili.com/")
@@ -46,7 +46,7 @@ class MainViewModel(private val savedStateHandle: SavedStateHandle) : ViewModel(
   }
 
   /**
-   * Replaces the video rendered by the current video page without creating a new navigation page.
+   * 在不创建新导航页的情况下替换当前视频页渲染的视频。
    */
   fun replaceVideoInPlace(item: FeedItem) {
     saveItem(item)
@@ -82,7 +82,7 @@ class MainViewModel(private val savedStateHandle: SavedStateHandle) : ViewModel(
         video =
           app.video.copy(
             currentUrl = url,
-            // The native video title comes from the selected feed item, never the web page title.
+            // 原生视频标题来自选中的信息流条目，绝不来自网页标题。
             pageTitle = app.selectedVideo?.title ?: title?.takeIf(String::isNotBlank).orEmpty(),
             canGoBack = canGoBack,
             error = null,

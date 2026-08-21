@@ -56,9 +56,7 @@ object LiveHistoryStore {
   @Synchronized
   fun read(context: Context): List<StoredLiveHistory> {
     val raw =
-      context
-        .getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
-        .getString(KEY_ITEMS, null)
+      context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).getString(KEY_ITEMS, null)
         ?: return emptyList()
     val array = runCatching { JSONArray(raw) }.getOrNull() ?: return emptyList()
     return buildList {

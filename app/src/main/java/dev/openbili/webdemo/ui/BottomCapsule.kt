@@ -2,9 +2,11 @@ package dev.openbili.webdemo.ui
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -34,17 +36,23 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
@@ -120,6 +128,7 @@ internal fun rootPagerAnchorForCapsulePosition(position: Float): RootPagerAnchor
 fun BottomCapsule(
   selected: RootTab,
   onSelected: (RootTab) -> Unit,
+  onControlSelected: (RootTab) -> Unit = onSelected,
   backdropLayer: GraphicsLayer? = null,
   modifier: Modifier = Modifier,
   selectionPosition: () -> Float = { selected.ordinal.toFloat() },
@@ -127,6 +136,8 @@ fun BottomCapsule(
   onInteractionStart: () -> Unit = {},
   onInteractionEnd: () -> Unit = {},
   dragEnabled: Boolean = true,
+  initialFocusRequester: FocusRequester? = null,
+  focusEnabled: Boolean = true,
 ) {
   val glassEffectsEnabled = LocalGlassEffectsEnabled.current
   var contentBounds by remember { mutableStateOf(Rect.Zero) }
@@ -140,8 +151,8 @@ fun BottomCapsule(
     onInteractionEnd()
   }
   GlassSurface(
-    // Keep the original sizing chain intact. The previous Box-based attempt had no intrinsic
-    // height, which caused the capsule to collapse during measurement.
+    // 保持原有的尺寸链完整。此前基于 Box 的尝试没有固有高度，
+    // 导致胶囊在测量期间塌陷。
     modifier = modifier.navigationBarsPadding().width(438.dp),
     shape = CircleShape,
     containerColor = Color.Transparent,
@@ -154,14 +165,15 @@ fun BottomCapsule(
           detectHorizontalDragGestures(
             onDragStart = {
               onInteractionStart()
-              dragPosition =
-                selectionPosition().coerceIn(0f, RootTab.entries.lastIndex.toFloat())
+              dragPosition = selectionPosition().coerceIn(0f, RootTab.entries.lastIndex.toFloat())
             },
             onHorizontalDrag = { change, dragAmount ->
               change.consume()
               val updated =
-                ((dragPosition ?: selectionPosition()) + dragAmount / selectionTravelPx)
-                  .coerceIn(0f, RootTab.entries.lastIndex.toFloat())
+                ((dragPosition ?: selectionPosition()) + dragAmount / selectionTravelPx).coerceIn(
+                  0f,
+                  RootTab.entries.lastIndex.toFloat(),
+                )
               dragPosition = updated
               onSelectionDrag(updated)
             },
@@ -209,25 +221,46 @@ fun BottomCapsule(
             RootTab.HOME,
             selected,
             onSelected,
+            onControlSelected,
             onInteractionStart,
             onInteractionEnd,
-            Modifier.weight(1f),
+            Modifier.weight(1f)
+              .then(
+                if (initialFocusRequester != null && selected == RootTab.HOME)
+                  Modifier.focusRequester(initialFocusRequester)
+                else Modifier
+              ),
+            focusEnabled,
           )
           CapsuleItem(
             RootTab.BANGUMI,
             selected,
             onSelected,
+            onControlSelected,
             onInteractionStart,
             onInteractionEnd,
-            Modifier.weight(1f),
+            Modifier.weight(1f)
+              .then(
+                if (initialFocusRequester != null && selected == RootTab.BANGUMI)
+                  Modifier.focusRequester(initialFocusRequester)
+                else Modifier
+              ),
+            focusEnabled,
           )
           CapsuleItem(
             RootTab.MY,
             selected,
             onSelected,
+            onControlSelected,
             onInteractionStart,
             onInteractionEnd,
-            Modifier.weight(1f),
+            Modifier.weight(1f)
+              .then(
+                if (initialFocusRequester != null && selected == RootTab.MY)
+                  Modifier.focusRequester(initialFocusRequester)
+                else Modifier
+              ),
+            focusEnabled,
           )
         }
       }
@@ -240,13 +273,18 @@ private fun CapsuleItem(
   tab: RootTab,
   selected: RootTab,
   onSelected: (RootTab) -> Unit,
+  onControlSelected: (RootTab) -> Unit,
   onInteractionStart: () -> Unit,
   onInteractionEnd: () -> Unit,
   modifier: Modifier,
+  focusEnabled: Boolean = true,
 ) {
+  val controlMode = LocalControlMode.current
+  val controlFocusVisible = LocalControlFocusVisible.current
   val active = tab == selected
   val interactionSource = remember { MutableInteractionSource() }
   val pressed by interactionSource.collectIsPressedAsState()
+  val focused by interactionSource.collectIsFocusedAsState()
   var pressWasActive by remember { mutableStateOf(false) }
   LaunchedEffect(pressed) {
     if (pressed) {
@@ -254,7 +292,7 @@ private fun CapsuleItem(
       onInteractionStart()
     } else if (pressWasActive) {
       pressWasActive = false
-      // A cancelled press does not invoke onClick, but it must still release the playback cover.
+      // 取消的按压不会调用 onClick，但它仍必须释放播放封面。
       onInteractionEnd()
     }
   }
@@ -262,7 +300,45 @@ private fun CapsuleItem(
     modifier =
       modifier
         .fillMaxHeight()
+        .focusProperties {
+          canFocus = focusEnabled
+          if (controlMode) {
+            up = FocusRequester.Cancel
+            down = FocusRequester.Cancel
+          }
+        }
+        .then(
+          if (controlMode) {
+            Modifier.onPreviewKeyEvent { event ->
+              if (!focusEnabled || !isControlConfirmKey(event.nativeKeyEvent.keyCode)) {
+                return@onPreviewKeyEvent false
+              }
+              if (event.type == KeyEventType.KeyUp) {
+                onControlSelected(tab)
+                onInteractionEnd()
+              }
+              true
+            }
+          } else Modifier
+        )
+        .graphicsLayer {
+          val focusScale = if (focused && controlFocusVisible) 1.045f else 1f
+          scaleX = focusScale
+          scaleY = focusScale
+        }
         .clip(CircleShape)
+        .background(
+          if (focused && controlFocusVisible)
+            MaterialTheme.colorScheme.primary.copy(alpha = .16f)
+          else Color.Transparent
+        )
+        .border(
+          width = if (focused && controlFocusVisible) 2.dp else 0.dp,
+          color =
+            if (focused && controlFocusVisible) MaterialTheme.colorScheme.primary
+            else Color.Transparent,
+          shape = CircleShape,
+        )
         .clickable(
           interactionSource = interactionSource,
           indication = null,

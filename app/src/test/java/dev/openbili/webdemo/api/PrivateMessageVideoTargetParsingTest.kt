@@ -11,7 +11,7 @@ class PrivateMessageVideoTargetParsingTest {
   @Test
   fun `outgoing video share reads bvid and cover from nested video`() {
     val parsed =
-      BiliApi.parsePrivateContent(
+      BiliPrivateMessageApi.parsePrivateContent(
         11,
         """{"video":{"bvid":"BV1ab411c7mD","title":"嵌套视频","cover":"//i0.hdslb.com/test.jpg"}}""",
       )
@@ -25,7 +25,7 @@ class PrivateMessageVideoTargetParsingTest {
   @Test
   fun `recommended sub card keeps numeric video identity`() {
     val parsed =
-      BiliApi.parsePrivateContent(
+      BiliPrivateMessageApi.parsePrivateContent(
         16,
         """{"main_title":"推荐","sub_cards":[{"title":"第一条推荐","aid":170001,"jump_url":"bilibili://video/170001"}]}""",
       )
@@ -37,7 +37,7 @@ class PrivateMessageVideoTargetParsingTest {
   @Test
   fun `video share falls back to nested aid when link is absent`() {
     val parsed =
-      BiliApi.parsePrivateContent(
+      BiliPrivateMessageApi.parsePrivateContent(
         11,
         """{"item":{"aid":455017605,"title":"AV 视频"}}""",
       )

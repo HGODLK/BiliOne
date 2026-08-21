@@ -15,9 +15,9 @@ import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -32,8 +32,8 @@ sealed interface LivePreviewPlayerState {
 }
 
 /**
- * The landing-page preview owns only a muted rolling live stream. The full live-room player stays
- * in PlayerViewModel and is intentionally not shared with this screen.
+ * 落地页预览只拥有一条静音轮播的直播流。完整的直播间播放器留在 PlayerViewModel 中，
+ * 并有意不与本页面共享。
  */
 @OptIn(UnstableApi::class)
 class LivePreviewPlayerViewModel(application: Application) : AndroidViewModel(application) {
@@ -128,7 +128,7 @@ class LivePreviewPlayerViewModel(application: Application) : AndroidViewModel(ap
     player?.pause()
   }
 
-  /** Releases this rolling decoder before the detail page starts its own player. */
+  /** 在详情页启动自己的播放器之前释放这个轮播解码器。 */
   fun stopForNavigation() {
     pageActive = false
     recoveryScheduled = false

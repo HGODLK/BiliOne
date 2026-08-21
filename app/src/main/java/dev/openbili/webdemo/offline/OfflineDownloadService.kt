@@ -27,8 +27,7 @@ class OfflineDownloadService :
     DownloadNotificationHelper(this, NOTIFICATION_CHANNEL_ID)
   }
 
-  override fun getDownloadManager(): DownloadManager =
-    OfflineMediaManager.get(this).downloadManager
+  override fun getDownloadManager(): DownloadManager = OfflineMediaManager.get(this).downloadManager
 
   override fun getScheduler(): Scheduler = PlatformScheduler(this, SCHEDULER_JOB_ID)
 

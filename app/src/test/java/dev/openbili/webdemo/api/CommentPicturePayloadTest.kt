@@ -11,7 +11,7 @@ class CommentPicturePayloadTest {
   @Test
   fun `comment picture payload matches reply api fields`() {
     val upload =
-      BiliApi.PrivateImageUpload(
+      BiliPrivateMessageApi.PrivateImageUpload(
         url = "https://i0.hdslb.com/bfs/new_dyn/test.jpg",
         width = 1280,
         height = 720,
@@ -19,7 +19,7 @@ class CommentPicturePayloadTest {
         sizeKb = 96,
       )
 
-    val picture = JSONArray(BiliApi.commentPicturesPayload(upload)).getJSONObject(0)
+    val picture = JSONArray(BiliPrivateMessageApi.commentPicturesPayload(upload)).getJSONObject(0)
 
     assertEquals(upload.url, picture.getString("img_src"))
     assertEquals(1280, picture.getInt("img_width"))

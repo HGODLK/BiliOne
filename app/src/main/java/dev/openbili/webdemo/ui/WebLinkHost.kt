@@ -1,5 +1,8 @@
 package dev.openbili.webdemo.ui
 
+import android.content.ActivityNotFoundException
+import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
 import android.webkit.WebChromeClient
@@ -40,6 +43,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import dev.openbili.webdemo.BuildConfig
 import dev.openbili.webdemo.WebViewConfigurator
@@ -47,14 +51,18 @@ import dev.openbili.webdemo.api.BiliHttpClient
 
 val LocalWebLinkHandler = compositionLocalOf<(String) -> Unit> { {} }
 
-/** Owns the single in-app system WebView destination used by server-provided text links. */
+/** 拥有服务器提供的文本链接所使用的唯一应用内系统 WebView 目的地。 */
 @Composable
 fun WebLinkHost(content: @Composable () -> Unit) {
   var requestedUrl by remember { mutableStateOf<String?>(null) }
+  val context = LocalContext.current
   CompositionLocalProvider(
-    LocalWebLinkHandler provides { rawUrl ->
-      normalizeWebUrl(rawUrl)?.let { requestedUrl = it }
-    }
+    LocalWebLinkHandler provides
+      { rawUrl ->
+        normalizeWebUrl(rawUrl)?.let { url ->
+          if (!openExternalWebUrl(context, url)) requestedUrl = url
+        }
+      }
   ) {
     Box(Modifier.fillMaxSize()) {
       content()
@@ -65,6 +73,20 @@ fun WebLinkHost(content: @Composable () -> Unit) {
         )
       }
     }
+  }
+}
+
+/** 尝试交给系统默认浏览器；没有可用处理程序时由调用方挂载应用内 WebView。 */
+internal fun openExternalWebUrl(context: Context, url: String): Boolean {
+  return try {
+    context.startActivity(
+      Intent(Intent.ACTION_VIEW, Uri.parse(url)).addCategory(Intent.CATEGORY_BROWSABLE)
+    )
+    true
+  } catch (_: ActivityNotFoundException) {
+    false
+  } catch (_: SecurityException) {
+    false
   }
 }
 
@@ -100,7 +122,7 @@ private fun WebLinkOverlay(url: String, onDismissed: () -> Unit) {
   BackHandler(onBack = ::requestClose)
   LaunchedEffect(url) {
     reveal.animateTo(1f, tween(180, easing = FastOutSlowInEasing))
-    // Loading is deliberately activated only after the opaque transition shell is committed.
+    // 加载有意只在不透明转场外壳提交之后才激活。
     webMounted = true
   }
   LaunchedEffect(closing) {
@@ -149,8 +171,7 @@ private fun WebLinkOverlay(url: String, onDismissed: () -> Unit) {
       Box(Modifier.weight(1f).fillMaxWidth()) {
         if (webMounted) {
           AndroidView(
-            modifier =
-              Modifier.fillMaxSize().graphicsLayer { alpha = if (pageVisible) 1f else 0f },
+            modifier = Modifier.fillMaxSize().graphicsLayer { alpha = if (pageVisible) 1f else 0f },
             factory = { context ->
               WebView(context).apply {
                 WebViewConfigurator.configure(this, BuildConfig.DEBUG)

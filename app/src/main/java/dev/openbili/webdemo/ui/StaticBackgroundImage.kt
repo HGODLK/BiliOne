@@ -10,9 +10,9 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -28,6 +28,7 @@ import coil3.imageLoader
 import coil3.request.ImageRequest
 import coil3.request.allowHardware
 import coil3.size.Precision
+import dev.openbili.webdemo.DevicePerformancePolicy
 import dev.openbili.webdemo.feed.CoverImageRequestFactory
 import java.io.File
 import java.security.MessageDigest
@@ -53,7 +54,7 @@ internal fun backgroundImageLayers(
     ?.let { add(BackgroundImageLayer(it, incoming = true)) }
 }
 
-/** Samples the actual decoded background in vertical regions used by the playback-page chrome. */
+/** 在播放页界面元素使用的垂直区域中采样实际解码出的背景。 */
 @Composable
 internal fun rememberBackgroundLuminanceProfile(model: Any?): BackgroundLuminanceProfile? {
   val context = LocalContext.current.applicationContext
@@ -101,7 +102,7 @@ internal fun videoBackgroundForeground(
     else -> Color.White
   }
 
-/** Light pages keep blurred artwork untouched; dark pages strongly dim it for stable white text. */
+/** 浅色页面保持模糊作品图原样；深色页面则强烈压暗它，以获得稳定的白色文本。 */
 internal fun videoBackgroundScrim(
   profile: BackgroundLuminanceProfile?,
   darkMode: Boolean,
@@ -154,8 +155,8 @@ private fun extractBackgroundLuminanceProfile(bitmap: Bitmap): BackgroundLuminan
 }
 
 /**
- * Resolves a page background without ever applying a realtime Compose blur. Blurred variants are
- * decoded at a bounded size, processed once on a worker thread, and reused from app-private cache.
+ * 在不应用任何实时 Compose 模糊的情况下解析页面背景。模糊变体按有界尺寸解码，
+ * 在工作线程上处理一次，并从应用私有缓存中复用。
  */
 @Composable
 internal fun rememberStaticBackgroundModel(source: String, blurred: Boolean): Any? {
@@ -172,9 +173,8 @@ internal fun rememberStaticBackgroundModel(source: String, blurred: Boolean): An
       source.isBlank() -> retainedBlurredModel = null
       !blurred -> Unit
       else -> {
-        // Resolving may involve disk I/O or one-time bitmap processing. Keep the last decoded
-        // background mounted until its replacement is fully ready so the light page base can
-        // never leak through between playback items.
+        // 解析可能涉及磁盘 I/O 或一次性位图处理。保持最后解码出的背景挂载，
+        // 直到其替代者完全就绪，让浅色页面基底永远不能在播放条目之间泄漏出来。
         StaticBackgroundImageStore.resolve(context, source)?.let { resolved ->
           retainedBlurredModel = resolved
         }
@@ -188,7 +188,9 @@ internal fun rememberStaticBackgroundModel(source: String, blurred: Boolean): An
   }
 }
 
-/** Keeps the previous decoded bitmap visible until the next one is ready, then fades between them. */
+/**
+ * 让上一个已解码位图保持可见，直到下一个就绪，然后在两者之间淡入淡出。
+ */
 @Composable
 internal fun CrossfadeBackgroundImage(
   model: Any?,
@@ -197,6 +199,7 @@ internal fun CrossfadeBackgroundImage(
   transitionMillis: Int = 300,
   onDisplayed: ((Any) -> Unit)? = null,
 ) {
+  val context = LocalContext.current
   var displayedModel by remember { mutableStateOf<Any?>(null) }
   var incomingModel by remember { mutableStateOf<Any?>(null) }
   var decodedIncomingModel by remember { mutableStateOf<Any?>(null) }
@@ -223,12 +226,26 @@ internal fun CrossfadeBackgroundImage(
 
   Box(modifier) {
     backgroundImageLayers(displayedModel, incomingModel).forEach { layer ->
-      // Keep both roles at one keyed call site. When an incoming image finishes its fade and is
-      // promoted to displayedModel, Compose retains the already-decoded AsyncImage instead of
-      // removing it and mounting an identical replacement one frame later.
+      // 把两个角色都放在同一个按键调用点。当进入中的图片完成淡入并被提升为
+      // displayedModel 时，Compose 保留已解码的 AsyncImage，而不是移除它并在一帧后
+      // 挂载一个相同的替代品。
       key(layer.model) {
+        val request =
+          remember(layer.model, context, DevicePerformancePolicy.isConstrainedImageMode) {
+            if (!DevicePerformancePolicy.isConstrainedImageMode) {
+              layer.model
+            } else {
+              val size = DevicePerformancePolicy.imageRequestSize(1920, 1080)
+              ImageRequest.Builder(context)
+                .data(layer.model)
+                .size(size.width, size.height)
+                .precision(Precision.INEXACT)
+                .allowHardware(false)
+                .build()
+            }
+          }
         AsyncImage(
-          model = layer.model,
+          model = request,
           contentDescription = null,
           modifier =
             Modifier.fillMaxSize().graphicsLayer {
@@ -285,16 +302,16 @@ private object StaticBackgroundImageStore {
               .allowHardware(false)
               .build()
           }
-        val loaded = context.imageLoader.execute(request).image as? BitmapImage
-          ?: return@withContext null
+        val loaded =
+          context.imageLoader.execute(request).image as? BitmapImage ?: return@withContext null
         val bounded = loaded.bitmap.toBoundedSoftwareBitmap(MAX_EDGE) ?: return@withContext null
         val blurred = staticBoxBlur(bounded, BLUR_RADIUS, BLUR_PASSES)
-        if (bounded !== loaded.bitmap && bounded !== blurred && !bounded.isRecycled) bounded.recycle()
+        if (bounded !== loaded.bitmap && bounded !== blurred && !bounded.isRecycled)
+          bounded.recycle()
 
         val temporary = File(directory, "${output.name}.${System.nanoTime()}.tmp")
         temporary.outputStream().buffered().use { stream ->
-          @Suppress("DEPRECATION")
-          blurred.compress(Bitmap.CompressFormat.WEBP, 88, stream)
+          @Suppress("DEPRECATION") blurred.compress(Bitmap.CompressFormat.WEBP, 88, stream)
         }
         if (blurred !== loaded.bitmap && !blurred.isRecycled) blurred.recycle()
         if (!temporary.renameTo(output)) {
@@ -356,7 +373,8 @@ private object StaticBackgroundImageStore {
   private fun staticBoxBlur(bitmap: Bitmap, radius: Int, passes: Int): Bitmap {
     val width = bitmap.width
     val height = bitmap.height
-    var input = IntArray(width * height).also { bitmap.getPixels(it, 0, width, 0, 0, width, height) }
+    var input =
+      IntArray(width * height).also { bitmap.getPixels(it, 0, width, 0, 0, width, height) }
     var output = IntArray(input.size)
     repeat(passes.coerceAtLeast(1)) {
       horizontalBlur(input, output, width, height, radius)
@@ -435,7 +453,8 @@ private object StaticBackgroundImageStore {
   }
 
   private fun prune(directory: File, keep: File) {
-    directory.listFiles()
+    directory
+      .listFiles()
       ?.filter { it != keep && it.isFile }
       ?.sortedByDescending(File::lastModified)
       ?.drop(31)
@@ -443,7 +462,9 @@ private object StaticBackgroundImageStore {
   }
 
   private fun sha256(value: String): String =
-    MessageDigest.getInstance("SHA-256")
-      .digest(value.toByteArray(Charsets.UTF_8))
-      .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+    MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8)).joinToString(
+      ""
+    ) { byte ->
+      "%02x".format(byte.toInt() and 0xff)
+    }
 }

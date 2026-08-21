@@ -40,6 +40,11 @@ class AppSettingsTest {
   }
 
   @Test
+  fun `controller touch playback page defaults to disabled`() {
+    assertFalse(AppSettings().controllerTouchPlaybackPage)
+  }
+
+  @Test
   fun `subtitles default to off until the user opts in`() {
     val settings = AppSettings()
 
@@ -57,6 +62,11 @@ class AppSettingsTest {
   }
 
   @Test
+  fun `colorful cards are enabled by default`() {
+    assertFalse(AppSettings().disableColorfulCards)
+  }
+
+  @Test
   fun `returning from search clears the query by default`() {
     assertFalse(AppSettings().retainLastSearchQuery)
   }
@@ -70,11 +80,13 @@ class AppSettingsTest {
     assertTrue(settings.homeBackgroundUri.isEmpty())
     assertTrue(settings.videoBackgroundUri.isEmpty())
     assertTrue(settings.startupMaskUri.isEmpty())
+    assertTrue(settings.homeBackgroundMusicBlur)
     assertEquals(0L, settings.musicFavoriteFolderId)
     assertFalse(settings.musicFavoriteFolderConfigured)
-    assertEquals(PreferredResolutionMode.ULTRA_HIGH, settings.musicPreferredResolutionMode)
+    assertEquals(PreferredResolutionMode.MEDIUM, settings.musicPreferredResolutionMode)
     assertEquals(.6f, settings.homeBackgroundTransparency)
     assertEquals(.6f, settings.videoBackgroundTransparency)
+    assertEquals(.3f, settings.fullscreenBackgroundBrightness)
   }
 
   @Test
@@ -91,7 +103,7 @@ class AppSettingsTest {
 
     assertFalse(videoChanged.defaultShowDanmaku)
     assertTrue(videoChanged.liveShowDanmaku)
-    assertEquals(.75f, videoChanged.liveDanmakuDisplayArea)
+    assertEquals(.3f, videoChanged.liveDanmakuDisplayArea)
     assertEquals(.72f, videoChanged.liveDanmakuOpacity)
     assertEquals(1f, videoChanged.liveDanmakuFontScale)
     assertEquals(1f, videoChanged.liveDanmakuSpeed)
@@ -107,7 +119,7 @@ class AppSettingsTest {
         )
 
     assertTrue(liveChanged.defaultShowDanmaku)
-    assertEquals(.75f, liveChanged.danmakuDisplayArea)
+    assertEquals(.3f, liveChanged.danmakuDisplayArea)
     assertEquals(.72f, liveChanged.danmakuOpacity)
     assertEquals(1f, liveChanged.danmakuFontScale)
     assertEquals(1f, liveChanged.danmakuSpeed)

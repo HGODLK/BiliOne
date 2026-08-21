@@ -1,8 +1,8 @@
 package dev.openbili.webdemo.api
 
 import org.json.JSONObject
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -13,7 +13,7 @@ class CommentUpActionParsingTest {
   @Test
   fun parsesUploaderLikeAndReplyFlags() {
     val comment =
-      BiliApi.parseComment(
+      BiliCommentApi.parseComment(
         JSONObject(
           """
           {
@@ -39,7 +39,7 @@ class CommentUpActionParsingTest {
   @Test
   fun missingUploaderActionDefaultsToFalse() {
     val comment =
-      BiliApi.parseComment(
+      BiliCommentApi.parseComment(
         JSONObject(
           """
           {
@@ -63,7 +63,7 @@ class CommentUpActionParsingTest {
   @Test
   fun parsesInstitutionCertificationFromCommentMember() {
     val comment =
-      BiliApi.parseComment(
+      BiliCommentApi.parseComment(
         JSONObject(
           """
           {
@@ -89,7 +89,7 @@ class CommentUpActionParsingTest {
   @Test
   fun profileCertificationPrefersCurrentTitleField() {
     val verification =
-      BiliApi.parseOfficialVerification(
+      BiliCommentApi.parseOfficialVerification(
         primary = JSONObject("""{"type":0,"title":"哔哩哔哩知名UP主","desc":"旧说明"}"""),
         legacy = JSONObject("""{"type":1,"desc":"旧版认证"}"""),
       )
@@ -101,7 +101,7 @@ class CommentUpActionParsingTest {
   @Test
   fun listedUserCertificationReadsStructuredFollowingField() {
     val verification =
-      BiliApi.parseListedUserOfficialVerification(
+      BiliCommentApi.parseListedUserOfficialVerification(
         JSONObject("""{"official_verify":{"type":0,"desc":"知名UP主"}}""")
       )
 
@@ -112,11 +112,46 @@ class CommentUpActionParsingTest {
   @Test
   fun listedUserCertificationFallsBackToSearchVerifyInfo() {
     val verification =
-      BiliApi.parseListedUserOfficialVerification(
-        JSONObject("""{"verify_info":"哔哩哔哩官方账号"}""")
-      )
+      BiliCommentApi.parseListedUserOfficialVerification(JSONObject("""{"verify_info":"哔哩哔哩官方账号"}"""))
 
     assertEquals(1, verification.type)
     assertEquals("哔哩哔哩官方账号", verification.description)
+  }
+
+  @Test
+  fun parsesInlineJumpUrlMetadata() {
+    val comment =
+      BiliCommentApi.parseComment(
+        JSONObject(
+          """
+          {
+            "rpid": 9,
+            "mid": 2,
+            "like": 0,
+            "rcount": 0,
+            "ctime": 5,
+            "member": {"uname": "测试用户"},
+            "content": {
+              "message": "推荐 BV1ERTR6zECb",
+              "jump_url": {
+                "BV1ERTR6zECb": {
+                  "title": "【推荐视频】",
+                  "prefix_icon": "//i0.hdslb.com/icon.png",
+                  "pc_url": "https://www.bilibili.com/video/BV1ERTR6zECb"
+                }
+              }
+            }
+          }
+          """.trimIndent()
+        )
+      )
+
+    assertEquals("BV1ERTR6zECb", comment.jumpLinks.single().key)
+    assertEquals("【推荐视频】", comment.jumpLinks.single().title)
+    assertEquals("https://i0.hdslb.com/icon.png", comment.jumpLinks.single().prefixIconUrl)
+    assertEquals(
+      "https://www.bilibili.com/video/BV1ERTR6zECb",
+      comment.jumpLinks.single().pcUrl,
+    )
   }
 }

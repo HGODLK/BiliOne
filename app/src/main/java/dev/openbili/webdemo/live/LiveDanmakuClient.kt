@@ -1,5 +1,13 @@
 package dev.openbili.webdemo.live
 
+/**
+ * 直播弹幕 WebSocket 客户端。
+ *
+ * 通过 B 站直播弹幕的长连接协议（WebSocket + 自研二进制包格式）接收房间事件：认证、
+ * 普通弹幕、系统提示、人气值、开播/下播、播放地址刷新、互动抽奖等。[LiveDanmakuClient]
+ * 负责建连、心跳与重连；收到字节流后交给 [LivePacketParser] 解析为 [LiveSocketEvent] 回调。
+ */
+
 import dev.openbili.webdemo.api.BiliHttpClient
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
@@ -8,12 +16,12 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.zip.Inflater
 import kotlin.math.min
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.SupervisorJob
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
@@ -23,25 +31,41 @@ import okio.ByteString.Companion.toByteString
 import org.json.JSONArray
 import org.json.JSONObject
 
+/**
+ * 直播弹幕长连接上报给上层的事件（结果）。
+ *
+ * 覆盖连接认证、聊天消息、人气/关注、房间状态、播放地址刷新与互动抽奖等场景，
+ * 由 [LivePacketParser] 解析二进制报文后产生。
+ */
 internal sealed interface LiveSocketEvent {
+  /** 弹幕连接已通过鉴权，可开始接收房间事件。 */
   data object Authenticated : LiveSocketEvent
 
+  /** 一条聊天消息（普通弹幕、礼物、醒目留言或系统提示的统一载体）。 */
   data class Message(val value: LiveChatMessage) : LiveSocketEvent
 
+  /** 「X 人正在看」的人气/观看数文案。 */
   data class Watched(val text: String) : LiveSocketEvent
 
+  /** 房间在线人气值。 */
   data class Online(val value: Long) : LiveSocketEvent
 
+  /** 直播间标题发生变化。 */
   data class RoomChanged(val title: String?) : LiveSocketEvent
 
+  /** 开播/下播状态：true 表示开播，false 表示下播（准备中）。 */
   data class LiveStatus(val living: Boolean) : LiveSocketEvent
 
+  /** 播放地址需要刷新（服务端下发 PLAYURL_RELOAD）。 */
   data object PlayUrlReload : LiveSocketEvent
 
+  /** 互动抽奖开始。 */
   data class LotteryStarted(val lottery: LiveInteractiveLottery) : LiveSocketEvent
 
+  /** 互动抽奖结束。 */
   data class LotteryEnded(val id: Long) : LiveSocketEvent
 
+  /** 互动抽奖开出结果（中奖者与奖品）。 */
   data class LotteryAwarded(
     val id: Long,
     val awardName: String,
@@ -49,9 +73,22 @@ internal sealed interface LiveSocketEvent {
     val winners: List<LiveLotteryWinner>,
   ) : LiveSocketEvent
 
+  /** 互动抽奖作废（如因违规被驳回）。 */
   data class LotteryInvalidated(val id: Long, val reason: String?) : LiveSocketEvent
 }
 
+/**
+ * 直播弹幕 WebSocket 客户端。
+ *
+ * 负责建立与直播弹幕服务器的长连接、发送鉴权包、维持心跳，并在断开后按退避策略重连。
+ * 收到的事件通过 [onEvent] 回调，连接状态变化通过 [onState] 回调。
+ *
+ * @param roomId 直播间房间号。
+ * @param accountUid 当前账号 UID（用于鉴权包）。
+ * @param config 弹幕服务器配置（端点列表与鉴权 token）。
+ * @param onState 连接状态变化回调，附带可选的描述信息。
+ * @param onEvent 解析出的事件回调。
+ */
 internal class LiveDanmakuClient(
   private val roomId: Long,
   private val accountUid: Long,
@@ -59,19 +96,32 @@ internal class LiveDanmakuClient(
   private val onState: (LiveConnectionState, String?) -> Unit,
   private val onEvent: (LiveSocketEvent) -> Unit,
 ) {
+  /** 专用于心跳与重连延迟的 IO 协程作用域，随客户端生命周期管理。 */
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+  /** 是否已永久停止（stop() 之后不再重连）。 */
   private val stopped = AtomicBoolean(false)
+  /** 当前 WebSocket 连接，可能为 null。 */
   private var socket: WebSocket? = null
+  /** 心跳发送协程。 */
   private var heartbeatJob: Job? = null
+  /** 当前使用的端点下标，重连时轮换以规避单点故障。 */
   private var endpointIndex = 0
+  /** 已把全部端点轮询过的次数，用于退避档位。 */
   private var retryAttempt = 0
 
+  /** 启动连接；已停止时直接返回。 */
   fun start() {
     if (stopped.get()) return
     onState(LiveConnectionState.CONNECTING, null)
     connect()
   }
 
+  /**
+   * 停止并关闭连接。
+   *
+   * 使用 CAS 保证幂等：并发或重复调用只会生效一次。关闭心跳、WebSocket 与作用域后
+   * 上报 DISCONNECTED。
+   */
   fun stop() {
     if (!stopped.compareAndSet(false, true)) return
     heartbeatJob?.cancel()
@@ -82,8 +132,10 @@ internal class LiveDanmakuClient(
     onState(LiveConnectionState.DISCONNECTED, null)
   }
 
+  /** 建立 WebSocket 连接；onOpen 后发送鉴权包并启动心跳。 */
   private fun connect() {
     if (stopped.get() || config.endpoints.isEmpty()) return
+    // 轮换选择端点，避免始终命中同一个已故障的服务器。
     val endpoint = config.endpoints[endpointIndex.mod(config.endpoints.size)]
     val request =
       Request.Builder()
@@ -267,8 +319,9 @@ private object LivePacketParser {
                 id = id,
                 awardName = data?.optString("award_name").orEmpty(),
                 awardImageUrl =
-                  dev.openbili.webdemo.UrlPolicy
-                    .normalizeImageUrl(data?.optString("award_image").orEmpty()),
+                  dev.openbili.webdemo.UrlPolicy.normalizeImageUrl(
+                    data?.optString("award_image").orEmpty()
+                  ),
                 winners = parseLotteryWinners(data?.optJSONArray("award_users")),
               )
             )
@@ -330,8 +383,7 @@ private object LivePacketParser {
       emoteMetadata?.optString("emoticon_unique")?.takeIf(String::isNotBlank)
         ?: extra?.optString("emoticon_unique")?.takeIf(String::isNotBlank)
     val isBulge =
-      emoteMetadata?.optInt("bulge_display", 0) != 0 ||
-        extra?.optInt("bulge_display", 0) != 0
+      emoteMetadata?.optInt("bulge_display", 0) != 0 || extra?.optInt("bulge_display", 0) != 0
     val imageUrl =
       listOfNotNull(
           emoteMetadata?.optString("url"),
@@ -466,9 +518,7 @@ private object LivePacketParser {
           LiveLotteryWinner(
             uid = uid,
             name = item.optString("uname").ifBlank { "用户 $uid" },
-            faceUrl =
-              dev.openbili.webdemo.UrlPolicy
-                .normalizeImageUrl(item.optString("face")),
+            faceUrl = dev.openbili.webdemo.UrlPolicy.normalizeImageUrl(item.optString("face")),
           )
         )
       }

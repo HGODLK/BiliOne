@@ -8,6 +8,40 @@ import org.junit.Test
 
 class MyUnreadIndicatorTest {
   @Test
+  fun `acknowledged unread stays hidden while server summary is stale`() {
+    val pending = PendingUnreadAcknowledgement(acknowledgedCount = 3, createdAtMs = 1_000L)
+
+    assertEquals(
+      UnreadAcknowledgementResolution(visibleCount = 0, keepPending = true),
+      resolveUnreadAfterAcknowledgement(serverCount = 3, pending = pending, nowMs = 2_000L),
+    )
+    assertEquals(
+      UnreadAcknowledgementResolution(visibleCount = 2, keepPending = true),
+      resolveUnreadAfterAcknowledgement(serverCount = 5, pending = pending, nowMs = 2_000L),
+    )
+    assertEquals(
+      UnreadAcknowledgementResolution(visibleCount = 0, keepPending = false),
+      resolveUnreadAfterAcknowledgement(serverCount = 0, pending = pending, nowMs = 2_000L),
+    )
+  }
+
+  @Test
+  fun `controller mode hides all message sections`() {
+    assertEquals(
+      listOf(
+        MySection.FAVORITES,
+        MySection.HISTORY,
+        MySection.WATCH_LATER,
+        MySection.FOLLOWING,
+        MySection.CACHED_VIDEOS,
+        MySection.SETTINGS,
+      ),
+      mySectionsForControlMode(controlMode = true),
+    )
+    assertEquals(MySection.entries, mySectionsForControlMode(controlMode = false))
+  }
+
+  @Test
   fun `only message menu entries expose unread indicators`() {
     val state = MyUiState(privateMessageUnreadCount = 2, interactionUnreadCount = 3)
 
@@ -38,17 +72,17 @@ class MyUnreadIndicatorTest {
     val message = privateConversationSession(42L, "测试 UP", "")
     val styled =
       applyAccountMessageUserStyles(
-        messages = listOf(message),
-        styles =
-          mapOf(
-            42L to
-              AccountMessageUserStyle(
-                level = 6,
-                vipActive = true,
-                vipLabel = "年度大会员",
-              )
-          ),
-      )
+          messages = listOf(message),
+          styles =
+            mapOf(
+              42L to
+                AccountMessageUserStyle(
+                  level = 6,
+                  vipActive = true,
+                  vipLabel = "年度大会员",
+                )
+            ),
+        )
         .single()
 
     assertEquals(6, styled.userLevel)
@@ -76,5 +110,12 @@ class MyUnreadIndicatorTest {
         serverUnreadCount = 4,
       ),
     )
+  }
+
+  @Test
+  fun `controller back returns through content sections and root`() {
+    assertEquals(MyControlLevel.SECTIONS, myControlBackTarget(MyControlLevel.CONTENT))
+    assertEquals(MyControlLevel.ROOT, myControlBackTarget(MyControlLevel.SECTIONS))
+    assertEquals(MyControlLevel.ROOT, myControlBackTarget(MyControlLevel.ROOT))
   }
 }

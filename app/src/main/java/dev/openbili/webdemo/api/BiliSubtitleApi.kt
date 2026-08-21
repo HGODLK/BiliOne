@@ -1,10 +1,15 @@
 package dev.openbili.webdemo.api
 
+/**
+ * 字幕相关模型：单条字幕轨（区分人工/AI 字幕/AI 翻译）、目录与字幕 cue。
+ */
+
 import java.net.URI
 import java.util.Locale
 import kotlin.math.roundToLong
 import org.json.JSONObject
 
+/** 单条视频字幕轨：语言、来源地址与 AI 标记。 */
 data class VideoSubtitleTrack(
   val id: String,
   val language: String,
@@ -32,6 +37,7 @@ data class VideoSubtitleTrack(
       }
 }
 
+/** 视频字幕目录（全部可用字幕轨）。 */
 data class VideoSubtitleCatalog(
   val tracks: List<VideoSubtitleTrack>,
   val loginRequired: Boolean,
@@ -40,13 +46,19 @@ data class VideoSubtitleCatalog(
   val bvid: String = "",
 )
 
+/** 单条字幕 cue：起止毫秒与文本内容。 */
 data class VideoSubtitleCue(
   val startMs: Long,
   val endMs: Long,
   val content: String,
 )
 
-/** Bilibili's current Web subtitle protocol and conversion into Media3-compatible WebVTT. */
+/**
+ * B 站当前网页字幕协议接口，并把字幕文档转换成 Media3 兼容的 WebVTT。
+ *
+ * 安全约束：只接受 https 且带 auth_key 的官方字幕源，AI 字幕路径必须与视频
+ * aid/cid 绑定；字幕 URL 的两种异或密码与路径解码用于把加密地址还原为可下载地址。
+ */
 object BiliSubtitleApi {
   private const val MAX_SUBTITLE_CATALOG_BYTES = 512 * 1024L
   private const val MAX_SUBTITLE_DOCUMENT_BYTES = 2 * 1024 * 1024L
@@ -55,6 +67,7 @@ object BiliSubtitleApi {
   private const val SUBTITLE_FILE_HOST = "aisubtitle.hdslb.com"
   private const val AI_SUBTITLE_PATH_PREFIX = "/bfs/ai_subtitle/prod/"
 
+  /** 拉取视频字幕目录（protobuf 响应）。 */
   fun getCatalog(aid: Long, cid: Long, bvid: String): VideoSubtitleCatalog {
     require(aid > 0L && cid > 0L) { "视频参数无效" }
     val normalizedBvid = bvid.takeIf { it.startsWith("BV", ignoreCase = true) }.orEmpty()
@@ -94,6 +107,7 @@ object BiliSubtitleApi {
     return parseCatalog(bytes, aid = aid, cid = cid, bvid = normalizedBvid)
   }
 
+  /** 下载并解析单条字幕轨文档（JSON body 数组）。 */
   fun getDocument(
     track: VideoSubtitleTrack,
     bvid: String,
@@ -137,6 +151,7 @@ object BiliSubtitleApi {
     return parseDocument(JSONObject(body))
   }
 
+  /** 解析字幕目录字节流，过滤来源不可信或与视频身份不匹配的轨。 */
   internal fun parseCatalog(
     bytes: ByteArray,
     aid: Long,
@@ -179,6 +194,7 @@ object BiliSubtitleApi {
     )
   }
 
+  /** 解析字幕文档 JSON 为 cue 列表。 */
   internal fun parseDocument(json: JSONObject): List<VideoSubtitleCue> {
     val rows = json.optJSONArray("body") ?: return emptyList()
     return buildList {
@@ -196,6 +212,7 @@ object BiliSubtitleApi {
     }
   }
 
+  /** 把 cue 列表转换为 WebVTT 文本。 */
   internal fun toWebVtt(cues: List<VideoSubtitleCue>): String = buildString {
     append("WEBVTT\n\n")
     cues.forEach { cue ->
@@ -329,6 +346,7 @@ object BiliSubtitleApi {
     )
 }
 
+/** 字幕目录响应的极简 protobuf 解析器。 */
 private object SubtitleViewProtoParser {
   fun parse(bytes: ByteArray): List<RawSubtitleTrack> {
     if (bytes.isEmpty()) return emptyList()

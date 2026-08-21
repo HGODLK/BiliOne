@@ -30,12 +30,12 @@ class FeedUrlNormalizationTest {
       "https://www.bilibili.com/video/BV_MOBILE",
       UrlPolicy.normalizeVideoUrl("https://m.bilibili.com/video/BV_MOBILE?p=1"),
     )
-    // Already-www URLs stay unchanged.
+    // 已是 www 的 URL 保持不变。
     assertEquals(
       "https://www.bilibili.com/video/BV_WWW",
       UrlPolicy.normalizeVideoUrl("https://www.bilibili.com/video/BV_WWW"),
     )
-    // Other subdomains are left alone (they are not mobile-specific).
+    // 其他子域保持原样（它们并非移动端专属）。
     assertEquals(
       "https://api.bilibili.com/video/BV_API",
       UrlPolicy.normalizeVideoUrl("https://api.bilibili.com/video/BV_API"),
@@ -63,7 +63,7 @@ class FeedUrlNormalizationTest {
       "https://i0.hdslb.com/bfs/archive/cover.jpg",
       UrlPolicy.normalizeImageUrl("//i0.hdslb.com/bfs/archive/cover.jpg#preview"),
     )
-    // HTTP cover URLs are accepted (CDN commonly serves them) but upgraded to HTTPS.
+    // HTTP 封面 URL 被接受（CDN 常以这种方式提供），但会升级为 HTTPS。
     assertEquals(
       "https://i0.hdslb.com/cover.jpg",
       UrlPolicy.normalizeImageUrl("http://i0.hdslb.com/cover.jpg"),
@@ -73,9 +73,12 @@ class FeedUrlNormalizationTest {
 
   @Test
   fun imageNormalizationAllowsOnlyPrivateOfflineCoverFiles() {
-    val cover = "file:///data/user/0/io.github.shuyunr.bilione/files/offline_media/metadata/video_1/cover.jpg"
+    val cover =
+      "file:///data/user/0/io.github.shuyunr.bilione/files/offline_media/metadata/video_1/cover.jpg"
     assertEquals(cover, UrlPolicy.normalizeImageUrl(cover))
-    assertNull(UrlPolicy.normalizeImageUrl("file:///data/user/0/io.github.shuyunr.bilione/files/secret.jpg"))
+    assertNull(
+      UrlPolicy.normalizeImageUrl("file:///data/user/0/io.github.shuyunr.bilione/files/secret.jpg")
+    )
     assertNull(
       UrlPolicy.normalizeImageUrl(
         "file:///data/user/0/io.github.shuyunr.bilione/files/offline_media/metadata/video_1/subtitle.vtt"

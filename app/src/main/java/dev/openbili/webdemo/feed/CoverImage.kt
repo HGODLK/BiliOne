@@ -1,10 +1,14 @@
 package dev.openbili.webdemo.feed
 
+/**
+ * 信息流卡片与视频页占位共用的封面组件。
+ */
+
 import android.graphics.Bitmap
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.background
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.material3.MaterialTheme
@@ -31,25 +35,32 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * Remembers images that completed in this process. A fast fling may reuse those requests because
- * Coil can normally serve them from memory, while genuinely new images remain paused.
+ * 记住本进程内已完成的图片请求：快速滑动可直接复用（Coil 通常能从内存命中），
+ * 真正的新图则保持暂停。
  */
 internal object LoadedFeedImageRegistry {
   private const val MAX_ENTRIES = 512
-  private const val MAX_RETAINED_BITMAPS = 8
+  private const val DEFAULT_MAX_RETAINED_BITMAPS = 8
+  private const val CONSTRAINED_MAX_RETAINED_BITMAPS = 2
+
+  @Volatile private var maxRetainedBitmaps = DEFAULT_MAX_RETAINED_BITMAPS
+
   private data class Entry(
     val bitmap: WeakReference<Bitmap>?,
     val cropped: Boolean,
   )
 
   private val entries = LinkedHashMap<String, Entry>(MAX_ENTRIES, .75f, true)
-  private val retainedBitmaps = LinkedHashMap<String, Bitmap>(MAX_RETAINED_BITMAPS, .75f, true)
-  private val bitmapWaiters =
-    ConcurrentHashMap<String, MutableSet<CompletableDeferred<Bitmap>>>()
+  private val retainedBitmaps =
+    LinkedHashMap<String, Bitmap>(DEFAULT_MAX_RETAINED_BITMAPS, .75f, true)
+  private val bitmapWaiters = ConcurrentHashMap<String, MutableSet<CompletableDeferred<Bitmap>>>()
 
-  @Synchronized
-  fun contains(url: String?): Boolean =
-    !url.isNullOrBlank() && entries[url] != null
+  fun configure(constrained: Boolean) {
+    maxRetainedBitmaps =
+      if (constrained) CONSTRAINED_MAX_RETAINED_BITMAPS else DEFAULT_MAX_RETAINED_BITMAPS
+  }
+
+  @Synchronized fun contains(url: String?): Boolean = !url.isNullOrBlank() && entries[url] != null
 
   @Synchronized
   fun bitmap(url: String?, requireUncropped: Boolean = false): Bitmap? {
@@ -71,7 +82,7 @@ internal object LoadedFeedImageRegistry {
     entries[url] = Entry(retainedBitmap, cropped)
     if (retainBitmap && bitmap != null) {
       retainedBitmaps[url] = bitmap
-      while (retainedBitmaps.size > MAX_RETAINED_BITMAPS) {
+      while (retainedBitmaps.size > maxRetainedBitmaps) {
         retainedBitmaps.remove(retainedBitmaps.keys.first())
       }
     }
@@ -82,18 +93,23 @@ internal object LoadedFeedImageRegistry {
     while (entries.size > MAX_ENTRIES) entries.remove(entries.keys.first())
   }
 
-  suspend fun awaitBitmap(url: String?, timeoutMs: Long): Bitmap? {
+  suspend fun awaitBitmap(
+    url: String?,
+    timeoutMs: Long,
+    requireUncropped: Boolean = false,
+  ): Bitmap? {
     if (url.isNullOrBlank()) return null
-    bitmap(url)?.let { return it }
+    bitmap(url, requireUncropped = requireUncropped)?.let {
+      return it
+    }
     val waiter = CompletableDeferred<Bitmap>()
-    bitmapWaiters
-      .computeIfAbsent(url) { ConcurrentHashMap.newKeySet() }
-      .add(waiter)
-    bitmap(url)?.let {
+    bitmapWaiters.computeIfAbsent(url) { ConcurrentHashMap.newKeySet() }.add(waiter)
+    bitmap(url, requireUncropped = requireUncropped)?.let {
       waiter.complete(it)
     }
     return try {
-      withTimeoutOrNull(timeoutMs) { waiter.await() }
+      val loaded = withTimeoutOrNull(timeoutMs) { waiter.await() }
+      if (requireUncropped) bitmap(url, requireUncropped = true) else loaded
     } finally {
       bitmapWaiters.computeIfPresent(url) { _, waiters ->
         waiters.remove(waiter)
@@ -103,14 +119,20 @@ internal object LoadedFeedImageRegistry {
   }
 }
 
-/** Global gate used by transition shells to prevent new image work in animation-critical frames. */
+/** 转场外壳使用的全局闸门：在动画关键帧内阻止新的图片工作。 */
 val LocalCoverImageLoadingEnabled = compositionLocalOf { true }
 
-/** Keeps only recently requested playback-end covers strongly reachable across child pages. */
+/** 只让最近请求过的播放结束封面在子页面间保持强可达。 */
 internal object PlaybackCoverRegistry {
-  private const val MAX_ENTRIES = 8
+  private const val DEFAULT_MAX_ENTRIES = 8
+  private const val CONSTRAINED_MAX_ENTRIES = 2
+  @Volatile private var maxEntries = DEFAULT_MAX_ENTRIES
   private val requested = LinkedHashSet<String>()
-  private val bitmaps = LinkedHashMap<String, Bitmap>(MAX_ENTRIES, .75f, true)
+  private val bitmaps = LinkedHashMap<String, Bitmap>(DEFAULT_MAX_ENTRIES, .75f, true)
+
+  fun configure(constrained: Boolean) {
+    maxEntries = if (constrained) CONSTRAINED_MAX_ENTRIES else DEFAULT_MAX_ENTRIES
+  }
 
   fun requestRetention(url: String?) {
     if (url.isNullOrBlank()) return
@@ -118,25 +140,24 @@ internal object PlaybackCoverRegistry {
     synchronized(this) {
       requested += url
       cached?.let { bitmaps[url] = it }
-      while (requested.size > MAX_ENTRIES) requested.remove(requested.first())
-      while (bitmaps.size > MAX_ENTRIES) bitmaps.remove(bitmaps.keys.first())
+      while (requested.size > maxEntries) requested.remove(requested.first())
+      while (bitmaps.size > maxEntries) bitmaps.remove(bitmaps.keys.first())
     }
   }
 
-  @Synchronized
-  fun bitmap(url: String?): Bitmap? = if (url.isNullOrBlank()) null else bitmaps[url]
+  @Synchronized fun bitmap(url: String?): Bitmap? = if (url.isNullOrBlank()) null else bitmaps[url]
 
   @Synchronized
   fun onLoaded(url: String, bitmap: Bitmap) {
     if (url !in requested) return
     bitmaps[url] = bitmap
-    while (bitmaps.size > MAX_ENTRIES) bitmaps.remove(bitmaps.keys.first())
+    while (bitmaps.size > maxEntries) bitmaps.remove(bitmaps.keys.first())
   }
 }
 
 /**
- * Shared cover image composable used on both feed cards and the video-screen placeholder. All
- * requests go through [CoverImageRequestFactory] so Referer/header policy is uniform.
+ * 信息流卡片与视频页占位共用的封面组件。所有请求都走 [CoverImageRequestFactory]，
+ * 保证 Referer/请求头策略统一。
  */
 @Composable
 fun CoverImage(
@@ -161,13 +182,17 @@ fun CoverImage(
   val context = LocalContext.current
   val loadPolicy = LocalFeedImageLoadPolicy.current
   val globalLoadingEnabled = LocalCoverImageLoadingEnabled.current
-  val previouslyLoaded = remember(bitmapCacheKey) { LoadedFeedImageRegistry.contains(bitmapCacheKey) }
+  val previouslyLoaded =
+    remember(bitmapCacheKey) { LoadedFeedImageRegistry.contains(bitmapCacheKey) }
+  val requestProducesCroppedBitmap =
+    coverImageRequestProducesCroppedBitmap(
+      crop = contentScale == ContentScale.Crop,
+      useOriginalSource = useOriginalSource,
+    )
   val retainedBitmap =
-    remember(coverUrl, bitmapCacheKey, contentScale) {
-      if (contentScale == ContentScale.Crop) {
-        coverUrl
-          ?.takeIf { bitmapCacheKey == coverUrl }
-          ?.let(PlaybackCoverRegistry::bitmap)
+    remember(coverUrl, bitmapCacheKey, contentScale, useOriginalSource) {
+      if (contentScale == ContentScale.Crop && !useOriginalSource) {
+        coverUrl?.takeIf { bitmapCacheKey == coverUrl }?.let(PlaybackCoverRegistry::bitmap)
           ?: LoadedFeedImageRegistry.bitmap(bitmapCacheKey)
       } else {
         LoadedFeedImageRegistry.bitmap(bitmapCacheKey, requireUncropped = true)
@@ -219,7 +244,7 @@ fun CoverImage(
             LoadedFeedImageRegistry.markLoaded(
               bitmapCacheKey,
               retainedBitmap,
-              cropped = contentScale == ContentScale.Crop,
+              cropped = requestProducesCroppedBitmap,
               retainBitmap = true,
             )
           }
@@ -243,7 +268,7 @@ fun CoverImage(
           LoadedFeedImageRegistry.markLoaded(
             bitmapCacheKey,
             (state.result.image as? BitmapImage)?.bitmap,
-            cropped = contentScale == ContentScale.Crop,
+            cropped = requestProducesCroppedBitmap,
             retainBitmap = retainBitmap,
           )
           onBitmapLoaded?.invoke()

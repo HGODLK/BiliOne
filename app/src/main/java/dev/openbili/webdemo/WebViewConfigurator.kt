@@ -4,8 +4,8 @@ import android.annotation.SuppressLint
 import android.webkit.CookieManager
 import android.webkit.WebSettings
 import android.webkit.WebView
-import androidx.webkit.WebViewFeature
 import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewFeature
 
 object WebViewConfigurator {
   @Suppress("DEPRECATION")
@@ -31,7 +31,7 @@ object WebViewConfigurator {
     }
     CookieManager.getInstance().apply {
       setAcceptCookie(true)
-      // Third-party cookies stay disabled: the demo does not require a cross-site login flow.
+      // 第三方 cookie 保持禁用：本演示不需要跨站登录流程。
       setAcceptThirdPartyCookies(webView, false)
     }
     webView.isHorizontalScrollBarEnabled = false

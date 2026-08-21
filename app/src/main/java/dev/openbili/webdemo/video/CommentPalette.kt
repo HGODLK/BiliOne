@@ -39,7 +39,7 @@ internal object CommentAvatarPaletteCache {
     values[face] = colors
   }
 
-  /** Keeps the expensive avatar-derived colours scoped to the active comment viewport. */
+  /** 把昂贵的头像取色结果限制在活动评论视口范围内。 */
   @Synchronized
   fun retainOnly(faces: Set<String>) {
     values.keys.removeAll { it !in faces }
@@ -64,7 +64,7 @@ internal object CommentAvatarPaletteCache {
 
 internal const val COMMENT_VIEWPORT_BUFFER = 6
 
-/** Returns the loaded comment indices needed for the viewport and its bounded prefetch margin. */
+/** 返回视口及其有界预取边距内需要加载的评论下标。 */
 internal fun commentViewportWindow(
   totalCount: Int,
   firstVisibleIndex: Int,
@@ -113,7 +113,7 @@ internal suspend fun prefetchCommentAvatarPalettes(
             } catch (cancelled: CancellationException) {
               throw cancelled
             } catch (_: Exception) {
-              // A later scroll window can retry failed avatar requests.
+              // 后续滚动窗口可以重试失败的头像请求。
             }
           }
         }
@@ -139,8 +139,8 @@ internal fun extractAvatarDominantColors(bitmap: Bitmap): List<Color> {
         else bitmap
       }
       .getOrDefault(bitmap)
-  // A 16x16 sample is visually indistinguishable for a two-colour card gradient and avoids
-  // thousands of Bitmap#getPixel calls as new comment rows enter the viewport.
+  // 16x16 采样对双色卡片渐变在视觉上无差别，并避免新评论行进入视口时成千上万次
+  // Bitmap#getPixel 调用。
   val stepX = (source.width / 16).coerceAtLeast(1)
   val stepY = (source.height / 16).coerceAtLeast(1)
   val buckets = HashMap<Int, AvatarColorBucket>()
@@ -197,8 +197,8 @@ internal fun avatarColorDistance(first: Color, second: Color): Float {
 }
 
 internal fun readableCommentCardColor(color: Color, surface: Color, darkTheme: Boolean): Color {
-  // Keep avatar color recognizable, but give dark surfaces more visual weight so a bright
-  // avatar cannot turn an entire comment card into a glowing panel.
+  // 保持头像颜色可辨认，但给深色表面更多视觉权重，避免亮头像把整张评论卡变成
+  // 发光面板。
   var result = lerp(color, surface, if (darkTheme) .76f else .55f)
   if (darkTheme) {
     while (result.luminance() > .10f) result = lerp(result, surface, .22f)

@@ -50,10 +50,9 @@ internal data class VideoCardContentColors(
   val secondary: Color,
 )
 
-internal val LocalVideoCardContentColors =
-  staticCompositionLocalOf {
-    VideoCardContentColors(primary = Color.Black, secondary = Color.Black)
-  }
+internal val LocalVideoCardContentColors = staticCompositionLocalOf {
+  VideoCardContentColors(primary = Color.Black, secondary = Color.Black)
+}
 
 private object VideoCoverPaletteCache {
   private val values = ConcurrentHashMap<String, List<Color>>()
@@ -77,9 +76,13 @@ fun VideoCardGradient(
   prioritizePaletteLoad: Boolean = false,
   paletteRequestWidth: Int = 672,
   paletteRequestHeight: Int = 378,
+  /** 播放器画面外背景也复用本组件，但不应受卡片外观开关影响。 */
+  useColorfulCardsPreference: Boolean = true,
   content: @Composable () -> Unit,
 ) {
   val context = LocalContext.current
+  val colorfulCardsEnabled =
+    !useColorfulCardsPreference || LocalColorfulCardsEnabled.current
   val imageLoadPolicy = LocalFeedImageLoadPolicy.current
   val limitLoadingSpeed = LocalLimitImageLoadingSpeed.current
   val normalizedUrl = coverUrl.orEmpty()
@@ -91,11 +94,13 @@ fun VideoCardGradient(
   LaunchedEffect(
     normalizedUrl,
     allowDynamicPalette,
+    colorfulCardsEnabled,
     paletteLoadAllowed,
     limitLoadingSpeed,
   ) {
     if (
-      !allowDynamicPalette ||
+      !colorfulCardsEnabled ||
+        !allowDynamicPalette ||
         !paletteLoadAllowed ||
         normalizedUrl.isBlank() ||
         dominantColors != null
@@ -103,12 +108,12 @@ fun VideoCardGradient(
       return@LaunchedEffect
     }
     if (limitLoadingSpeed) {
-      // The opt-in limiter preserves the old conservative scheduling for slower devices.
+      // 可选的限流器为较慢的设备保留旧的保守调度。
       delay(VIDEO_PALETTE_START_DELAY_MS)
       dynamicPaletteAllowed?.let { allowed -> snapshotFlow { allowed.value }.first { it } }
     }
-    // Prefer the exact bitmap decoded by CoverImage. This synchronizes the visual reveal and
-    // avoids a second Coil decode on the normal, unrestricted path.
+    // 优先使用 CoverImage 已解码出的确切位图。这同步了视觉展示，
+    // 并避免在正常、不受限的路径上做第二次 Coil 解码。
     val sharedBitmap =
       LoadedFeedImageRegistry.bitmap(normalizedUrl)
         ?: if (limitLoadingSpeed) {
@@ -117,18 +122,17 @@ fun VideoCardGradient(
     val paletteSemaphore =
       if (prioritizePaletteLoad && !limitLoadingSpeed) priorityVideoPaletteLoadSemaphore
       else videoPaletteLoadSemaphore
-    val colors =
-      paletteSemaphore
-      .withPermit {
-        sharedBitmap?.let { bitmap ->
-          withContext(Dispatchers.Default) { extractVideoCoverDominantColors(bitmap) }
-        } ?: loadVideoCoverThemeColors(
-            context,
-            normalizedUrl,
-            paletteRequestWidth,
-            paletteRequestHeight,
-          )
+    val colors = paletteSemaphore.withPermit {
+      sharedBitmap?.let { bitmap ->
+        withContext(Dispatchers.Default) { extractVideoCoverDominantColors(bitmap) }
       }
+        ?: loadVideoCoverThemeColors(
+          context,
+          normalizedUrl,
+          paletteRequestWidth,
+          paletteRequestHeight,
+        )
+    }
     if (colors != null) {
       VideoCoverPaletteCache.put(normalizedUrl, colors)
       dynamicPaletteAllowed?.let { allowed -> snapshotFlow { allowed.value }.first { it } }
@@ -138,8 +142,11 @@ fun VideoCardGradient(
 
   val surface = if (overlayStyle) Color(0xFF171A1F) else MaterialTheme.colorScheme.surface
   val targetColors =
-    remember(dominantColors, surface) {
-      videoCardGradientColors(dominantColors.orEmpty(), surface)
+    remember(dominantColors, surface, colorfulCardsEnabled) {
+      videoCardGradientColors(
+        if (colorfulCardsEnabled) dominantColors.orEmpty() else emptyList(),
+        surface,
+      )
     }
   val paletteAnimationMillis = if (limitLoadingSpeed) 320 else 180
   val start by
@@ -177,14 +184,14 @@ fun VideoCardGradient(
 internal fun videoCardContentColors(start: Color, end: Color): VideoCardContentColors {
   val middle = lerp(start, end, .5f)
   val backgrounds = listOf(start, middle, end)
-  fun minimumContrast(foreground: Color): Float =
-    backgrounds.minOf { background -> videoCardContrastRatio(foreground, background) }
+  fun minimumContrast(foreground: Color): Float = backgrounds.minOf { background ->
+    videoCardContrastRatio(foreground, background)
+  }
 
   val primary =
     if (minimumContrast(Color.Black) >= minimumContrast(Color.White)) Color.Black else Color.White
   val secondaryCandidate = lerp(primary, middle, .12f)
-  val secondary =
-    if (minimumContrast(secondaryCandidate) >= 4.5f) secondaryCandidate else primary
+  val secondary = if (minimumContrast(secondaryCandidate) >= 4.5f) secondaryCandidate else primary
   return VideoCardContentColors(primary = primary, secondary = secondary)
 }
 
@@ -196,7 +203,7 @@ internal fun videoCardContrastRatio(first: Color, second: Color): Float {
   return (lighter + .05f) / (darker + .05f)
 }
 
-/** Loads the same two dominant cover colors used by video cards for non-card ambient artwork. */
+/** 为非卡片环境作品图加载视频卡片使用的相同两个主封面颜色。 */
 @Composable
 internal fun rememberVideoCoverThemeColors(coverUrl: String): List<Color> {
   val context = LocalContext.current

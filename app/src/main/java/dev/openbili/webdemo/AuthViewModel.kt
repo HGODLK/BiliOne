@@ -2,15 +2,15 @@ package dev.openbili.webdemo
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import dev.openbili.webdemo.api.BiliApi
+import dev.openbili.webdemo.api.BiliAuthApi
 import dev.openbili.webdemo.api.BiliHttpClient
 import dev.openbili.webdemo.api.QrCodeInfo
 import dev.openbili.webdemo.api.UserInfo
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 sealed interface LoginState {
@@ -49,7 +49,7 @@ class AuthViewModel : ViewModel() {
   fun checkLoginStatus() {
     viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
       try {
-        val info = BiliApi.getUserInfo()
+        val info = BiliAuthApi.getUserInfo()
         _userInfo.value = info
       } catch (_: Exception) {}
     }
@@ -59,7 +59,7 @@ class AuthViewModel : ViewModel() {
     appAuthorizationFlow = false
     viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
       try {
-        val qr = BiliApi.generateQrCode()
+        val qr = BiliAuthApi.generateQrCode()
         if (qr == null) {
           _loginState.value = LoginState.Failed("获取二维码失败，请重试")
           return@launch
@@ -76,7 +76,7 @@ class AuthViewModel : ViewModel() {
     appAuthorizationFlow = true
     viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
       try {
-        val qr = BiliApi.generateAppQrCode()
+        val qr = BiliAuthApi.generateAppQrCode()
         if (qr == null) {
           _loginState.value = LoginState.AppFailed("获取移动端授权二维码失败，请重试")
           return@launch
@@ -117,7 +117,7 @@ class AuthViewModel : ViewModel() {
         while (true) {
           delay(2000)
           try {
-            val status = BiliApi.pollQrCode(qrInfo.qrcodeKey)
+            val status = BiliAuthApi.pollQrCode(qrInfo.qrcodeKey)
             android.util.Log.d("AuthVM", "poll status: code=${status.code}")
             when (status.code) {
               86101 ->
@@ -133,8 +133,8 @@ class AuthViewModel : ViewModel() {
                     message = "请在手机上确认登录",
                   )
               0 -> {
-                // Login success — fetch user info
-                val info = BiliApi.getUserInfo()
+                // 登录成功 —— 拉取用户信息
+                val info = BiliAuthApi.getUserInfo()
                 _userInfo.value = info
                 _loginState.value = LoginState.Success(info)
                 return@launch
@@ -163,7 +163,7 @@ class AuthViewModel : ViewModel() {
         while (true) {
           delay(2_000)
           try {
-            val status = BiliApi.pollAppQrCode(qrInfo.qrcodeKey)
+            val status = BiliAuthApi.pollAppQrCode(qrInfo.qrcodeKey)
             when (status.code) {
               86039 -> _loginState.value = LoginState.AppWaiting(qrInfo, "请使用哔哩哔哩 App 扫码并确认授权")
               0 -> {

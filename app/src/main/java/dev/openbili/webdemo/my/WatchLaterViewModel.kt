@@ -1,22 +1,30 @@
 package dev.openbili.webdemo.my
 
+/**
+ * "稍后再看"页面模型：本地维护服务端稍后再看列表，支持添加/移除的乐观更新与
+ * 服务端确认回读。
+ */
+
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import dev.openbili.webdemo.api.BiliApi
+import dev.openbili.webdemo.api.BiliHistoryApi
+import dev.openbili.webdemo.api.BiliVideoApi
 import dev.openbili.webdemo.api.FeedCard
 import dev.openbili.webdemo.feed.FeedItem
 import dev.openbili.webdemo.feed.FeedViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/** 稍后再看操作反馈（token 用于忽略过期反馈）。 */
 data class WatchLaterFeedback(val token: Long, val message: String)
 
+/** 稍后再看界面状态。 */
 data class WatchLaterUiState(
   val items: List<FeedItem> = emptyList(),
   val addedVideoKeys: Set<String> = emptySet(),
@@ -27,6 +35,9 @@ data class WatchLaterUiState(
   val feedback: WatchLaterFeedback? = null,
 )
 
+/**
+ * 稍后再看的界面模型：加载/添加/移除，并以服务端列表为准回读状态。
+ */
 class WatchLaterViewModel : ViewModel() {
   private val _state = MutableStateFlow(WatchLaterUiState())
   val state: StateFlow<WatchLaterUiState> = _state.asStateFlow()
@@ -57,7 +68,7 @@ class WatchLaterViewModel : ViewModel() {
     _state.value = _state.value.copy(loading = true, error = null)
     loadJob = viewModelScope.launch {
       try {
-        val cards = withContext(Dispatchers.IO) { BiliApi.getWatchLater() }
+        val cards = withContext(Dispatchers.IO) { BiliHistoryApi.getWatchLater() }
         if (!isCurrent(expectedGeneration, expectedMid)) return@launch
         _state.value =
           _state.value.copy(
@@ -109,12 +120,12 @@ class WatchLaterViewModel : ViewModel() {
               ?: throw IllegalStateException("无法识别这个视频")
           }
         withContext(Dispatchers.IO) {
-          if (remove) BiliApi.removeFromWatchLater(aid) else BiliApi.addToWatchLater(aid)
+          if (remove) BiliHistoryApi.removeFromWatchLater(aid) else BiliHistoryApi.addToWatchLater(aid)
         }
         if (accountMid != expectedMid) return@launch
         val refreshedCards =
           if (_state.value.loaded) {
-            withContext(Dispatchers.IO) { runCatching { BiliApi.getWatchLater() }.getOrNull() }
+            withContext(Dispatchers.IO) { runCatching { BiliHistoryApi.getWatchLater() }.getOrNull() }
           } else {
             null
           }
@@ -214,7 +225,7 @@ internal fun resolveWatchLaterAid(item: FeedItem): Long? {
     sequenceOf(item.id, item.videoUrl)
       .mapNotNull { WATCH_LATER_BVID_REGEX.find(it)?.value }
       .firstOrNull() ?: return null
-  return BiliApi.getVideoInfo(bvid)?.aid?.takeIf { it > 0L }
+  return BiliVideoApi.getVideoInfo(bvid)?.aid?.takeIf { it > 0L }
 }
 
 internal fun watchLaterVideoKeys(item: FeedItem, aid: Long? = null): Set<String> = buildSet {

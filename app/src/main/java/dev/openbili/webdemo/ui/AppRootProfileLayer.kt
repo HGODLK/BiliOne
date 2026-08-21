@@ -13,21 +13,21 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
-import dev.openbili.webdemo.api.CommentItem
 import dev.openbili.webdemo.api.ArticleItem
+import dev.openbili.webdemo.api.CommentItem
 import dev.openbili.webdemo.api.FollowingGroup
-import dev.openbili.webdemo.api.SpaceProfile
-import dev.openbili.webdemo.api.SpaceDynamicItem
 import dev.openbili.webdemo.api.SpaceContentCard
+import dev.openbili.webdemo.api.SpaceDynamicItem
+import dev.openbili.webdemo.api.SpaceProfile
 import dev.openbili.webdemo.feed.FeedItem
+import dev.openbili.webdemo.live.LiveSearchRoom
 import dev.openbili.webdemo.profile.ProfileScreen
 import dev.openbili.webdemo.settings.AppSettings
 import dev.openbili.webdemo.video.CommentProfileAnchor
 
 internal fun profileSaveableStateKey(mid: Long): String = "profile_$mid"
 
-internal fun profileSaveableStateKey(entryId: Long, mid: Long): String =
-  "profile_${entryId}_$mid"
+internal fun profileSaveableStateKey(entryId: Long, mid: Long): String = "profile_${entryId}_$mid"
 
 internal fun profileTransitionContentAlpha(progress: Float): Float =
   ((progress.coerceIn(0f, 1f) - .28f) / .52f).coerceIn(0f, 1f)
@@ -36,13 +36,12 @@ internal fun parentProfileContentAlpha(
   transitionProgress: Float?,
   nestedTransitionActive: Boolean,
 ): Float =
-  if (nestedTransitionActive) 1f
-  else transitionProgress?.let(::profileTransitionContentAlpha) ?: 1f
+  if (nestedTransitionActive) 1f else transitionProgress?.let(::profileTransitionContentAlpha) ?: 1f
 
 internal fun parentProfileHeaderChromeVisible(nestedProfilePresent: Boolean): Boolean =
   !nestedProfilePresent
 
-/** A retained profile may stay mounted behind a video that has returned from that profile. */
+/** 保留的资料页可能继续挂载在从该资料页返回的视频之后。 */
 internal fun isVideoPageForeground(
   videoScreenVisible: Boolean,
   profileVisible: Boolean,
@@ -63,7 +62,7 @@ internal fun visibleProfileStack(entries: List<ProfileStackEntry>): List<Profile
   return if (overlayStartIndex < 0) entries else entries.drop(overlayStartIndex)
 }
 
-/** Profile page and its avatar/comment/video transition layers above the retained root page. */
+/** 资料页及其头像/评论/视频转场层，位于保留的根页之上。 */
 @Composable
 internal fun AppRootProfileLayer(
   modifier: Modifier = Modifier,
@@ -99,6 +98,7 @@ internal fun AppRootProfileLayer(
   profileIpAuthorized: Boolean,
   settings: AppSettings,
   hiddenCoverItemId: String?,
+  hiddenLiveCoverItemId: String? = null,
   bangumiReturnRequest: ProfileBangumiReturnRequest?,
   hiddenArticleItemId: String?,
   profileAvatarBounds: Rect,
@@ -113,6 +113,8 @@ internal fun AppRootProfileLayer(
   onBangumiClick: (Long, SpaceContentCard, Rect) -> Unit,
   onVideoLongClick: (FeedItem) -> Unit,
   onArticleClick: (ArticleItem, Rect) -> Unit,
+  onLiveClick: (LiveSearchRoom, Rect) -> Unit,
+  onLiveBoundsChanged: (LiveSearchRoom, Rect) -> Unit,
   onArticleBoundsChanged: (ArticleItem, Rect) -> Unit,
   onLoadPage: (Int) -> Unit,
   onRefresh: () -> Unit,
@@ -187,6 +189,8 @@ internal fun AppRootProfileLayer(
             },
             onVideoLongClick = onVideoLongClick,
             onArticleClick = onArticleClick,
+            onLiveClick = onLiveClick,
+            onLiveBoundsChanged = onLiveBoundsChanged,
             hiddenArticleItemId = hiddenArticleItemId,
             onArticleBoundsChanged = onArticleBoundsChanged,
             onLoadMore = { onLoadPage(currentPage + 1) },
@@ -230,9 +234,9 @@ internal fun AppRootProfileLayer(
             },
             onLogin = onLogin,
             hiddenCoverItemId = hiddenCoverItemId,
+            hiddenLiveCoverItemId = hiddenLiveCoverItemId,
             bangumiReturnRequestToken =
-              bangumiReturnRequest?.takeIf { it.profileEntryId == rootEntry?.entryId }?.token
-                ?: 0L,
+              bangumiReturnRequest?.takeIf { it.profileEntryId == rootEntry?.entryId }?.token ?: 0L,
             bangumiReturnCardId =
               bangumiReturnRequest?.takeIf { it.profileEntryId == rootEntry?.entryId }?.cardId,
             onVideoBoundsChanged = { item, bounds ->
@@ -255,6 +259,7 @@ internal fun AppRootProfileLayer(
                   ?.takeIf { it.sourceAvatarBounds != null }
                   ?.sourceComment
                   ?.name,
+            videoReturnTransitionActive = profileVideoTransitionActive,
             transitionRunning = commentTransition != null || avatarTransition != null,
             backHandlingEnabled = backHandlingEnabled,
           )
@@ -386,8 +391,8 @@ internal fun AppRootProfileLayer(
         )
     }
 
-    // The child is mounted before preparation starts and remains an independent full-screen layer
-    // until the reverse animation has finished. The live parent stays composed underneath it.
+    // 子页在准备开始之前挂载，并保持为独立的整页层，直到反向动画结束。
+    // 直播父页保持组合在其下方。
     visibleNestedEntries.forEachIndexed { nestedIndex, nestedEntry ->
       val nested = nestedEntry.state
       val nestedMid = nested.profileMid ?: return@forEachIndexed
@@ -473,6 +478,8 @@ internal fun AppRootProfileLayer(
             },
             onVideoLongClick = onVideoLongClick,
             onArticleClick = onArticleClick,
+            onLiveClick = onLiveClick,
+            onLiveBoundsChanged = onLiveBoundsChanged,
             hiddenArticleItemId = hiddenArticleItemId.takeIf { isTopProfile },
             onArticleBoundsChanged = onArticleBoundsChanged,
             onLoadMore = { nested.loadSpacePage(nestedMid, nested.spacePage + 1, nestedScope) },
@@ -541,6 +548,7 @@ internal fun AppRootProfileLayer(
             privateMessageContent = { privateMessageContent(nestedEntry.entryId) },
             onLogin = onLogin,
             hiddenCoverItemId = hiddenCoverItemId.takeIf { isTopProfile },
+            hiddenLiveCoverItemId = hiddenLiveCoverItemId.takeIf { isTopProfile },
             bangumiReturnRequestToken =
               bangumiReturnRequest?.takeIf { it.profileEntryId == nestedEntry.entryId }?.token
                 ?: 0L,
@@ -599,8 +607,8 @@ internal fun AppRootProfileLayer(
         )
     }
 
-    // The shared cover itself is drawn once by AppRoot. Keep only the full-page bridge here so the
-    // retained profile stack can still participate without creating a duplicate cover frame.
+    // 共享封面本身由 AppRoot 绘制一次。这里只保留整页桥接，让保留的资料栈
+    // 仍能参与，而不制造重复的封面帧。
     activeSession
       ?.takeIf {
         shouldDisplayCardTransitionOverlay(it.kind, it.phase) &&

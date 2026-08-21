@@ -11,13 +11,10 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -25,20 +22,23 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.staggeredgrid.itemsIndexed
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
+import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
-import androidx.compose.foundation.lazy.staggeredgrid.itemsIndexed
-import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ThumbUp
+import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ThumbUp
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
@@ -50,31 +50,36 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.TransformOrigin
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.path
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -83,10 +88,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import coil3.imageLoader
+import coil3.request.ImageRequest
 import dev.openbili.webdemo.api.ArticleItem
-import dev.openbili.webdemo.api.BiliApi
+import dev.openbili.webdemo.api.BiliCommentApi
 import dev.openbili.webdemo.api.BiliEmote
 import dev.openbili.webdemo.api.BiliEmotePackage
+import dev.openbili.webdemo.api.BiliFollowApi
+import dev.openbili.webdemo.api.BiliSearchApi
 import dev.openbili.webdemo.api.CommentImage
 import dev.openbili.webdemo.api.CommentItem
 import dev.openbili.webdemo.api.CommentSort
@@ -97,12 +106,19 @@ import dev.openbili.webdemo.api.SpaceDynamicVideo
 import dev.openbili.webdemo.api.SpaceProfile
 import dev.openbili.webdemo.article.ArticleCard
 import dev.openbili.webdemo.feed.CoverImage
+import dev.openbili.webdemo.feed.CoverImageRequestFactory
+import dev.openbili.webdemo.feed.FeedCardContent
+import dev.openbili.webdemo.feed.FeedCardMetadataMode
 import dev.openbili.webdemo.feed.FeedImageLoadMode
 import dev.openbili.webdemo.feed.FeedItem
 import dev.openbili.webdemo.feed.LocalFeedImageLoadPolicy
 import dev.openbili.webdemo.feed.rememberStaggeredFeedImageLoadPolicy
 import dev.openbili.webdemo.settings.AppSettings
+import dev.openbili.webdemo.live.LiveSearchRoom
+import dev.openbili.webdemo.live.LiveHomeSourceAnchor
+import dev.openbili.webdemo.live.currentDisplayCoverUrl
 import dev.openbili.webdemo.ui.AvatarImage
+import dev.openbili.webdemo.ui.controlFocusOutline
 import dev.openbili.webdemo.ui.NavigationCardBottomClearance
 import dev.openbili.webdemo.ui.PressableVideoCard
 import dev.openbili.webdemo.ui.PullRefreshContainer
@@ -110,21 +126,22 @@ import dev.openbili.webdemo.ui.VideoCardGradient
 import dev.openbili.webdemo.ui.VideoCardReveal
 import dev.openbili.webdemo.ui.VideoShapeTokens
 import dev.openbili.webdemo.video.BiliRichText
+import dev.openbili.webdemo.video.commentCanBeDeletedBy
 import dev.openbili.webdemo.video.CommentComposer
 import dev.openbili.webdemo.video.CommentImagePreviewOverlay
 import dev.openbili.webdemo.video.CommentImagePreviewSession
 import dev.openbili.webdemo.video.CommentProfileAnchor
 import dev.openbili.webdemo.video.CommentRow
+import dev.openbili.webdemo.video.formatCompactCount
 import dev.openbili.webdemo.video.ReplyThreadPanel
 import dev.openbili.webdemo.video.ReplyThreadTransitionContainer
-import dev.openbili.webdemo.video.commentCanBeDeletedBy
-import dev.openbili.webdemo.video.formatCompactCount
+import java.time.format.DateTimeFormatter
 import java.time.Instant
 import java.time.ZoneId
-import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -282,7 +299,10 @@ internal fun ProfileDynamicGrid(
   onDetailTransitionRunningChanged: (Boolean) -> Unit = {},
   onVideoClick: (FeedItem, Rect) -> Unit,
   onVideoLongClick: (FeedItem) -> Unit,
+  onLiveClick: (LiveSearchRoom, Rect) -> Unit = { _, _ -> },
+  onLiveBoundsChanged: (LiveSearchRoom, Rect) -> Unit = { _, _ -> },
   hiddenCoverItemId: String?,
+  hiddenLiveCoverItemId: String? = null,
   onVideoBoundsChanged: (FeedItem, Rect) -> Unit,
   onArticleClick: (ArticleItem, Rect) -> Unit,
   hiddenArticleItemId: String?,
@@ -298,11 +318,18 @@ internal fun ProfileDynamicGrid(
   onDynamicPin: (SpaceDynamicItem) -> Unit,
   onLoadMore: () -> Unit,
   onScrollStarted: () -> Unit,
+  onControlExitUp: (() -> Unit)? = null,
+  initialFocusRequester: FocusRequester? = null,
+  videoReturnFocusRegistry: ProfileVideoReturnFocusRegistry? = null,
 ) {
   val state = rememberLazyStaggeredGridState()
   val imageLoadPolicy = rememberStaggeredFeedImageLoadPolicy(state)
+  val context = LocalContext.current
+  val prefetchedDynamicImages = remember { mutableSetOf<String>() }
   LaunchedEffect(searchQuery, scrollToTopKey) { state.scrollToItem(0) }
   val cardBounds = remember(profile?.mid) { mutableMapOf<String, Rect>() }
+  val cardFocusRequesters = remember(profile?.mid) { mutableMapOf<String, FocusRequester>() }
+  val detailFocusRequester = remember(profile?.mid) { FocusRequester() }
   var displayedDynamicId by remember(profile?.mid) { mutableStateOf(selectedDynamicId) }
   var transitionSourceBounds by remember(profile?.mid) { mutableStateOf(Rect.Zero) }
   var transitionTargetBounds by remember(profile?.mid) { mutableStateOf(Rect.Zero) }
@@ -341,6 +368,12 @@ internal fun ProfileDynamicGrid(
       if (displayedDynamicId != null) onDetailOverlayActiveChanged(false)
     }
   }
+  LaunchedEffect(displayedDynamicId, detailContentReady) {
+    if (displayedDynamicId != null && detailContentReady) {
+      withFrameNanos {}
+      runCatching { detailFocusRequester.requestFocus() }
+    }
+  }
   BackHandler(enabled = backHandlingEnabled && displayedDynamicId != null) {
     onSelectedDynamicIdChange(null)
   }
@@ -374,11 +407,12 @@ internal fun ProfileDynamicGrid(
           detailContentReady = true
         }
       } else if (displayedDynamicId != null) {
+        val closingDynamicId = displayedDynamicId
         val latestSource = cardBounds[displayedDynamicId] ?: transitionSourceBounds
         if (latestSource.width > 1f && latestSource.height > 1f)
           transitionSourceBounds = latestSource
-        // Dispose the expensive dynamic detail tree before the return morph. The animation then
-        // only moves the lightweight surface mask, avoiding a full-window scale on every frame.
+        // 在返回变形前销毁昂贵的动态详情树。动画随后只移动轻量表面蒙版，
+        // 避免每一帧都做全窗口缩放。
         detailContentReady = false
         withFrameNanos {}
         withFrameNanos {}
@@ -388,6 +422,8 @@ internal fun ProfileDynamicGrid(
         )
         displayedDynamicId = null
         transitionSourceBounds = Rect.Zero
+        withFrameNanos {}
+        closingDynamicId?.let { id -> runCatching { cardFocusRequesters[id]?.requestFocus() } }
       }
     } finally {
       onDetailTransitionRunningChanged(false)
@@ -400,6 +436,8 @@ internal fun ProfileDynamicGrid(
           DynamicFilterRow(
             selected = selectedFilter,
             onSelected = { selectedFilter = it },
+            initialFocusRequester = initialFocusRequester,
+            onControlExitUp = onControlExitUp,
           )
         }
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -425,6 +463,51 @@ internal fun ProfileDynamicGrid(
         if (nearEnd && hasMore && !loading && imageLoadPolicy.mode != FeedImageLoadMode.PAUSED)
           onLoadMore()
       }
+      LaunchedEffect(
+        filteredItems,
+        showFilterRow,
+        displayedDynamicId,
+        imageLoadPolicy.mode,
+      ) {
+        snapshotFlow {
+            val lastVisible = state.layoutInfo.visibleItemsInfo.maxOfOrNull { it.index } ?: -1
+            lastVisible to state.isScrollInProgress
+          }
+          .collectLatest { (lastVisible, scrolling) ->
+            if (
+              scrolling ||
+                displayedDynamicId != null ||
+                imageLoadPolicy.mode == FeedImageLoadMode.PAUSED ||
+                lastVisible < 0
+            ) {
+              return@collectLatest
+            }
+            delay(250L)
+            if (state.isScrollInProgress || displayedDynamicId != null) return@collectLatest
+            val contentIndex =
+              (lastVisible - if (showFilterRow) 1 else 0).coerceIn(-1, filteredItems.lastIndex)
+            val nextItems =
+              filteredItems
+                .drop(contentIndex + 1)
+                .take(DYNAMIC_PREFETCH_COLUMNS * DYNAMIC_PREFETCH_ROWS)
+            nextItems
+              .flatMap(::dynamicPrefetchImageUrls)
+              .distinct()
+              .take(DYNAMIC_PREFETCH_MAX_IMAGES)
+              .forEach { url ->
+                if (prefetchedDynamicImages.add(url)) {
+                  context.imageLoader.enqueue(
+                    CoverImageRequestFactory.request(
+                      url,
+                      ImageRequest.Builder(context),
+                      width = 672,
+                      height = 378,
+                    )
+                  )
+                }
+              }
+          }
+      }
       LaunchedEffect(state.isScrollInProgress) {
         if (state.isScrollInProgress) onScrollStarted()
       }
@@ -448,6 +531,8 @@ internal fun ProfileDynamicGrid(
               DynamicFilterRow(
                 selected = selectedFilter,
                 onSelected = { selectedFilter = it },
+                initialFocusRequester = initialFocusRequester,
+                onControlExitUp = onControlExitUp,
               )
             }
           }
@@ -466,14 +551,68 @@ internal fun ProfileDynamicGrid(
           }
           itemsIndexed(filteredItems, key = { _, item -> item.id }) { index, item ->
             VideoCardReveal(index = index, batchKey = revealBatchKey, itemKey = item.id) {
+              val localFocusRequester = remember(item.id) { FocusRequester() }
+              val cardFocusRequester =
+                initialFocusRequester.takeIf { index == 0 && !showFilterRow } ?: localFocusRequester
+              DisposableEffect(item.id, cardFocusRequester) {
+                cardFocusRequesters[item.id] = cardFocusRequester
+                onDispose {
+                  if (cardFocusRequesters[item.id] === cardFocusRequester) {
+                    cardFocusRequesters.remove(item.id)
+                  }
+                }
+              }
+              val dynamicLive = item.live
               val dynamicArticle = item.article
-              if (dynamicArticle != null) {
+              if (dynamicLive != null) {
+                DynamicLiveCard(
+                  room = dynamicLive,
+                  index = index,
+                  onClick = { bounds -> onLiveClick(dynamicLive, bounds) },
+                  onBoundsChanged = { bounds -> onLiveBoundsChanged(dynamicLive, bounds) },
+                  sourceVisible = dynamicLiveSourceVisible(dynamicLive, hiddenLiveCoverItemId),
+                  focusRequester = cardFocusRequester,
+                  onControlKeyEvent =
+                    if (index < 2 && !showFilterRow && onControlExitUp != null) {
+                      { event ->
+                        if (event.nativeKeyEvent.keyCode != android.view.KeyEvent.KEYCODE_DPAD_UP) {
+                          false
+                        } else {
+                          if (
+                            event.type == androidx.compose.ui.input.key.KeyEventType.KeyDown &&
+                              event.nativeKeyEvent.repeatCount == 0
+                          ) {
+                            onControlExitUp()
+                          }
+                          true
+                        }
+                      }
+                    } else null,
+                )
+              } else if (dynamicArticle != null) {
                 ArticleCard(
                   article = dynamicArticle,
                   coverVisible = dynamicArticle.stableId != hiddenArticleItemId,
                   onClick = { bounds -> onArticleClick(dynamicArticle, bounds) },
                   onBoundsChanged = { bounds -> onArticleBoundsChanged(dynamicArticle, bounds) },
                   loadKey = item.id,
+                  focusRequester = cardFocusRequester,
+                  onControlKeyEvent =
+                    if (index < 2 && !showFilterRow && onControlExitUp != null) {
+                      { event ->
+                        if (event.nativeKeyEvent.keyCode != android.view.KeyEvent.KEYCODE_DPAD_UP) {
+                          false
+                        } else {
+                          if (
+                            event.type == androidx.compose.ui.input.key.KeyEventType.KeyDown &&
+                              event.nativeKeyEvent.repeatCount == 0
+                          ) {
+                            onControlExitUp()
+                          }
+                          true
+                        }
+                      }
+                    } else null,
                 )
               } else
                 DynamicCard(
@@ -486,6 +625,8 @@ internal fun ProfileDynamicGrid(
                     displayedDynamicId = item.id
                     onSelectedDynamicIdChange(item.id)
                   },
+                  onLiveClick = onLiveClick,
+                  onLiveBoundsChanged = onLiveBoundsChanged,
                   onAvatarClick = { bounds ->
                     onAvatarProfileClick(
                       item.authorMid.takeIf { it > 0L } ?: profile?.mid ?: 0L,
@@ -521,6 +662,23 @@ internal fun ProfileDynamicGrid(
                     managedDynamicId = null
                     onDynamicPin(item)
                   },
+                  focusRequester = cardFocusRequester,
+                  onControlKeyEvent =
+                    if (index < 2 && !showFilterRow && onControlExitUp != null) {
+                      { event ->
+                        if (event.nativeKeyEvent.keyCode != android.view.KeyEvent.KEYCODE_DPAD_UP) {
+                          false
+                        } else {
+                          if (
+                            event.type == androidx.compose.ui.input.key.KeyEventType.KeyDown &&
+                              event.nativeKeyEvent.repeatCount == 0
+                          ) {
+                            onControlExitUp()
+                          }
+                          true
+                        }
+                      }
+                    } else null,
                 )
             }
           }
@@ -562,7 +720,11 @@ internal fun ProfileDynamicGrid(
               onDismiss = { onSelectedDynamicIdChange(null) },
               onVideoClick = onVideoClick,
               onVideoLongClick = onVideoLongClick,
+              onLiveClick = onLiveClick,
+              onLiveBoundsChanged = onLiveBoundsChanged,
               hiddenCoverItemId = hiddenCoverItemId,
+              hiddenLiveCoverItemId = hiddenLiveCoverItemId,
+              videoReturnFocusRegistry = videoReturnFocusRegistry,
               onVideoBoundsChanged = onVideoBoundsChanged,
               onArticleClick = onArticleClick,
               hiddenArticleItemId = hiddenArticleItemId,
@@ -573,6 +735,7 @@ internal fun ProfileDynamicGrid(
               hiddenAvatarSourceBounds = hiddenAvatarSourceBounds,
               backHandlingEnabled = backHandlingEnabled,
               onDynamicLike = { onDynamicLike(item) },
+              initialFocusRequester = detailFocusRequester,
             )
           }
         }
@@ -580,6 +743,18 @@ internal fun ProfileDynamicGrid(
     }
   }
 }
+
+private fun dynamicPrefetchImageUrls(item: SpaceDynamicItem): List<String> =
+  buildList {
+    item.video?.coverUrl?.takeIf(String::isNotBlank)?.let(::add)
+    item.live?.currentDisplayCoverUrl()?.takeIf(String::isNotBlank)?.let(::add)
+    item.article?.coverUrl?.takeIf(String::isNotBlank)?.let(::add)
+    item.images.asSequence().map(SpaceDynamicImage::url).filter(String::isNotBlank).take(2).forEach(::add)
+  }
+
+private const val DYNAMIC_PREFETCH_COLUMNS = 2
+private const val DYNAMIC_PREFETCH_ROWS = 2
+private const val DYNAMIC_PREFETCH_MAX_IMAGES = 8
 
 @Composable
 private fun DynamicDetailTransition(
@@ -599,8 +774,8 @@ private fun DynamicDetailTransition(
   val startScaleY = if (validBounds) sourceBounds.height / targetBounds.height else .96f
   val startX = if (validBounds) sourceBounds.left - targetBounds.left else 0f
   val startY = if (validBounds) sourceBounds.top - targetBounds.top else 0f
-  // Single morph container — the same approach as ReplyThreadTransitionContainer: one opaque
-  // surface expands from the source card while content cross-fades in after the morph settles.
+  // 单一变形容器 —— 与 ReplyThreadTransitionContainer 相同的方法：一块不透明表面从
+  // 源卡片展开，内容在变形稳定后交叉淡入。
   Box(modifier = modifier) {
     Box(
       Modifier.fillMaxSize().graphicsLayer {
@@ -645,6 +820,8 @@ private fun DynamicCard(
   profile: SpaceProfile?,
   onBoundsChanged: (Rect) -> Unit,
   onClick: () -> Unit,
+  onLiveClick: (LiveSearchRoom, Rect) -> Unit,
+  onLiveBoundsChanged: (LiveSearchRoom, Rect) -> Unit,
   onAvatarClick: (Rect) -> Unit,
   hiddenAvatarSourceBounds: Rect?,
   onLike: () -> Unit,
@@ -657,12 +834,20 @@ private fun DynamicCard(
   onDeleteUndo: () -> Unit,
   onDeleteConfirm: () -> Unit,
   onPin: () -> Unit,
+  focusRequester: FocusRequester? = null,
+  onControlKeyEvent: ((androidx.compose.ui.input.key.KeyEvent) -> Boolean)? = null,
 ) {
+  var liveCoverBounds by remember(item.id) { mutableStateOf(Rect.Zero) }
   PressableVideoCard(
-    onClick = onClick,
+    onClick = {
+      val room = item.live
+      if (room != null) onLiveClick(room, liveCoverBounds) else onClick()
+    },
     onLongClick = { if (canManage) onManage() },
     modifier = Modifier.onGloballyPositioned { onBoundsChanged(it.boundsInRoot()) },
     shape = VideoShapeTokens.Card,
+    focusRequester = focusRequester,
+    onControlKeyEvent = onControlKeyEvent,
   ) {
     Box {
       Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -676,7 +861,23 @@ private fun DynamicCard(
             style = MaterialTheme.typography.bodyMedium,
           )
         }
-        item.video?.let {
+        item.live?.let { room ->
+          val liveItem = room.toDynamicFeedItem(item.id)
+          FeedCardContent(
+            item = liveItem,
+            metadataMode = FeedCardMetadataMode.LIVE,
+            profileClickEnabled = false,
+            liveStatusText = "直播中",
+            liveSecondaryText =
+              listOfNotNull(room.parentAreaName, room.areaName).distinct().joinToString(" · "),
+            liveTrailingText = room.watchedText,
+            onCoverBoundsChanged = {
+              liveCoverBounds = it
+              onLiveBoundsChanged(room, it)
+            },
+            modifier = Modifier.fillMaxWidth(),
+          )
+        } ?: item.video?.let {
           VideoCardGradient(
             coverUrl = it.coverUrl,
             loadKey = item.id,
@@ -764,10 +965,87 @@ private fun DynamicCard(
   }
 }
 
+private fun LiveSearchRoom.toDynamicFeedItem(dynamicId: String): FeedItem =
+  FeedItem(
+    id = "$dynamicId:$stableId",
+    title = title,
+    videoUrl = "https://live.bilibili.com/$roomId",
+    coverUrl = currentDisplayCoverUrl(),
+    uploader = uname,
+    playCount = null,
+    duration = null,
+    uploaderFace = faceUrl,
+    uploaderMid = uid,
+    description = listOfNotNull(parentAreaName, areaName).distinct().joinToString(" · "),
+  )
+
+@Composable
+private fun DynamicLiveCard(
+  room: LiveSearchRoom,
+  index: Int = 0,
+  onClick: (Rect) -> Unit,
+  onBoundsChanged: (Rect) -> Unit,
+  sourceVisible: Boolean = true,
+  focusRequester: FocusRequester? = null,
+  onControlKeyEvent: ((androidx.compose.ui.input.key.KeyEvent) -> Boolean)? = null,
+) {
+  var coverBounds by remember(room.roomId) { mutableStateOf(Rect.Zero) }
+  val scope = rememberCoroutineScope()
+  var opening by remember(room.stableId) { mutableStateOf(false) }
+  val chromeAlpha = remember(room.stableId) { Animatable(1f) }
+  val liveItem = room.toDynamicFeedItem("live-dynamic")
+  LaunchedEffect(sourceVisible) {
+    if (sourceVisible && chromeAlpha.value < 1f) {
+      chromeAlpha.animateTo(1f, tween(150, easing = FastOutSlowInEasing))
+      opening = false
+    }
+  }
+  fun requestOpen() {
+    if (opening || !sourceVisible) return
+    opening = true
+    val stableBounds = coverBounds
+    scope.launch {
+      // 只让封面上的信息与遮罩退场，封面本身交给共享元素转场接管。
+      chromeAlpha.animateTo(0f, tween(150, easing = FastOutSlowInEasing))
+      withFrameNanos {}
+      onClick(stableBounds)
+    }
+  }
+  VideoCardReveal(index = index, batchKey = "dynamic-live", itemKey = room.stableId) {
+    PressableVideoCard(
+      onClick = ::requestOpen,
+      onLongClick = {},
+      modifier = Modifier.graphicsLayer { alpha = if (sourceVisible) 1f else 0f },
+      enabled = sourceVisible && !opening,
+      focusRequester = focusRequester,
+      onControlKeyEvent = onControlKeyEvent,
+    ) {
+      FeedCardContent(
+        item = liveItem,
+        metadataMode = FeedCardMetadataMode.LIVE,
+        profileClickEnabled = false,
+        liveStatusText = "直播中",
+        liveSecondaryText =
+          listOfNotNull(room.parentAreaName, room.areaName).distinct().joinToString(" · "),
+        liveTrailingText = room.watchedText,
+        textAlpha = chromeAlpha.value,
+        coverVisible = sourceVisible,
+        overlayInfoOnCover = true,
+        onCoverBoundsChanged = {
+          coverBounds = it
+          onBoundsChanged(it)
+        },
+      )
+    }
+  }
+}
+
 @Composable
 private fun DynamicFilterRow(
   selected: ProfileDynamicFilter,
   onSelected: (ProfileDynamicFilter) -> Unit,
+  initialFocusRequester: FocusRequester? = null,
+  onControlExitUp: (() -> Unit)? = null,
 ) {
   Row(
     Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp),
@@ -779,6 +1057,23 @@ private fun DynamicFilterRow(
         selected = selected == filter,
         onClick = { onSelected(filter) },
         label = { Text(filter.label, style = MaterialTheme.typography.labelMedium) },
+        modifier =
+          Modifier.then(
+              if (selected == filter && initialFocusRequester != null) {
+                Modifier.focusRequester(initialFocusRequester)
+              } else Modifier
+            )
+            .onPreviewKeyEvent { event ->
+              if (selected == filter && onControlExitUp != null) {
+                handleProfileControlExitUp(event, onControlExitUp)
+              } else {
+                false
+              }
+            }
+            .controlFocusOutline(
+              shape = RoundedCornerShape(12.dp),
+              color = MaterialTheme.colorScheme.primary,
+            ),
       )
     }
   }
@@ -906,8 +1201,8 @@ internal fun DynamicImageGrid(
             visibleHeight?.times(2f / 3f) ?: Dp.Infinity,
           )
           .coerceAtMost(if (compact) 480.dp else 560.dp)
-      // Portrait media narrows instead of stretching across the whole card. Very long media gets
-      // a readable crop here; the detail preview still opens the complete source image.
+      // 竖屏媒体变窄显示，而不是拉伸到整张卡片。非常长的媒体在这里做可读的裁剪；
+      // 详情预览仍会打开完整的源图。
       val widthLimit = if (compact) maxWidth * .94f else minOf(maxWidth * .72f, 560.dp)
       val displayWidth = minOf(widthLimit, heightLimit * displayRatio)
       val displayHeight = minOf(heightLimit, displayWidth / displayRatio)
@@ -1057,7 +1352,11 @@ private fun DynamicDetail(
   onDismiss: () -> Unit,
   onVideoClick: (FeedItem, Rect) -> Unit,
   onVideoLongClick: (FeedItem) -> Unit,
+  onLiveClick: (LiveSearchRoom, Rect) -> Unit,
+  onLiveBoundsChanged: (LiveSearchRoom, Rect) -> Unit,
   hiddenCoverItemId: String?,
+  hiddenLiveCoverItemId: String? = null,
+  videoReturnFocusRegistry: ProfileVideoReturnFocusRegistry?,
   onVideoBoundsChanged: (FeedItem, Rect) -> Unit,
   onArticleClick: (ArticleItem, Rect) -> Unit,
   hiddenArticleItemId: String?,
@@ -1068,6 +1367,7 @@ private fun DynamicDetail(
   hiddenAvatarSourceBounds: Rect?,
   backHandlingEnabled: Boolean,
   onDynamicLike: () -> Unit,
+  initialFocusRequester: FocusRequester? = null,
 ) {
   val context = LocalContext.current
   val density = LocalDensity.current
@@ -1131,7 +1431,7 @@ private fun DynamicDetail(
     scope.launch {
       runCatching {
           withContext(Dispatchers.IO) {
-            BiliApi.getComments(item.commentOid, page, commentSort.apiValue, item.commentType)
+            BiliCommentApi.getComments(item.commentOid, page, commentSort.apiValue, item.commentType)
           }
         }
         .onSuccess { response ->
@@ -1156,7 +1456,7 @@ private fun DynamicDetail(
     scope.launch {
       runCatching {
           withContext(Dispatchers.IO) {
-            BiliApi.getCommentReplies(item.commentOid, root.rpid, page, item.commentType)
+            BiliCommentApi.getCommentReplies(item.commentOid, root.rpid, page, item.commentType)
           }
         }
         .onSuccess { response ->
@@ -1189,7 +1489,7 @@ private fun DynamicDetail(
     scope.launch {
       runCatching {
           withContext(Dispatchers.IO) {
-            BiliApi.setCommentLike(item.commentOid, comment.rpid, liked, item.commentType)
+            BiliCommentApi.setCommentLike(item.commentOid, comment.rpid, liked, item.commentType)
           }
         }
         .onFailure {
@@ -1203,7 +1503,7 @@ private fun DynamicDetail(
     scope.launch {
       runCatching {
           withContext(Dispatchers.IO) {
-            BiliApi.deleteComment(item.commentOid, comment.rpid, item.commentType)
+            BiliCommentApi.deleteComment(item.commentOid, comment.rpid, item.commentType)
           }
         }
         .onSuccess {
@@ -1262,7 +1562,7 @@ private fun DynamicDetail(
     if (emotePackages.isEmpty()) {
       emotePackages =
         withContext(Dispatchers.IO) {
-          runCatching { BiliApi.getReplyEmotes() }.getOrDefault(emptyList())
+          runCatching { BiliCommentApi.getReplyEmotes() }.getOrDefault(emptyList())
         }
     }
   }
@@ -1274,7 +1574,7 @@ private fun DynamicDetail(
       withContext(Dispatchers.IO) {
           val followed =
             if (currentAccountMid > 0L)
-              runCatching { BiliApi.getFollowings(currentAccountMid, 1, query).items }
+              runCatching { BiliFollowApi.getFollowings(currentAccountMid, 1, query).items }
                 .getOrDefault(emptyList())
             else emptyList()
           val followedIds = followed.mapTo(mutableSetOf()) { it.mid }
@@ -1282,7 +1582,7 @@ private fun DynamicDetail(
             MentionSuggestion(it.mid, it.name, it.face, "我的关注", true)
           } +
             if (query.isNotBlank()) {
-              runCatching { BiliApi.searchUsers(query, 1) }
+              runCatching { BiliSearchApi.searchUsers(query, 1) }
                 .getOrDefault(emptyList())
                 .asSequence()
                 .filter { it.mid !in followedIds }
@@ -1344,7 +1644,21 @@ private fun DynamicDetail(
             .padding(horizontal = 6.dp, vertical = 4.dp),
           verticalAlignment = Alignment.CenterVertically,
         ) {
-          IconButton(onClick = onDismiss) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "关闭动态详情") }
+          IconButton(
+            onClick = onDismiss,
+            modifier =
+              Modifier.then(
+                  if (initialFocusRequester != null) {
+                    Modifier.focusRequester(initialFocusRequester)
+                  } else Modifier
+                )
+                .controlFocusOutline(
+                  shape = CircleShape,
+                  color = MaterialTheme.colorScheme.primary,
+                ),
+          ) {
+            Icon(Icons.AutoMirrored.Filled.ArrowBack, "关闭动态详情")
+          }
           Text(
             "动态详情",
             style = MaterialTheme.typography.titleMedium,
@@ -1425,10 +1739,21 @@ private fun DynamicDetail(
             videoItem?.let { video ->
               item(key = "dynamic_video") {
                 var coverBounds by remember(video.id) { mutableStateOf(Rect.Zero) }
+                val videoFocusRequester =
+                  videoReturnFocusRegistry?.let { registry ->
+                    rememberProfileVideoCardFocusRequester(
+                      itemId = video.id,
+                      registry = registry,
+                    )
+                  }
                 PressableVideoCard(
-                  onClick = { onVideoClick(video, coverBounds) },
+                  onClick = {
+                    videoReturnFocusRegistry?.rememberReturningItem(video.id)
+                    onVideoClick(video, coverBounds)
+                  },
                   onLongClick = { onVideoLongClick(video) },
                   shape = VideoShapeTokens.Card,
+                  focusRequester = videoFocusRequester,
                 ) {
                   VideoCardGradient(coverUrl = video.coverUrl, loadKey = video.id) {
                     DynamicVideoPreview(
@@ -1443,6 +1768,16 @@ private fun DynamicDetail(
                     )
                   }
                 }
+              }
+            }
+            item.live?.let { room ->
+              item(key = "dynamic_live") {
+                DynamicLiveCard(
+                  room = room,
+                  onClick = { bounds -> onLiveClick(room, bounds) },
+                  onBoundsChanged = { bounds -> onLiveBoundsChanged(room, bounds) },
+                  sourceVisible = dynamicLiveSourceVisible(room, hiddenLiveCoverItemId),
+                )
               }
             }
             item(key = "dynamic_stats") { DynamicStats(item, onDynamicLike) }
@@ -1537,9 +1872,9 @@ private fun DynamicDetail(
           scope.launch {
             runCatching {
                 withContext(Dispatchers.IO) {
-                  if (target == null) BiliApi.addComment(item.commentOid, message, item.commentType)
+                  if (target == null) BiliCommentApi.addComment(item.commentOid, message, item.commentType)
                   else
-                    BiliApi.addReply(
+                    BiliCommentApi.addReply(
                       item.commentOid,
                       (replyTargetRoot ?: target).rpid,
                       target.rpid,
@@ -1641,6 +1976,12 @@ private fun DynamicDetail(
       }
     }
   }
+}
+
+internal fun dynamicLiveSourceVisible(room: LiveSearchRoom, hiddenSourceId: String?): Boolean {
+  if (hiddenSourceId == null) return true
+  return hiddenSourceId != room.stableId &&
+    hiddenSourceId != LiveHomeSourceAnchor.feed(room.roomId, "dynamic").stableId
 }
 
 internal fun SpaceDynamicVideo.toFeedItem(item: SpaceDynamicItem, profile: SpaceProfile? = null) =

@@ -1,7 +1,7 @@
 package dev.openbili.webdemo.music
 
-import androidx.media3.common.Player
 import androidx.media3.common.C
+import androidx.media3.common.Player
 import dev.openbili.webdemo.api.FavoriteFolder
 import dev.openbili.webdemo.api.FeedCard
 import dev.openbili.webdemo.api.VideoStream
@@ -227,6 +227,32 @@ class HomeMusicPlayerLogicTest {
   }
 
   @Test
+  fun playbackOrderCyclesThroughSingleRepeat() {
+    assertEquals(
+      MusicPlaybackOrder.RANDOM,
+      nextMusicPlaybackOrder(MusicPlaybackOrder.SEQUENTIAL),
+    )
+    assertEquals(
+      MusicPlaybackOrder.SINGLE_REPEAT,
+      nextMusicPlaybackOrder(MusicPlaybackOrder.RANDOM),
+    )
+    assertEquals(
+      MusicPlaybackOrder.SEQUENTIAL,
+      nextMusicPlaybackOrder(MusicPlaybackOrder.SINGLE_REPEAT),
+    )
+    assertEquals(Player.REPEAT_MODE_ONE, musicRepeatMode(MusicPlaybackOrder.SINGLE_REPEAT))
+    assertEquals(Player.REPEAT_MODE_OFF, musicRepeatMode(MusicPlaybackOrder.RANDOM))
+  }
+
+  @Test
+  fun explicitSkipStillMovesToAdjacentTrackDuringSingleRepeat() {
+    assertEquals(
+      2,
+      adjacentMusicIndex(3, 1, MusicPlaybackOrder.SINGLE_REPEAT, direction = 1),
+    )
+  }
+
+  @Test
   fun playbackRetryBacksOffAndCapsDelay() {
     assertEquals(0L, musicRetryDelayMillis(0))
     assertEquals(3_200L, musicRetryDelayMillis(3))
@@ -334,6 +360,16 @@ class HomeMusicPlayerLogicTest {
   }
 
   @Test
+  fun spectrumLimitsBassAndMakesHighFrequenciesMoreSensitive() {
+    val lowFrequency = shapeMusicSpectrumBand(1.0, 80.0, 55.0, 16_000.0)
+    val highFrequency = shapeMusicSpectrumBand(.8, 8_000.0, 55.0, 16_000.0)
+
+    assertTrue("bass should have a soft visual ceiling", lowFrequency < .7f)
+    assertTrue("high frequency should remain visible at lower energy", highFrequency > lowFrequency)
+    assertTrue(highFrequency <= 1f)
+  }
+
+  @Test
   fun realSpectrumFollowsActualSystemMediaVolume() {
     val sampleRate = 48_000
     val samples =
@@ -352,12 +388,21 @@ class HomeMusicPlayerLogicTest {
 
   @Test
   fun spectrumFrameWaitsUntilPlaybackReachesItsPcmTimestamp() {
-    assertEquals(240L + MUSIC_SPECTRUM_OUTPUT_LATENCY_MS, musicSpectrumFrameWaitMillis(1_240_000L, 1_000L))
+    assertEquals(
+      240L + MUSIC_SPECTRUM_OUTPUT_LATENCY_MS,
+      musicSpectrumFrameWaitMillis(1_240_000L, 1_000L),
+    )
     assertEquals(560L, musicSpectrumFrameWaitMillis(1_240_000L, 1_000L, outputLatencyMs = 320L))
     assertEquals(MUSIC_SPECTRUM_OUTPUT_LATENCY_MS, musicSpectrumFrameWaitMillis(1_000_000L, 1_000L))
-    assertEquals(MUSIC_SPECTRUM_OUTPUT_LATENCY_MS, musicSpectrumFrameWaitMillis(C.TIME_UNSET, 1_000L))
+    assertEquals(
+      MUSIC_SPECTRUM_OUTPUT_LATENCY_MS,
+      musicSpectrumFrameWaitMillis(C.TIME_UNSET, 1_000L),
+    )
     assertEquals(MUSIC_SPECTRUM_OUTPUT_LATENCY_MS, musicSpectrumFrameWaitMillis(8_000_000L, 1_000L))
-    assertEquals(MUSIC_SPECTRUM_OUTPUT_LATENCY_MS - 100L, musicSpectrumFrameWaitMillis(C.TIME_UNSET, 1_000L, elapsedSinceCaptureMs = 100L))
+    assertEquals(
+      MUSIC_SPECTRUM_OUTPUT_LATENCY_MS - 100L,
+      musicSpectrumFrameWaitMillis(C.TIME_UNSET, 1_000L, elapsedSinceCaptureMs = 100L),
+    )
     assertEquals(
       320L + MUSIC_SPECTRUM_OUTPUT_LATENCY_MS,
       musicSpectrumFrameWaitMillis(
@@ -380,7 +425,7 @@ class HomeMusicPlayerLogicTest {
   @Test
   fun softKneeFadesGainInAndOutAroundTheNoiseFloor() {
     assertEquals(0.0, musicSpectrumLevelGain(0.0), 0.0)
-    // Inside the knee (1e-5 .. 3e-5) the gain is a small non-zero fraction, not a hard 0/1.
+    // 拐点内部（1e-5 .. 3e-5）增益是一个小的非零分数，而不是硬性的 0/1。
     assertTrue(musicSpectrumLevelGain(0.000_02) > 0.0)
     assertTrue(musicSpectrumLevelGain(0.000_02) < musicSpectrumLevelGain(0.001))
     assertEquals(1.0, musicSoftKnee(0.001), 0.0)
@@ -433,11 +478,21 @@ class HomeMusicPlayerLogicTest {
     assertTrue(relaxed < 400L && relaxed > 100L)
     assertEquals(
       60L,
-      advanceOutputLatencyEstimate(estimateMs = 60L, observedLeadMs = 10L, minMs = 60L, maxMs = 1_000L),
+      advanceOutputLatencyEstimate(
+        estimateMs = 60L,
+        observedLeadMs = 10L,
+        minMs = 60L,
+        maxMs = 1_000L,
+      ),
     )
     assertEquals(
       1_000L,
-      advanceOutputLatencyEstimate(estimateMs = 990L, observedLeadMs = 2_000L, minMs = 60L, maxMs = 1_000L),
+      advanceOutputLatencyEstimate(
+        estimateMs = 990L,
+        observedLeadMs = 2_000L,
+        minMs = 60L,
+        maxMs = 1_000L,
+      ),
     )
   }
 

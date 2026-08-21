@@ -37,8 +37,14 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -56,22 +62,34 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import coil3.BitmapImage
@@ -92,12 +110,17 @@ import dev.openbili.webdemo.live.LiveSearchRoom
 import dev.openbili.webdemo.profile.BangumiPosterCard
 import dev.openbili.webdemo.profile.formatProfileFollowerCount
 import dev.openbili.webdemo.ui.NavigationCardBottomClearance
+import dev.openbili.webdemo.ui.LocalControlMode
+import dev.openbili.webdemo.ui.LocalColorfulCardsEnabled
 import dev.openbili.webdemo.ui.OfficialVerificationIcon
 import dev.openbili.webdemo.ui.OfficialVerificationIconSize
 import dev.openbili.webdemo.ui.PressableVideoCard
 import dev.openbili.webdemo.ui.PullRefreshContainer
 import dev.openbili.webdemo.ui.VideoCardReveal
 import dev.openbili.webdemo.ui.VideoShapeTokens
+import dev.openbili.webdemo.ui.controlFocusOutline
+import dev.openbili.webdemo.ui.isControlConfirmKey
+import dev.openbili.webdemo.ui.requestFocusWithinFrames
 import dev.openbili.webdemo.video.CommentAuthorBadge
 import dev.openbili.webdemo.video.CommentAvatarPaletteCache
 import dev.openbili.webdemo.video.CommentLevelIcon
@@ -108,7 +131,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Search suggestions panel that expands from the search capsule in the top bar. */
+/** 从顶栏搜索胶囊展开的搜索建议面板。 */
 @Composable
 fun SearchScreen(
   state: SearchUiState,
@@ -123,6 +146,14 @@ fun SearchScreen(
   val scope = rememberCoroutineScope()
   val showAnim = remember { Animatable(0f) }
   val scrimAnim = remember { Animatable(0f) }
+  val controlMode = LocalControlMode.current
+  val focusManager = LocalFocusManager.current
+  val keyboardController = LocalSoftwareKeyboardController.current
+  val entryFocusRequester = remember { FocusRequester() }
+  val editorFocusRequester = remember { FocusRequester() }
+  val firstSuggestionFocusRequester = remember { FocusRequester() }
+  var editing by remember { mutableStateOf(false) }
+  var entryFocused by remember { mutableStateOf(false) }
 
   LaunchedEffect(Unit) {
     coroutineScope {
@@ -142,20 +173,53 @@ fun SearchScreen(
     }
   }
 
-  fun dismiss() {
+  fun dismiss(afterDismiss: () -> Unit) {
+    keyboardController?.hide()
+    focusManager.clearFocus(force = true)
     scope.launch {
       coroutineScope {
         launch { showAnim.animateTo(0f, tween(170, easing = FastOutSlowInEasing)) }
         launch { scrimAnim.animateTo(0f, tween(150, easing = FastOutSlowInEasing)) }
       }
-      onDismiss()
+      afterDismiss()
     }
   }
   fun commitSearch(keyword: String) {
-    onSearch(keyword)
+    val normalized = keyword.trim()
+    if (normalized.isEmpty()) return
+    keyboardController?.hide()
+    focusManager.clearFocus(force = true)
+    onSearch(normalized)
+  }
+  fun enterEditing() {
+    if (editing) return
+    editing = true
+    scope.launch {
+      withFrameNanos {}
+      if (runCatching { editorFocusRequester.requestFocus() }.getOrDefault(false)) {
+        keyboardController?.show()
+      }
+    }
+  }
+  fun leaveEditing() {
+    keyboardController?.hide()
+    editing = false
+    focusManager.clearFocus(force = true)
+    scope.launch {
+      withFrameNanos {}
+      runCatching { entryFocusRequester.requestFocus() }
+    }
   }
 
-  BackHandler { dismiss() }
+  LaunchedEffect(controlMode) {
+    if (controlMode && !editing) {
+      entryFocusRequester.requestFocusWithinFrames(maxFrames = 8)
+    }
+  }
+
+  BackHandler {
+    if (editing) leaveEditing() else dismiss(onBack)
+  }
   BoxWithConstraints(Modifier.fillMaxSize()) {
     val density = LocalDensity.current
     val screenWidthPx = with(density) { maxWidth.toPx() }
@@ -175,6 +239,18 @@ fun SearchScreen(
     val panelTop = with(density) { panelTopPx.toDp() }
     val availableHeightPx = (screenHeightPx - panelTopPx - marginPx).coerceAtLeast(1f)
     val panelMaxHeight = with(density) { minOf(availableHeightPx, screenHeightPx * .5f).toDp() }
+    val inputWidthPx =
+      searchBounds.width.takeIf { it > 0f } ?: with(density) { minOf(330.dp, maxWidth - 32.dp).toPx() }
+    val inputHeightPx =
+      searchBounds.height.takeIf { it > 0f } ?: with(density) { 44.dp.toPx() }
+    val inputLeftPx =
+      searchBounds.left
+        .takeIf { searchBounds.width > 0f }
+        ?.coerceIn(marginPx, (screenWidthPx - inputWidthPx - marginPx).coerceAtLeast(marginPx))
+        ?: (screenWidthPx - inputWidthPx - marginPx).coerceAtLeast(marginPx)
+    val inputTopPx = searchBounds.top.takeIf { searchBounds.height > 0f } ?: marginPx
+    val inputWidth = with(density) { inputWidthPx.toDp() }
+    val inputHeight = with(density) { inputHeightPx.toDp() }
     Box(
       Modifier.fillMaxSize()
         .padding(top = panelTop)
@@ -183,7 +259,7 @@ fun SearchScreen(
         .clickable(
           interactionSource = remember { MutableInteractionSource() },
           indication = null,
-          onClick = ::dismiss,
+          onClick = { dismiss(onDismiss) },
         )
     )
 
@@ -215,8 +291,25 @@ fun SearchScreen(
               TextButton(onClick = onClearHistory) { Text("清空") }
             }
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-              items(state.history) { keyword ->
-                AssistChip(onClick = { commitSearch(keyword) }, label = { Text(keyword) })
+              items(
+                count = state.history.size,
+                key = { index -> state.history[index] },
+              ) { index ->
+                val keyword = state.history[index]
+                AssistChip(
+                  onClick = { commitSearch(keyword) },
+                  label = { Text(keyword) },
+                  modifier =
+                    Modifier.then(
+                        if (index == 0) Modifier.focusRequester(firstSuggestionFocusRequester)
+                        else Modifier
+                      )
+                      .focusProperties { up = entryFocusRequester }
+                      .controlFocusOutline(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.primary,
+                      ),
+                )
               }
             }
           }
@@ -230,11 +323,23 @@ fun SearchScreen(
             verticalArrangement = Arrangement.spacedBy(4.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
           ) {
-            items(state.hot) { hot ->
+            itemsIndexed(state.hot) { index, hot ->
               Text(
                 hot.displayName,
                 modifier =
-                  Modifier.fillMaxWidth().clickable { commitSearch(hot.keyword) }.padding(12.dp),
+                  Modifier.fillMaxWidth()
+                    .then(
+                      if (state.history.isEmpty() && index == 0)
+                        Modifier.focusRequester(firstSuggestionFocusRequester)
+                      else Modifier
+                    )
+                    .focusProperties { up = entryFocusRequester }
+                    .controlFocusOutline(
+                      shape = RoundedCornerShape(12.dp),
+                      color = MaterialTheme.colorScheme.primary,
+                    )
+                    .clickable { commitSearch(hot.keyword) }
+                    .padding(12.dp),
               )
             }
           }
@@ -259,7 +364,15 @@ fun SearchScreen(
                 color = MaterialTheme.colorScheme.primary,
                 fontWeight = FontWeight.SemiBold,
                 modifier =
-                  Modifier.fillMaxWidth().clickable { commitSearch(state.query) }.padding(12.dp),
+                  Modifier.fillMaxWidth()
+                    .focusRequester(firstSuggestionFocusRequester)
+                    .focusProperties { up = entryFocusRequester }
+                    .controlFocusOutline(
+                      shape = RoundedCornerShape(12.dp),
+                      color = MaterialTheme.colorScheme.primary,
+                    )
+                    .clickable { commitSearch(state.query) }
+                    .padding(12.dp),
               )
             }
             items(state.suggestions) { suggestion ->
@@ -281,7 +394,13 @@ fun SearchScreen(
               Text(
                 display,
                 modifier =
-                  Modifier.fillMaxWidth().clickable { commitSearch(suggestion) }.padding(12.dp),
+                  Modifier.fillMaxWidth()
+                    .controlFocusOutline(
+                      shape = RoundedCornerShape(12.dp),
+                      color = MaterialTheme.colorScheme.primary,
+                    )
+                    .clickable { commitSearch(suggestion) }
+                    .padding(12.dp),
               )
             }
           }
@@ -295,6 +414,104 @@ fun SearchScreen(
           }
         }
       }
+    }
+
+    Surface(
+      modifier =
+        Modifier.offset { IntOffset(inputLeftPx.toInt(), inputTopPx.toInt()) }
+          .width(inputWidth)
+          .height(inputHeight)
+          .focusRequester(entryFocusRequester)
+          .focusProperties {
+            canFocus = controlMode && !editing
+            down = firstSuggestionFocusRequester
+          }
+          .onFocusChanged { entryFocused = it.isFocused }
+          .onPreviewKeyEvent { event ->
+            if (editing) return@onPreviewKeyEvent false
+            val keyCode = event.nativeKeyEvent.keyCode
+            when {
+              isControlConfirmKey(keyCode) -> {
+                if (
+                  event.type == KeyEventType.KeyDown &&
+                    event.nativeKeyEvent.repeatCount == 0
+                ) {
+                  enterEditing()
+                }
+                true
+              }
+              keyCode == android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
+                if (
+                  event.type == KeyEventType.KeyDown &&
+                    event.nativeKeyEvent.repeatCount == 0
+                ) {
+                  runCatching { firstSuggestionFocusRequester.requestFocus() }
+                }
+                true
+              }
+              else -> false
+            }
+          }
+          .controlFocusOutline(
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.primary,
+            width = 3.dp,
+            enabled = controlMode && !editing,
+          )
+          .clickable(
+            interactionSource = remember { MutableInteractionSource() },
+            indication = null,
+            onClick = ::enterEditing,
+          )
+          .graphicsLayer { alpha = showAnim.value.coerceIn(0f, 1f) },
+      shape = CircleShape,
+      color = MaterialTheme.colorScheme.surfaceVariant,
+      tonalElevation = 6.dp,
+      border =
+        if (!controlMode && entryFocused) BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+        else null,
+    ) {
+      BasicTextField(
+        value = state.query,
+        onValueChange = onQuery,
+        modifier =
+          Modifier.fillMaxSize()
+            .focusRequester(editorFocusRequester)
+            .focusProperties { canFocus = editing },
+        enabled = editing,
+        singleLine = true,
+        textStyle =
+          MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+        keyboardActions = KeyboardActions(onSearch = { commitSearch(state.query) }),
+        decorationBox = { innerField ->
+          Row(
+            Modifier.fillMaxSize().padding(horizontal = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(20.dp))
+            Box(Modifier.weight(1f).padding(start = 8.dp)) {
+              if (state.query.isBlank()) {
+                Text("搜索视频", color = MaterialTheme.colorScheme.onSurfaceVariant)
+              }
+              innerField()
+            }
+            if (state.query.isNotBlank()) {
+              IconButton(
+                onClick = { onQuery("") },
+                modifier = Modifier.size(32.dp),
+              ) {
+                Icon(
+                  Icons.Default.Close,
+                  contentDescription = "清空搜索内容",
+                  modifier = Modifier.size(18.dp),
+                )
+              }
+            }
+          }
+        },
+      )
     }
   }
 }
@@ -326,6 +543,11 @@ fun SearchResultsScreen(
   backEnabled: Boolean = true,
   effectsEnabled: Boolean = true,
 ) {
+  val controlMode = LocalControlMode.current
+  val initialFocusRequester = remember { FocusRequester() }
+  LaunchedEffect(controlMode) {
+    if (controlMode) initialFocusRequester.requestFocusWithinFrames(maxFrames = 8)
+  }
   BackHandler(enabled = backEnabled, onBack = onBack)
   val effectiveColumns = columns.coerceIn(3, 6)
   val imageLoadPolicy = rememberGridFeedImageLoadPolicy(gridState, effectiveColumns)
@@ -363,7 +585,15 @@ fun SearchResultsScreen(
   Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
     Column(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 18.dp)) {
       Row(verticalAlignment = Alignment.CenterVertically) {
-        IconButton(onClick = onBack) {
+        IconButton(
+          onClick = onBack,
+          modifier =
+            Modifier.focusRequester(initialFocusRequester)
+              .controlFocusOutline(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.primary,
+              ),
+        ) {
           Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
         }
         Text(
@@ -386,9 +616,14 @@ fun SearchResultsScreen(
       ) {
         SearchCategory.entries.forEach { category ->
           val selected = state.category == category
+          val categoryShape = RoundedCornerShape(10.dp)
           Column(
             modifier =
               Modifier.graphicsLayer { alpha = if (category.enabled) 1f else .38f }
+                .controlFocusOutline(
+                  shape = categoryShape,
+                  color = MaterialTheme.colorScheme.primary,
+                )
                 .clickable(enabled = category.enabled) { onCategory(category) }
                 .padding(horizontal = 4.dp, vertical = 6.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -413,9 +648,7 @@ fun SearchResultsScreen(
       }
       AnimatedVisibility(
         visible =
-          state.category == SearchCategory.COMPREHENSIVE ||
-            state.category == SearchCategory.VIDEO ||
-            state.category == SearchCategory.ARTICLE,
+          state.category == SearchCategory.VIDEO || state.category == SearchCategory.ARTICLE,
         enter = fadeIn(tween(160)),
         exit = fadeOut(tween(100)),
       ) {
@@ -623,17 +856,21 @@ private fun SearchUserCard(
   val context = androidx.compose.ui.platform.LocalContext.current
   val scope = rememberCoroutineScope()
   val loadPolicy = LocalFeedImageLoadPolicy.current
+  val colorfulCardsEnabled = LocalColorfulCardsEnabled.current
   val darkTheme = MaterialTheme.colorScheme.surface.luminance() < .5f
   val surface = MaterialTheme.colorScheme.surface
   var avatarBounds by remember(user.mid) { mutableStateOf(Rect.Zero) }
   var avatarLoaded by remember(user.face) { mutableStateOf(false) }
   var avatarColors by
-    remember(user.face, darkTheme) {
-      mutableStateOf(CommentAvatarPaletteCache.get(user.face).orEmpty())
+    remember(user.face, darkTheme, colorfulCardsEnabled) {
+      mutableStateOf(
+        if (colorfulCardsEnabled) CommentAvatarPaletteCache.get(user.face).orEmpty()
+        else emptyList()
+      )
     }
   val colors =
     remember(avatarColors, surface, darkTheme) {
-      if (avatarColors.isEmpty()) listOf(surface, surface)
+      if (!colorfulCardsEnabled || avatarColors.isEmpty()) listOf(surface, surface)
       else avatarColors.take(2).map { readableCommentCardColor(it, surface, darkTheme) }
     }
   val avatarModel =
@@ -644,9 +881,14 @@ private fun SearchUserCard(
     }
   Surface(
     modifier =
-      Modifier.fillMaxWidth().height(138.dp).clickable {
-        onClick(user.mid, user.face, user.name, avatarBounds)
-      },
+      Modifier.fillMaxWidth()
+        .height(138.dp)
+        .controlFocusOutline(
+          shape = VideoShapeTokens.Card,
+          color = MaterialTheme.colorScheme.primary,
+          width = 3.dp,
+        )
+        .clickable { onClick(user.mid, user.face, user.name, avatarBounds) },
     shape = VideoShapeTokens.Card,
     color = Color.Transparent,
     tonalElevation = 0.dp,
@@ -670,7 +912,7 @@ private fun SearchUserCard(
         contentScale = ContentScale.Crop,
         onSuccess = { result ->
           avatarLoaded = true
-          if (avatarColors.isEmpty()) {
+          if (colorfulCardsEnabled && avatarColors.isEmpty()) {
             val bitmap = (result.result.image as? BitmapImage)?.bitmap ?: return@AsyncImage
             scope.launch {
               val extracted =
@@ -730,7 +972,12 @@ private fun SearchUserCard(
 @Composable
 private fun SearchOrderChip(title: String, selected: Boolean, onClick: () -> Unit) {
   Surface(
-    modifier = Modifier.clickable(onClick = onClick),
+    modifier =
+      Modifier.controlFocusOutline(
+          shape = MaterialTheme.shapes.medium,
+          color = MaterialTheme.colorScheme.primary,
+        )
+        .clickable(onClick = onClick),
     shape = MaterialTheme.shapes.medium,
     color = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
     contentColor =

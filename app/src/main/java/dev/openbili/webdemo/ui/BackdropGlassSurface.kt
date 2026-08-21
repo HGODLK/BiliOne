@@ -27,9 +27,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 /**
- * A clipped, locally sampled glass surface. [backdropBounds] describes where the captured layer
- * begins in the app root. Popup windows can supply [sampleOriginInRoot] because their local
- * coordinates do not share the main composition root.
+ * 一块裁剪过、本地采样的玻璃表面。[backdropBounds] 描述捕获图层在应用根中的起始位置。
+ * 弹窗可以提供 [sampleOriginInRoot]，因为它们的本地坐标不与主组合根共享。
  */
 @Composable
 fun BackdropGlassSurface(

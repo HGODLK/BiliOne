@@ -1,52 +1,52 @@
 package dev.openbili.webdemo.profile
 
-import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ClipData
 import android.content.Context
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -58,20 +58,24 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -79,20 +83,25 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.rememberGraphicsLayer
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
-import dev.openbili.webdemo.api.BiliApi
 import dev.openbili.webdemo.api.ArticleItem
+import dev.openbili.webdemo.api.BiliBangumiApi
 import dev.openbili.webdemo.api.CommentItem
 import dev.openbili.webdemo.api.FollowingGroup
 import dev.openbili.webdemo.api.SpaceBangumiResponse
@@ -101,13 +110,17 @@ import dev.openbili.webdemo.api.SpaceContentKind
 import dev.openbili.webdemo.api.SpaceProfile
 import dev.openbili.webdemo.feed.CoverImage
 import dev.openbili.webdemo.feed.FeedCardContent
-import dev.openbili.webdemo.feed.FeedItem
 import dev.openbili.webdemo.feed.FeedImageLoadMode
+import dev.openbili.webdemo.feed.FeedItem
+import dev.openbili.webdemo.live.LiveSearchRoom
 import dev.openbili.webdemo.feed.LocalFeedImageLoadPolicy
 import dev.openbili.webdemo.feed.rememberGridFeedImageLoadPolicy
 import dev.openbili.webdemo.settings.AppSettings
 import dev.openbili.webdemo.ui.BackdropGlassSurface
+import dev.openbili.webdemo.ui.controlFocusOutline
 import dev.openbili.webdemo.ui.FollowButton
+import dev.openbili.webdemo.ui.isControlConfirmKey
+import dev.openbili.webdemo.ui.LocalControlMode
 import dev.openbili.webdemo.ui.NavigationCardBottomClearance
 import dev.openbili.webdemo.ui.OfficialVerificationIcon
 import dev.openbili.webdemo.ui.OfficialVerificationIconSize
@@ -115,13 +128,13 @@ import dev.openbili.webdemo.ui.PressableVideoCard
 import dev.openbili.webdemo.ui.PullRefreshContainer
 import dev.openbili.webdemo.ui.VideoCardGradient
 import dev.openbili.webdemo.ui.VideoCardReveal
-import dev.openbili.webdemo.video.CommentProfileAnchor
 import dev.openbili.webdemo.video.BiliRichText
-import kotlinx.coroutines.Dispatchers
+import dev.openbili.webdemo.video.CommentProfileAnchor
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -242,6 +255,8 @@ fun ProfileScreen(
   onBangumiClick: (SpaceContentCard, Rect) -> Unit,
   onVideoLongClick: (FeedItem) -> Unit,
   onArticleClick: (ArticleItem, Rect) -> Unit,
+  onLiveClick: (LiveSearchRoom, Rect) -> Unit = { _, _ -> },
+  onLiveBoundsChanged: (LiveSearchRoom, Rect) -> Unit = { _, _ -> },
   hiddenArticleItemId: String? = null,
   onArticleBoundsChanged: (ArticleItem, Rect) -> Unit = { _, _ -> },
   onLoadMore: () -> Unit,
@@ -277,6 +292,8 @@ fun ProfileScreen(
   privateMessageContent: @Composable () -> Unit,
   onLogin: () -> Unit,
   hiddenCoverItemId: String? = null,
+  hiddenLiveCoverItemId: String? = null,
+  videoReturnTransitionActive: Boolean = false,
   bangumiReturnRequestToken: Long = 0L,
   bangumiReturnCardId: String? = null,
   onVideoBoundsChanged: (FeedItem, Rect) -> Unit = { _, _ -> },
@@ -292,6 +309,29 @@ fun ProfileScreen(
 ) {
   BackHandler(enabled = backHandlingEnabled, onBack = onBack)
   var section by rememberSaveable(profile?.mid) { mutableStateOf(ProfileSection.POSTS) }
+  val controlMode = LocalControlMode.current
+  // 控制器焦点锚点：左侧栏中处于活动状态的分区条目。资料层在共享头像飞行动画
+  // 落地后才挂载，因此焦点请求被推迟到入场转场之后，避免在飞行途中从源页面
+  // 抢走焦点。
+  val sectionFocusRequester = remember { FocusRequester() }
+  val headerCapsuleFocusRequester = remember { FocusRequester() }
+  val headerFollowFocusRequester = remember { FocusRequester() }
+  val menuBackFocusRequester = remember { FocusRequester() }
+  val contentFocusRequester = remember { FocusRequester() }
+  val videoReturnFocusRegistry = rememberProfileVideoReturnFocusRegistry(profile?.mid)
+  ProfileVideoReturnFocusEffect(
+    registry = videoReturnFocusRegistry,
+    profilePageActive = backHandlingEnabled,
+    returnTransitionActive = videoReturnTransitionActive,
+    hiddenCoverItemId = hiddenCoverItemId,
+  )
+  LaunchedEffect(Unit) {
+    if (controlMode) {
+      delay(if (settings.reduceMotion) 140 else 420)
+      withFrameNanos {}
+      runCatching { sectionFocusRequester.requestFocus() }
+    }
+  }
   var contentSearchQuery by rememberSaveable(profile?.mid) { mutableStateOf("") }
   val postGridState = rememberLazyGridState()
   var previousPostSearchQuery by
@@ -305,6 +345,11 @@ fun ProfileScreen(
     rememberSaveable(profile?.mid) {
       mutableStateOf(ProfileHeaderInfoState.COLLAPSED)
     }
+  LaunchedEffect(controlMode) {
+    if (controlMode && headerInfoState == ProfileHeaderInfoState.HIDDEN) {
+      headerInfoState = ProfileHeaderInfoState.COLLAPSED
+    }
+  }
   val scope = rememberCoroutineScope()
   val currentHeaderInfoState by rememberUpdatedState(headerInfoState)
   val density = LocalDensity.current
@@ -338,8 +383,8 @@ fun ProfileScreen(
     }
   }
 
-  LaunchedEffect(showPrivateMessages) {
-    if (!showPrivateMessages && section == ProfileSection.PRIVATE_MESSAGES) {
+  LaunchedEffect(showPrivateMessages, controlMode) {
+    if ((!showPrivateMessages || controlMode) && section == ProfileSection.PRIVATE_MESSAGES) {
       section = ProfileSection.POSTS
     }
   }
@@ -369,35 +414,31 @@ fun ProfileScreen(
         bangumiPagingState(type).copy(loading = true, error = null),
       )
     }
-    val results =
-      coroutineScope {
-        requests
-          .map { request ->
-            async {
-              request to
-                try {
-                  Result.success(
-                    withContext(Dispatchers.IO) {
-                      BiliApi.getSpaceBangumi(
-                        mid = profile?.mid ?: 0L,
-                        type = request.first,
-                        page = request.second,
-                      )
-                    }
-                  )
-                } catch (cancelled: kotlinx.coroutines.CancellationException) {
-                  throw cancelled
-                } catch (error: Exception) {
-                  Result.failure<SpaceBangumiResponse>(error)
-                }
-            }
+    val results = coroutineScope {
+      requests
+        .map { request ->
+          async {
+            request to
+              try {
+                Result.success(
+                  withContext(Dispatchers.IO) {
+                    BiliBangumiApi.getSpaceBangumi(
+                      mid = profile?.mid ?: 0L,
+                      type = request.first,
+                      page = request.second,
+                    )
+                  }
+                )
+              } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+              } catch (error: Exception) {
+                Result.failure<SpaceBangumiResponse>(error)
+              }
           }
-          .awaitAll()
-      }
-    if (
-      expectedToken != bangumiRequestToken ||
-        section != ProfileSection.BANGUMI
-    ) {
+        }
+        .awaitAll()
+    }
+    if (expectedToken != bangumiRequestToken || section != ProfileSection.BANGUMI) {
       return
     }
     val addedCards = mutableListOf<SpaceContentCard>()
@@ -419,15 +460,15 @@ fun ProfileScreen(
         .onFailure { error ->
           updateBangumiPagingState(
             type,
-            bangumiPagingState(type).copy(
-              loading = false,
-              error = error.message ?: "加载失败",
-            ),
+            bangumiPagingState(type)
+              .copy(
+                loading = false,
+                error = error.message ?: "加载失败",
+              ),
           )
         }
     }
-    extraCards =
-      ((if (refresh) emptyList() else extraCards) + addedCards).distinctBy { it.id }
+    extraCards = ((if (refresh) emptyList() else extraCards) + addedCards).distinctBy { it.id }
   }
 
   fun loadMoreBangumi(filter: ProfileBangumiFilter) {
@@ -477,10 +518,14 @@ fun ProfileScreen(
     contentColor = MaterialTheme.colorScheme.onBackground,
   ) {
     Row(Modifier.fillMaxSize().statusBarsPadding()) {
-        ProfileMenu(
-          selected = section,
-          showPrivateMessages = showPrivateMessages,
-          searchQuery = contentSearchQuery,
+      ProfileMenu(
+        selected = section,
+        showPrivateMessages = showPrivateMessages,
+        controlMode = controlMode,
+        sectionFocusRequester = sectionFocusRequester,
+        backFocusRequester = menuBackFocusRequester,
+        backUpFocusRequester = headerCapsuleFocusRequester,
+        searchQuery = contentSearchQuery,
         onBack = onBack,
         onSearchQueryChange = { contentSearchQuery = it },
         onSelected = {
@@ -512,9 +557,21 @@ fun ProfileScreen(
             placeholderFace = placeholderFace,
             placeholderName = placeholderName,
             infoState = headerInfoState,
+            capsuleFocusRequester = headerCapsuleFocusRequester,
+            followFocusRequester = headerFollowFocusRequester,
+            backFocusRequester = menuBackFocusRequester,
+            contentFocusRequester = contentFocusRequester,
+            menuSectionFocusRequester = sectionFocusRequester,
+            controlMode = controlMode,
             onInfoEvent = { event ->
               if (!transitionRunning) {
-                headerInfoState = reduceProfileHeaderInfoState(headerInfoState, event)
+                headerInfoState =
+                  if (controlMode && event == ProfileHeaderInfoEvent.BANNER_TAP) {
+                    // 控制器从不隐藏信息胶囊；横幅点击保持其可见。
+                    ProfileHeaderInfoState.COLLAPSED
+                  } else {
+                    reduceProfileHeaderInfoState(headerInfoState, event)
+                  }
               }
             },
             interactionLocked = transitionRunning,
@@ -547,13 +604,13 @@ fun ProfileScreen(
             ProfileSection.POSTS ->
               ProfileVideoGrid(
                 videos.filter { video ->
-                    matchesProfileContentSearch(
-                      contentSearchQuery,
-                      video.title,
-                      video.description,
-                      video.uploader,
-                    )
-                  },
+                  matchesProfileContentSearch(
+                    contentSearchQuery,
+                    video.title,
+                    video.description,
+                    video.uploader,
+                  )
+                },
                 loading,
                 hasMore,
                 error,
@@ -563,9 +620,13 @@ fun ProfileScreen(
                 onRetry,
                 hiddenCoverItemId,
                 onVideoBoundsChanged,
-                emptyMessage =
-                  if (contentSearchQuery.isBlank()) "暂无公开投稿" else "没有找到相关投稿",
+                emptyMessage = if (contentSearchQuery.isBlank()) "暂无公开投稿" else "没有找到相关投稿",
                 state = postGridState,
+                focusRequester = contentFocusRequester,
+                videoReturnFocusRegistry = videoReturnFocusRegistry,
+                onControlExitUp = {
+                  runCatching { headerCapsuleFocusRequester.requestFocus() }
+                },
                 onScrollStarted = {
                   if (!transitionRunning) {
                     headerInfoState =
@@ -589,8 +650,11 @@ fun ProfileScreen(
                 settings = settings,
                 onVideoClick = onVideoClick,
                 onVideoLongClick = onVideoLongClick,
+                onLiveClick = onLiveClick,
                 hiddenCoverItemId = hiddenCoverItemId,
+                hiddenLiveCoverItemId = hiddenLiveCoverItemId,
                 onVideoBoundsChanged = onVideoBoundsChanged,
+                onLiveBoundsChanged = onLiveBoundsChanged,
                 onArticleClick = onArticleClick,
                 hiddenArticleItemId = hiddenArticleItemId,
                 onArticleBoundsChanged = onArticleBoundsChanged,
@@ -604,6 +668,11 @@ fun ProfileScreen(
                 onDynamicDelete = onDynamicDelete,
                 onDynamicPin = onDynamicPin,
                 onLoadMore = onLoadMoreDynamics,
+                initialFocusRequester = contentFocusRequester,
+                videoReturnFocusRegistry = videoReturnFocusRegistry,
+                onControlExitUp = {
+                  runCatching { headerCapsuleFocusRequester.requestFocus() }
+                },
                 onScrollStarted = {
                   if (!transitionRunning) {
                     headerInfoState =
@@ -635,6 +704,11 @@ fun ProfileScreen(
                 bangumiReturnRequestToken = bangumiReturnRequestToken,
                 bangumiReturnCardId = bangumiReturnCardId,
                 onVideoBoundsChanged = onVideoBoundsChanged,
+                initialFocusRequester = contentFocusRequester,
+                videoReturnFocusRegistry = videoReturnFocusRegistry,
+                onControlExitUp = {
+                  runCatching { headerCapsuleFocusRequester.requestFocus() }
+                },
                 onScrollStarted = {
                   if (!transitionRunning) {
                     headerInfoState =
@@ -666,6 +740,11 @@ fun ProfileScreen(
                 onVideoLongClick = onVideoLongClick,
                 hiddenCoverItemId = hiddenCoverItemId,
                 onVideoBoundsChanged = onVideoBoundsChanged,
+                initialFocusRequester = contentFocusRequester,
+                videoReturnFocusRegistry = videoReturnFocusRegistry,
+                onControlExitUp = {
+                  runCatching { headerCapsuleFocusRequester.requestFocus() }
+                },
                 onScrollStarted = {
                   if (!transitionRunning) {
                     headerInfoState =
@@ -688,6 +767,10 @@ fun ProfileScreen(
 private fun ProfileMenu(
   selected: ProfileSection,
   showPrivateMessages: Boolean,
+  controlMode: Boolean,
+  sectionFocusRequester: FocusRequester,
+  backFocusRequester: FocusRequester,
+  backUpFocusRequester: FocusRequester?,
   searchQuery: String,
   onBack: () -> Unit,
   onSearchQueryChange: (String) -> Unit,
@@ -700,40 +783,141 @@ private fun ProfileMenu(
       .padding(16.dp),
     verticalArrangement = Arrangement.spacedBy(8.dp),
   ) {
-    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
+    IconButton(
+      onClick = onBack,
+      modifier =
+        Modifier.focusRequester(backFocusRequester)
+          .controlFocusOutline(
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.primary,
+          )
+          .onPreviewKeyEvent { event ->
+            if (!controlMode) return@onPreviewKeyEvent false
+            val keyCode = event.nativeKeyEvent.keyCode
+            if (
+              keyCode == android.view.KeyEvent.KEYCODE_DPAD_UP &&
+                event.type == KeyEventType.KeyDown &&
+                event.nativeKeyEvent.repeatCount == 0
+            ) {
+              backUpFocusRequester?.let { runCatching { it.requestFocus() } }
+              true
+            } else {
+              false
+            }
+          },
+    ) {
+      Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回")
+    }
     if (selected != ProfileSection.PRIVATE_MESSAGES) {
-      OutlinedTextField(
-        value = searchQuery,
-        onValueChange = onSearchQueryChange,
-        modifier = Modifier.fillMaxWidth(),
-        placeholder = { Text("搜索${selected.label}") },
-        leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
-        singleLine = true,
-        shape = RoundedCornerShape(14.dp),
-      )
+      var searchEditing by remember(selected) { mutableStateOf(false) }
+      val searchEntryFocusRequester = remember { FocusRequester() }
+      val searchEditorFocusRequester = remember { FocusRequester() }
+      val focusManager = LocalFocusManager.current
+      LaunchedEffect(searchEditing) {
+        if (searchEditing) {
+          withFrameNanos {}
+          runCatching { searchEditorFocusRequester.requestFocus() }
+        }
+      }
+      BackHandler(enabled = searchEditing) {
+        searchEditing = false
+        focusManager.clearFocus(force = true)
+        runCatching { searchEntryFocusRequester.requestFocus() }
+      }
+      Box(
+        Modifier.fillMaxWidth()
+          .focusRequester(searchEntryFocusRequester)
+          .focusProperties {
+            canFocus = controlMode && !searchEditing
+            down = sectionFocusRequester
+          }
+          .controlFocusOutline(
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.primary,
+            width = 3.dp,
+            enabled = controlMode && !searchEditing,
+          )
+          .onPreviewKeyEvent { event ->
+            if (!controlMode || searchEditing) return@onPreviewKeyEvent false
+            val keyCode = event.nativeKeyEvent.keyCode
+            when {
+              isControlConfirmKey(keyCode) -> {
+                if (event.type == KeyEventType.KeyDown && event.nativeKeyEvent.repeatCount == 0) {
+                  searchEditing = true
+                }
+                true
+              }
+              keyCode == android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
+                if (event.type == KeyEventType.KeyDown && event.nativeKeyEvent.repeatCount == 0) {
+                  runCatching { sectionFocusRequester.requestFocus() }
+                }
+                true
+              }
+              keyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                if (event.type == KeyEventType.KeyDown && event.nativeKeyEvent.repeatCount == 0) {
+                  backUpFocusRequester?.let { runCatching { it.requestFocus() } }
+                }
+                true
+              }
+              else -> false
+            }
+          }
+      ) {
+        OutlinedTextField(
+          value = searchQuery,
+          onValueChange = onSearchQueryChange,
+          modifier = Modifier.fillMaxWidth().focusRequester(searchEditorFocusRequester),
+          placeholder = { Text("搜索${selected.label}") },
+          leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+          singleLine = true,
+          shape = RoundedCornerShape(14.dp),
+          readOnly = controlMode && !searchEditing,
+        )
+      }
     } else {
       Spacer(Modifier.height(56.dp))
     }
     ProfileSection.entries
-      .filter { it != ProfileSection.PRIVATE_MESSAGES || showPrivateMessages }
+      .filter {
+        it != ProfileSection.PRIVATE_MESSAGES || (showPrivateMessages && !controlMode)
+      }
       .forEach { item ->
-      val active = item == selected
-      Text(
-        item.label,
-        modifier =
-          Modifier.fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(
-              if (active) MaterialTheme.colorScheme.primaryContainer
-              else MaterialTheme.colorScheme.surface
-            )
-            .clickable { onSelected(item) }
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        color =
-          if (active) MaterialTheme.colorScheme.onPrimaryContainer
-          else MaterialTheme.colorScheme.onSurface,
-      )
-    }
+        val active = item == selected
+        Text(
+          item.label,
+          modifier =
+            Modifier.fillMaxWidth()
+              .then(if (active) Modifier.focusRequester(sectionFocusRequester) else Modifier)
+              .clip(RoundedCornerShape(14.dp))
+              .controlFocusOutline(
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.primary,
+              )
+              .onPreviewKeyEvent { event ->
+                if (!controlMode) return@onPreviewKeyEvent false
+                val keyCode = event.nativeKeyEvent.keyCode
+                if (
+                  keyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT &&
+                    event.type == KeyEventType.KeyDown &&
+                    event.nativeKeyEvent.repeatCount == 0
+                ) {
+                  backUpFocusRequester?.let { runCatching { it.requestFocus() } }
+                  true
+                } else {
+                  false
+                }
+              }
+              .background(
+                if (active) MaterialTheme.colorScheme.primaryContainer
+                else MaterialTheme.colorScheme.surface
+              )
+              .clickable { onSelected(item) }
+              .padding(horizontal = 16.dp, vertical = 14.dp),
+          color =
+            if (active) MaterialTheme.colorScheme.onPrimaryContainer
+            else MaterialTheme.colorScheme.onSurface,
+        )
+      }
   }
 }
 
@@ -757,6 +941,12 @@ private fun ProfileHeader(
   placeholderFace: String?,
   placeholderName: String?,
   infoState: ProfileHeaderInfoState,
+  capsuleFocusRequester: FocusRequester,
+  followFocusRequester: FocusRequester,
+  backFocusRequester: FocusRequester,
+  contentFocusRequester: FocusRequester,
+  menuSectionFocusRequester: FocusRequester,
+  controlMode: Boolean,
   onInfoEvent: (ProfileHeaderInfoEvent) -> Unit,
   interactionLocked: Boolean,
 ) {
@@ -808,6 +998,7 @@ private fun ProfileHeader(
     Box {
       Box(
         Modifier.fillMaxSize()
+          .focusProperties { canFocus = false }
           .clickable(
             enabled = !interactionLocked && profile != null,
             interactionSource = remember { MutableInteractionSource() },
@@ -835,8 +1026,11 @@ private fun ProfileHeader(
             .background(
               Brush.verticalGradient(
                 if (darkTheme)
-                  listOf(Color.Black.copy(alpha = .22f), Color.Black.copy(alpha = .58f))
-                else listOf(Color.Transparent, Color.Black.copy(alpha = .44f))
+                  listOf(Color.Black.copy(alpha = .30f), Color.Black.copy(alpha = .64f))
+                else
+                  // 浅色主题下把底部遮罩加深：横幅可能是浅色/空白图，
+                  // 信息胶囊与关注按钮的白色文字必须有深色衬底才可读。
+                  listOf(Color.Transparent, Color.Black.copy(alpha = .30f), Color.Black.copy(alpha = .64f))
               )
             )
         )
@@ -844,6 +1038,7 @@ private fun ProfileHeader(
       Box(Modifier.align(Alignment.BottomStart).padding(start = 22.dp, bottom = 22.dp)) {
         Box(
           Modifier.size(92.dp)
+            .focusProperties { canFocus = false }
             .onGloballyPositioned { onAvatarBoundsChanged(it.boundsInRoot()) }
             .graphicsLayer { alpha = if (avatarVisible) chromeAlpha else 0f }
             .clip(CircleShape)
@@ -929,6 +1124,37 @@ private fun ProfileHeader(
             modifier =
               Modifier.width(capsuleWidth)
                 .height(capsuleHeight)
+                .focusRequester(capsuleFocusRequester)
+                .onFocusChanged { if (!it.isFocused) onInfoEvent(ProfileHeaderInfoEvent.OTHER_OPERATION) }
+                .onPreviewKeyEvent { event ->
+                  if (!controlMode) return@onPreviewKeyEvent false
+                  val keyCode = event.nativeKeyEvent.keyCode
+                  if (event.type != KeyEventType.KeyDown || event.nativeKeyEvent.repeatCount > 0) {
+                    return@onPreviewKeyEvent false
+                  }
+                  when (keyCode) {
+                    android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
+                      runCatching { contentFocusRequester.requestFocus() }
+                      true
+                    }
+                    android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
+                      runCatching { menuSectionFocusRequester.requestFocus() }
+                      true
+                    }
+                    android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                      if (!infoRequested) {
+                        runCatching { followFocusRequester.requestFocus() }
+                      }
+                      true
+                    }
+                    else -> false
+                  }
+                }
+                .controlFocusOutline(
+                  shape = RoundedCornerShape(18.dp),
+                  color = MaterialTheme.colorScheme.primary,
+                  width = 3.dp,
+                )
                 .combinedClickable(
                   enabled = !interactionLocked && profile != null,
                   interactionSource = remember { MutableInteractionSource() },
@@ -946,6 +1172,9 @@ private fun ProfileHeader(
             shape = RoundedCornerShape(18.dp),
             blurRadius = 10.dp,
             containerColor = Color.Black.copy(alpha = .34f),
+            // 玻璃效果关闭或采样失败时的回退：深色衬底保证白色信息文字始终可读，
+            // 而不是退回不透明白色 surface 造成白字白底。
+            fallbackColor = Color(0xFF23282D).copy(alpha = .92f),
             border = BorderStroke(.75.dp, Color.White.copy(alpha = .22f)),
           ) {
             Column(
@@ -1016,7 +1245,10 @@ private fun ProfileHeader(
                     emotes = emptyMap(),
                     maxLines = if (infoRequested) 3 else 1,
                     modifier = Modifier.padding(top = 4.dp),
-                    style = MaterialTheme.typography.bodyMedium.copy(color = Color.White.copy(alpha = .9f)),
+                    style =
+                      MaterialTheme.typography.bodyMedium.copy(
+                        color = Color.White.copy(alpha = .9f)
+                      ),
                   )
               }
             }
@@ -1037,10 +1269,36 @@ private fun ProfileHeader(
           BackdropGlassSurface(
             backdropLayer = backdropLayer,
             backdropBounds = backdropBounds,
-            modifier = Modifier.onSizeChanged { followButtonWidthPx = it.width },
+            modifier =
+              Modifier.onSizeChanged { followButtonWidthPx = it.width }
+                .onPreviewKeyEvent { event ->
+                  if (!controlMode) return@onPreviewKeyEvent false
+                  val keyCode = event.nativeKeyEvent.keyCode
+                  if (event.type != KeyEventType.KeyDown || event.nativeKeyEvent.repeatCount > 0) {
+                    return@onPreviewKeyEvent false
+                  }
+                  when (keyCode) {
+                    android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
+                      runCatching { capsuleFocusRequester.requestFocus() }
+                      true
+                    }
+                    android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
+                      runCatching { backFocusRequester.requestFocus() }
+                      true
+                    }
+                    else -> false
+                  }
+                }
+                .controlFocusOutline(
+                  shape = RoundedCornerShape(22.dp),
+                  color = MaterialTheme.colorScheme.primary,
+                  width = 3.dp,
+                ),
             shape = RoundedCornerShape(22.dp),
             blurRadius = 12.dp,
-            containerColor = Color.White.copy(alpha = .16f),
+            // 与信息胶囊一致使用深色玻璃衬底：浅色横幅上白色按钮文字也能保持可读。
+            containerColor = Color.Black.copy(alpha = .30f),
+            fallbackColor = Color(0xFF23282D).copy(alpha = .84f),
             border = BorderStroke(.75.dp, Color.White.copy(alpha = .3f)),
           ) {
             FollowButton(
@@ -1054,6 +1312,7 @@ private fun ProfileHeader(
               onUnfollow = onUnfollow,
               onLogin = onLogin,
               transparentContainer = true,
+              focusRequester = followFocusRequester.takeIf { !infoRequested },
             )
           }
         }
@@ -1146,6 +1405,9 @@ private fun ProfileVideoGrid(
   emptyMessage: String,
   state: LazyGridState,
   onScrollStarted: () -> Unit,
+  focusRequester: FocusRequester? = null,
+  videoReturnFocusRegistry: ProfileVideoReturnFocusRegistry,
+  onControlExitUp: (() -> Unit)? = null,
 ) {
   if (videos.isEmpty()) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -1169,44 +1431,57 @@ private fun ProfileVideoGrid(
     }
   }
   LaunchedEffect(nearEnd, hasMore, loading, imageLoadPolicy.mode) {
-    if (
-      nearEnd && hasMore && !loading && imageLoadPolicy.mode != FeedImageLoadMode.PAUSED
-    ) onLoadMore()
+    if (nearEnd && hasMore && !loading && imageLoadPolicy.mode != FeedImageLoadMode.PAUSED)
+      onLoadMore()
   }
   LaunchedEffect(state.isScrollInProgress) {
     if (state.isScrollInProgress) onScrollStarted()
   }
   CompositionLocalProvider(LocalFeedImageLoadPolicy provides imageLoadPolicy) {
     LazyVerticalGrid(
-    columns = GridCells.Fixed(3),
-    state = state,
-    contentPadding = PaddingValues(bottom = NavigationCardBottomClearance),
-    horizontalArrangement = Arrangement.spacedBy(12.dp),
-    verticalArrangement = Arrangement.spacedBy(12.dp),
+      columns = GridCells.Fixed(3),
+      state = state,
+      contentPadding = PaddingValues(bottom = NavigationCardBottomClearance),
+      horizontalArrangement = Arrangement.spacedBy(12.dp),
+      verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-    itemsIndexed(videos, key = { _, video -> video.id }) { index, video ->
-      VideoCardReveal(index = index, batchKey = videos.firstOrNull()?.id, itemKey = video.id) {
-        ProfileVideoCard(
-          video = video,
-          onVideoClick = onVideoClick,
-          onVideoLongClick = onVideoLongClick,
-          coverVisible = video.id != hiddenCoverItemId,
-          onBoundsChanged = { onVideoBoundsChanged(video, it) },
-        )
-      }
-    }
-    if (error != null) {
-      item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
-        Row(
-          modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
-          horizontalArrangement = Arrangement.Center,
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Text(error, color = MaterialTheme.colorScheme.onSurfaceVariant)
-          TextButton(onClick = onRetry) { Text("重试") }
+      itemsIndexed(videos, key = { _, video -> video.id }) { index, video ->
+        VideoCardReveal(index = index, batchKey = videos.firstOrNull()?.id, itemKey = video.id) {
+          val cardFocusRequester =
+            rememberProfileVideoCardFocusRequester(
+              itemId = video.id,
+              registry = videoReturnFocusRegistry,
+              preferredRequester = focusRequester.takeIf { index == 0 },
+            )
+          ProfileVideoCard(
+            video = video,
+            onVideoClick = { item, bounds ->
+              videoReturnFocusRegistry.rememberReturningItem(item.id)
+              onVideoClick(item, bounds)
+            },
+            onVideoLongClick = onVideoLongClick,
+            coverVisible = video.id != hiddenCoverItemId,
+            onBoundsChanged = { onVideoBoundsChanged(video, it) },
+            focusRequester = cardFocusRequester,
+            onControlKeyEvent =
+              if (index < 3 && onControlExitUp != null) {
+                { event -> handleProfileControlExitUp(event, onControlExitUp) }
+              } else null,
+          )
         }
       }
-    }
+      if (error != null) {
+        item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+          Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Text(error, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            TextButton(onClick = onRetry) { Text("重试") }
+          }
+        }
+      }
     }
   }
 }
@@ -1218,11 +1493,15 @@ private fun ProfileVideoCard(
   onVideoLongClick: (FeedItem) -> Unit,
   coverVisible: Boolean,
   onBoundsChanged: (Rect) -> Unit,
+  focusRequester: FocusRequester? = null,
+  onControlKeyEvent: ((androidx.compose.ui.input.key.KeyEvent) -> Boolean)? = null,
 ) {
   var coverBounds by remember(video.id) { mutableStateOf(Rect.Zero) }
   PressableVideoCard(
     onClick = { onVideoClick(video, coverBounds) },
     onLongClick = { onVideoLongClick(video) },
+    focusRequester = focusRequester,
+    onControlKeyEvent = onControlKeyEvent,
   ) {
     FeedCardContent(
       item = video,
@@ -1254,10 +1533,12 @@ private fun ProfileBangumiGrid(
   bangumiReturnRequestToken: Long,
   bangumiReturnCardId: String?,
   onVideoBoundsChanged: (FeedItem, Rect) -> Unit,
+  initialFocusRequester: FocusRequester? = null,
+  videoReturnFocusRegistry: ProfileVideoReturnFocusRegistry,
+  onControlExitUp: (() -> Unit)? = null,
   onScrollStarted: () -> Unit,
 ) {
-  var selectedFilter by
-    rememberSaveable(profile?.mid) { mutableStateOf(ProfileBangumiFilter.ALL) }
+  var selectedFilter by rememberSaveable(profile?.mid) { mutableStateOf(ProfileBangumiFilter.ALL) }
   val filteredCards =
     remember(cards, selectedFilter, searchQuery) {
       filterProfileBangumi(cards, selectedFilter).filter { card ->
@@ -1284,14 +1565,13 @@ private fun ProfileBangumiGrid(
     val targetIndex = filteredCards.indexOfFirst { it.id == cardId }
     if (targetIndex >= 0) state.scrollToItem(targetIndex + 1)
   }
-  val nearEnd by
-    remember {
-      derivedStateOf {
-        val lastVisible = state.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-        val totalItems = state.layoutInfo.totalItemsCount
-        lastVisible >= totalItems - 6 && totalItems > 0
-      }
+  val nearEnd by remember {
+    derivedStateOf {
+      val lastVisible = state.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+      val totalItems = state.layoutInfo.totalItemsCount
+      lastVisible >= totalItems - 6 && totalItems > 0
     }
+  }
   LaunchedEffect(searchQuery, selectedFilter) { state.scrollToItem(0) }
   LaunchedEffect(
     nearEnd,
@@ -1325,7 +1605,12 @@ private fun ProfileBangumiGrid(
       verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
       item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
-        BangumiFilterRow(selected = selectedFilter, onSelected = { selectedFilter = it })
+        BangumiFilterRow(
+          selected = selectedFilter,
+          onSelected = { selectedFilter = it },
+          initialFocusRequester = initialFocusRequester,
+          onControlExitUp = onControlExitUp,
+        )
       }
       when {
         initialLoading ->
@@ -1364,15 +1649,24 @@ private fun ProfileBangumiGrid(
         else ->
           itemsIndexed(filteredCards, key = { _, card -> card.id }) { index, card ->
             val video = card.toBangumiFeedItem(profile)
+            val cardFocusRequester =
+              rememberProfileVideoCardFocusRequester(
+                itemId = video.id,
+                registry = videoReturnFocusRegistry,
+              )
             BangumiPosterCard(
               card = card,
               video = video,
               index = index,
               batchKey = cards.firstOrNull()?.id,
               hiddenCoverItemId = hiddenCoverItemId,
-              onClick = { bounds -> onBangumiClick(card, bounds) },
+              onClick = { bounds ->
+                videoReturnFocusRegistry.rememberReturningItem(video.id)
+                onBangumiClick(card, bounds)
+              },
               onLongClick = { onVideoLongClick(video) },
               onBoundsChanged = { onVideoBoundsChanged(video, it) },
+              focusRequester = cardFocusRequester,
             )
           }
       }
@@ -1417,6 +1711,7 @@ internal fun BangumiPosterCard(
   onClick: (Rect) -> Unit,
   onLongClick: () -> Unit,
   onBoundsChanged: (Rect) -> Unit,
+  focusRequester: FocusRequester? = null,
 ) {
   var coverBounds by remember(card.id) { mutableStateOf(Rect.Zero) }
   VideoCardReveal(index = index, batchKey = batchKey, itemKey = card.id) {
@@ -1425,6 +1720,7 @@ internal fun BangumiPosterCard(
       onClick = { onClick(coverBounds) },
       onLongClick = onLongClick,
       shape = RoundedCornerShape(18.dp),
+      focusRequester = focusRequester,
     ) {
       VideoCardGradient(coverUrl = card.coverUrl, loadKey = card.id) {
         Column(Modifier.padding(8.dp)) {
@@ -1471,6 +1767,8 @@ internal fun BangumiPosterCard(
 private fun BangumiFilterRow(
   selected: ProfileBangumiFilter,
   onSelected: (ProfileBangumiFilter) -> Unit,
+  initialFocusRequester: FocusRequester? = null,
+  onControlExitUp: (() -> Unit)? = null,
 ) {
   Row(
     Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp),
@@ -1482,9 +1780,36 @@ private fun BangumiFilterRow(
         selected = selected == filter,
         onClick = { onSelected(filter) },
         label = { Text(filter.label, style = MaterialTheme.typography.labelMedium) },
+        modifier =
+          Modifier.then(
+              if (selected == filter && initialFocusRequester != null) {
+                Modifier.focusRequester(initialFocusRequester)
+              } else Modifier
+            )
+            .onPreviewKeyEvent { event ->
+              if (selected == filter && onControlExitUp != null) {
+                handleProfileControlExitUp(event, onControlExitUp)
+              } else {
+                false
+              }
+            }
+            .controlFocusOutline(
+              shape = RoundedCornerShape(12.dp),
+              color = MaterialTheme.colorScheme.primary,
+            ),
       )
     }
   }
+}
+
+/** 内容区首行向上时，把控制器焦点交还给资料信息胶囊。 */
+internal fun handleProfileControlExitUp(
+  event: androidx.compose.ui.input.key.KeyEvent,
+  onExitUp: () -> Unit,
+): Boolean {
+  if (event.nativeKeyEvent.keyCode != android.view.KeyEvent.KEYCODE_DPAD_UP) return false
+  if (event.type == KeyEventType.KeyDown && event.nativeKeyEvent.repeatCount == 0) onExitUp()
+  return true
 }
 
 private fun SpaceContentCard.toBangumiFeedItem(profile: SpaceProfile?) =
@@ -1501,7 +1826,9 @@ private fun SpaceContentCard.toBangumiFeedItem(profile: SpaceProfile?) =
     description = subtitle,
   )
 
-/** The profile API has no per-section search endpoint, so filter the retained section data in place. */
+/**
+ * 资料 API 没有按分区的搜索端点，因此就地对保留的分区数据进行过滤。
+ */
 internal fun matchesProfileContentSearch(query: String, vararg values: String?): Boolean {
   val keyword = query.trim()
   return keyword.isBlank() || values.any { it?.contains(keyword, ignoreCase = true) == true }

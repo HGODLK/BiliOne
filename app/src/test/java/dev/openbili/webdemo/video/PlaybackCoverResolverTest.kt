@@ -26,28 +26,29 @@ class PlaybackCoverResolverTest {
   @Test
   fun currentCollectionEpisodeIsMatchedByCidBeforeBvid() {
     val info =
-      videoInfo(videoCover = "video-cover", collectionCover = "same-bvid-cover").copy(
-        collection =
-          VideoCollection(
-            id = 1L,
-            title = "合集",
-            episodes =
-              listOf(
-                episode(
-                  bvid = "BV-current",
-                  cid = 101L,
-                  title = "上一集",
-                  coverUrl = "same-bvid-cover",
+      videoInfo(videoCover = "video-cover", collectionCover = "same-bvid-cover")
+        .copy(
+          collection =
+            VideoCollection(
+              id = 1L,
+              title = "合集",
+              episodes =
+                listOf(
+                  episode(
+                    bvid = "BV-current",
+                    cid = 101L,
+                    title = "上一集",
+                    coverUrl = "same-bvid-cover",
+                  ),
+                  episode(
+                    bvid = "BV-next",
+                    cid = 202L,
+                    title = "当前集",
+                    coverUrl = "current-cid-cover",
+                  ),
                 ),
-                episode(
-                  bvid = "BV-next",
-                  cid = 202L,
-                  title = "当前集",
-                  coverUrl = "current-cid-cover",
-                ),
-              ),
-          )
-      )
+            )
+        )
 
     assertEquals(
       "current-cid-cover",

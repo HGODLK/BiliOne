@@ -23,6 +23,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import dev.openbili.webdemo.api.FollowingGroup
@@ -41,6 +43,7 @@ fun FollowButton(
   modifier: Modifier = Modifier,
   compact: Boolean = false,
   transparentContainer: Boolean = false,
+  focusRequester: FocusRequester? = null,
 ) {
   var expanded by remember { mutableStateOf(false) }
   Box(modifier) {
@@ -54,7 +57,14 @@ fun FollowButton(
         }
       },
       enabled = !busy,
-      modifier = Modifier.heightIn(min = if (compact) 30.dp else 36.dp).animateContentSize(),
+      modifier =
+        Modifier.heightIn(min = if (compact) 30.dp else 36.dp)
+          .then(
+            if (focusRequester != null) {
+              Modifier.focusRequester(focusRequester!!)
+            } else Modifier
+          )
+          .animateContentSize(),
       colors =
         if (transparentContainer)
           androidx.compose.material3.ButtonDefaults.filledTonalButtonColors(

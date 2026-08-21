@@ -29,8 +29,7 @@ class ProfileDynamicRestoreTest {
   fun `video profile overlay hides but does not replace retained profile parents`() {
     val parent = ProfileStackEntry(1L, AppRootProfileState())
     val child = ProfileStackEntry(2L, AppRootProfileState())
-    val videoCommentProfile =
-      ProfileStackEntry(3L, AppRootProfileState(), returnsToVideo = true)
+    val videoCommentProfile = ProfileStackEntry(3L, AppRootProfileState(), returnsToVideo = true)
     val grandchild = ProfileStackEntry(4L, AppRootProfileState())
     val retainedStack = listOf(parent, child, videoCommentProfile, grandchild)
 
@@ -40,8 +39,7 @@ class ProfileDynamicRestoreTest {
 
   @Test
   fun `article profile overlay is rendered as a standalone child`() {
-    val articleProfile =
-      ProfileStackEntry(1L, AppRootProfileState(), returnsToArticle = true)
+    val articleProfile = ProfileStackEntry(1L, AppRootProfileState(), returnsToArticle = true)
 
     assertEquals(listOf(articleProfile), visibleProfileStack(listOf(articleProfile)))
     assertFalse(rootProfileEntryVisible(null, listOf(articleProfile)))
@@ -102,11 +100,12 @@ class ProfileDynamicRestoreTest {
     val parent = ProfileStackEntry(10L, AppRootProfileState())
 
     val retained =
-      listOf(parent).retainReturnTransitionsFor(
-        entryId = parent.entryId,
-        commentTransition = null,
-        avatarTransition = parentReturn,
-      )
+      listOf(parent)
+        .retainReturnTransitionsFor(
+          entryId = parent.entryId,
+          commentTransition = null,
+          avatarTransition = parentReturn,
+        )
 
     assertSame(parentReturn, retained.single().avatarTransition)
   }

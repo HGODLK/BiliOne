@@ -204,7 +204,7 @@ private val AppTypography =
         fontWeight = FontWeight.Medium,
       ),
     labelSmall = BaseTypography.labelSmall.copy(fontSize = 11.sp, lineHeight = 16.sp),
-    // Keep every Material 3 text role on the bundled family, including roles not customized above.
+    // 让每个 Material 3 文本角色都留在随附字体族上，包括上面未定制的角色。
     displayLarge = BaseTypography.displayLarge,
     displayMedium = BaseTypography.displayMedium,
     displaySmall = BaseTypography.displaySmall,

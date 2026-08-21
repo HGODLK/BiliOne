@@ -6,11 +6,11 @@ internal const val DANMAKU_SEGMENT_DURATION_MS = 6 * 60 * 1_000L
 private const val DANMAKU_BLOCK_GROUP_SIZE = 5
 
 /**
- * Applies the five point-on-demand blocking levels independently inside every server segment.
+ * 在每个服务端分段内独立应用五个按需屏蔽等级。
  *
- * Local danmaku is never filtered. Remote danmaku is ordered stably inside each six-minute segment
- * and every five consecutive items retain 5/4/3/2/1 items for levels 1..5. This keeps selection
- * deterministic across active-window changes without depending on server quality metadata.
+ * 本地弹幕永不过滤。远端弹幕在每个六分钟分段内稳定排序，每五条连续条目按等级
+ * 1..5 保留 5/4/3/2/1 条：这让选择在活动窗口变化之间保持确定，不依赖服务端
+ * 质量元数据。
  */
 internal fun filterDanmakuByBlockLevel(
   items: List<DanmakuItem>,

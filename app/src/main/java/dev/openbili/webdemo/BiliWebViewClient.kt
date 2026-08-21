@@ -50,8 +50,7 @@ class BiliWebViewClient(
   }
 
   override fun onPageFinished(view: WebView, url: String) {
-    // Some vendor WebView builds can omit the commit callback. This is a final, idempotent
-    // fallback.
+    // 部分厂商 WebView 构建可能省略 commit 回调。这是最终的幂等回退。
     notifyPageVisible(view, url)
   }
 
@@ -91,7 +90,7 @@ class BiliWebViewClient(
   }
 
   override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
-    handler.cancel() // Never bypass certificate validation.
+    handler.cancel() // 绝不绕过证书校验。
     if (
       currentMainFrameUrl.isNullOrBlank() ||
         error.url == currentMainFrameUrl ||

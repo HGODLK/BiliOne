@@ -1,41 +1,44 @@
 package dev.openbili.webdemo.article
 
+import android.view.KeyEvent
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.Icons
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -48,9 +51,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -59,18 +62,25 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.path
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
@@ -82,19 +92,22 @@ import coil3.compose.AsyncImage
 import dev.openbili.webdemo.api.ArticleBlock
 import dev.openbili.webdemo.api.ArticleDetail
 import dev.openbili.webdemo.api.ArticleItem
-import dev.openbili.webdemo.api.BiliApi
+import dev.openbili.webdemo.api.BiliCommentApi
 import dev.openbili.webdemo.api.BiliEmote
 import dev.openbili.webdemo.api.BiliEmotePackage
+import dev.openbili.webdemo.api.BiliVideoApi
 import dev.openbili.webdemo.api.CommentImage
 import dev.openbili.webdemo.api.CommentItem
 import dev.openbili.webdemo.api.CommentNavigationTarget
 import dev.openbili.webdemo.api.CommentSort
 import dev.openbili.webdemo.api.MentionSuggestion
-import dev.openbili.webdemo.feed.FeedItem
 import dev.openbili.webdemo.feed.FeedImageLoadMode
+import dev.openbili.webdemo.feed.FeedItem
+import dev.openbili.webdemo.feed.FeedViewModel
 import dev.openbili.webdemo.feed.LocalFeedImageLoadPolicy
 import dev.openbili.webdemo.feed.rememberListFeedImageLoadPolicy
-import dev.openbili.webdemo.feed.FeedViewModel
+import dev.openbili.webdemo.ui.controlFocusOutline
+import dev.openbili.webdemo.ui.LocalControlMode
 import dev.openbili.webdemo.ui.VideoShapeTokens
 import dev.openbili.webdemo.video.BiliRichText
 import dev.openbili.webdemo.video.CommentComposer
@@ -106,16 +119,15 @@ import dev.openbili.webdemo.video.RecommendationCard
 import dev.openbili.webdemo.video.ReplyThreadPanel
 import dev.openbili.webdemo.video.ReplyThreadTransitionContainer
 import dev.openbili.webdemo.video.toCommentVideoFeedItem
+import java.time.format.DateTimeFormatter
 import java.time.Instant
 import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import androidx.compose.runtime.withFrameNanos
 
 @Composable
 fun ArticleScreen(
@@ -155,6 +167,9 @@ fun ArticleScreen(
   val density = LocalDensity.current
   val scope = rememberCoroutineScope()
   val listState = rememberLazyListState()
+  val controlMode = LocalControlMode.current
+  val controlReaderFocusRequester = remember { FocusRequester() }
+  var controlReaderFocused by remember(article.id) { mutableStateOf(false) }
   val imageLoadPolicy = rememberListFeedImageLoadPolicy(listState)
   val shownArticle = detail?.article ?: article
   val commentOid = detail?.commentOid ?: article.id
@@ -191,12 +206,19 @@ fun ArticleScreen(
       (sharedEmotes + localEmotePackages.flatMap { it.emotes }).distinctBy { it.text }
     }
   val emoteCatalog = remember(availableEmotes) { availableEmotes.associateBy { it.text } }
+  LaunchedEffect(controlMode, article.id, contentLoadEnabled) {
+    if (controlMode) {
+      withFrameNanos {}
+      runCatching { controlReaderFocusRequester.requestFocus() }
+    }
+  }
 
   fun openImage(image: CommentImage, bounds: Rect) {
     if (!interactionEnabled || bounds.width <= 0f || bounds.height <= 0f) return
-    imagePreview = CommentImagePreviewSession(image, bounds).also { session ->
-      scope.launch { session.progress.animateTo(1f, tween(280)) }
-    }
+    imagePreview =
+      CommentImagePreviewSession(image, bounds).also { session ->
+        scope.launch { session.progress.animateTo(1f, tween(280)) }
+      }
   }
 
   fun closeImage() {
@@ -225,14 +247,13 @@ fun ArticleScreen(
     scope.launch {
       runCatching {
           withContext(Dispatchers.IO) {
-            BiliApi.getComments(commentOid, page, commentSort.apiValue, commentType)
+            BiliCommentApi.getComments(commentOid, page, commentSort.apiValue, commentType)
           }
         }
         .onSuccess { response ->
           if (token != commentLoadToken) return@onSuccess
           comments =
-            if (page == 1) response.items
-            else (comments + response.items).distinctBy { it.rpid }
+            if (page == 1) response.items else (comments + response.items).distinctBy { it.rpid }
           commentsPage = page
           commentsHasMore = response.hasMore
           commentTotal = response.totalCount
@@ -248,12 +269,12 @@ fun ArticleScreen(
 
   fun updateCommentLike(target: CommentItem, liked: Boolean) {
     fun update(comment: CommentItem) =
-        if (comment.rpid == target.rpid) {
-          comment.copy(
-            liked = liked,
-            likeCount = (comment.likeCount + if (liked) 1 else -1).coerceAtLeast(0),
-          )
-        } else comment
+      if (comment.rpid == target.rpid) {
+        comment.copy(
+          liked = liked,
+          likeCount = (comment.likeCount + if (liked) 1 else -1).coerceAtLeast(0),
+        )
+      } else comment
     comments = comments.map(::update)
     replies = replies.map(::update)
   }
@@ -264,7 +285,7 @@ fun ArticleScreen(
     scope.launch {
       runCatching {
           withContext(Dispatchers.IO) {
-            BiliApi.getCommentReplies(commentOid, root.rpid, page, commentType)
+            BiliCommentApi.getCommentReplies(commentOid, root.rpid, page, commentType)
           }
         }
         .onSuccess { response ->
@@ -286,7 +307,7 @@ fun ArticleScreen(
     scope.launch {
       runCatching {
           withContext(Dispatchers.IO) {
-            BiliApi.setCommentLike(commentOid, comment.rpid, liked, commentType)
+            BiliCommentApi.setCommentLike(commentOid, comment.rpid, liked, commentType)
           }
         }
         .onFailure {
@@ -308,9 +329,8 @@ fun ArticleScreen(
     if (!contentLoadEnabled) return@LaunchedEffect
     if (sharedEmotePackages.isEmpty()) {
       localEmotePackages =
-        runCatching { withContext(Dispatchers.IO) { BiliApi.getReplyEmotes() } }.getOrDefault(
-          emptyList()
-        )
+        runCatching { withContext(Dispatchers.IO) { BiliCommentApi.getReplyEmotes() } }
+          .getOrDefault(emptyList())
     } else {
       localEmotePackages = sharedEmotePackages
     }
@@ -389,7 +409,7 @@ fun ArticleScreen(
       val thread =
         runCatching {
             withContext(Dispatchers.IO) {
-              BiliApi.getCommentThread(commentOid, target.rootRpid, commentType)
+              BiliCommentApi.getCommentThread(commentOid, target.rootRpid, commentType)
             }
           }
           .getOrNull()
@@ -448,10 +468,26 @@ fun ArticleScreen(
           Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),
           verticalAlignment = Alignment.CenterVertically,
         ) {
-          IconButton(onClick = ::requestBack, enabled = backEnabled && interactionEnabled) {
+          IconButton(
+            onClick = ::requestBack,
+            enabled = backEnabled && interactionEnabled,
+            modifier =
+              Modifier.controlFocusOutline(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.primary,
+              ),
+          ) {
             Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
           }
-          IconButton(onClick = onHome, enabled = interactionEnabled) {
+          IconButton(
+            onClick = onHome,
+            enabled = interactionEnabled,
+            modifier =
+              Modifier.controlFocusOutline(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.primary,
+              ),
+          ) {
             Icon(Icons.Default.Home, contentDescription = "返回首页")
           }
           Text(
@@ -463,200 +499,239 @@ fun ArticleScreen(
         }
         CompositionLocalProvider(LocalFeedImageLoadPolicy provides imageLoadPolicy) {
           LazyColumn(
-          state = listState,
-          modifier = Modifier.fillMaxSize(),
-          horizontalAlignment = Alignment.CenterHorizontally,
-          verticalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-          item(key = "article_header_${article.id}") {
-            Column(
-              Modifier.fillMaxWidth().widthIn(max = 980.dp).padding(horizontal = horizontalPadding),
-              verticalArrangement = Arrangement.spacedBy(14.dp),
-            ) {
-              ArticleVisual(
-                article = shownArticle,
-                visible = heroVisible,
-                enforceAspectRatio = false,
-                alwaysLoad = true,
-                modifier =
-                  Modifier.width(heroWidth)
-                    .height(heroHeight)
-                    .align(Alignment.CenterHorizontally)
-                    .onGloballyPositioned {
-                      heroBounds = it.boundsInRoot()
-                      onHeroBoundsChanged(heroBounds)
-                    }
-                    .clickable(
-                      enabled = interactionEnabled && shownArticle.coverUrl.isNotBlank()
-                    ) {
-                      openImage(CommentImage(shownArticle.coverUrl), heroBounds)
-                    },
-              )
-              Text(
-                shownArticle.title,
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-              )
-              Row(
-                modifier =
-                  Modifier.clip(RoundedCornerShape(14.dp)).clickable(
-                    enabled = interactionEnabled && shownArticle.authorMid > 0L
-                  ) {
-                    onAuthorProfile(
-                      shownArticle.authorMid,
-                      shownArticle.authorFace,
-                      shownArticle.authorName,
-                      authorAvatarBounds,
-                    )
-                  }.padding(vertical = 4.dp, horizontal = 2.dp),
-                verticalAlignment = Alignment.CenterVertically,
+            state = listState,
+            modifier =
+              Modifier.fillMaxSize()
+                .then(
+                  if (controlMode) {
+                    Modifier.focusRequester(controlReaderFocusRequester)
+                      .onFocusChanged { controlReaderFocused = it.isFocused }
+                      .controlFocusOutline(
+                        shape = RoundedCornerShape(16.dp),
+                        color = MaterialTheme.colorScheme.primary,
+                      )
+                      .onPreviewKeyEvent { event ->
+                        if (!controlReaderFocused) return@onPreviewKeyEvent false
+                        if (
+                          event.type != KeyEventType.KeyDown ||
+                            event.nativeKeyEvent.repeatCount > 0
+                        ) {
+                          return@onPreviewKeyEvent false
+                        }
+                        val direction =
+                          when (event.nativeKeyEvent.keyCode) {
+                            KeyEvent.KEYCODE_DPAD_UP -> -1f
+                            KeyEvent.KEYCODE_DPAD_DOWN -> 1f
+                            else -> return@onPreviewKeyEvent false
+                          }
+                        scope.launch {
+                          val viewport =
+                            (listState.layoutInfo.viewportEndOffset -
+                                listState.layoutInfo.viewportStartOffset)
+                              .coerceAtLeast(1)
+                          listState.animateScrollBy(viewport * .82f * direction)
+                        }
+                        true
+                      }
+                      .focusable()
+                  } else Modifier
+                ),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+          ) {
+            item(key = "article_header_${article.id}") {
+              Column(
+                Modifier.fillMaxWidth()
+                  .widthIn(max = 980.dp)
+                  .padding(horizontal = horizontalPadding),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
               ) {
-                if (shownArticle.authorFace.isNotBlank()) {
-                  AsyncImage(
-                    model = shownArticle.authorFace,
-                    contentDescription = shownArticle.authorName,
-                    modifier =
-                      Modifier.size(38.dp)
-                        .onGloballyPositioned { authorAvatarBounds = it.boundsInRoot() }
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.surfaceVariant),
-                    contentScale = ContentScale.Crop,
-                  )
-                }
-                Column(
-                  Modifier.padding(start = if (shownArticle.authorFace.isBlank()) 0.dp else 10.dp)
+                ArticleVisual(
+                  article = shownArticle,
+                  visible = heroVisible,
+                  enforceAspectRatio = false,
+                  alwaysLoad = true,
+                  modifier =
+                    Modifier.width(heroWidth)
+                      .height(heroHeight)
+                      .align(Alignment.CenterHorizontally)
+                      .onGloballyPositioned {
+                        heroBounds = it.boundsInRoot()
+                        onHeroBoundsChanged(heroBounds)
+                      }
+                      .clickable(
+                        enabled = interactionEnabled && shownArticle.coverUrl.isNotBlank()
+                      ) {
+                        openImage(CommentImage(shownArticle.coverUrl), heroBounds)
+                      },
+                )
+                Text(
+                  shownArticle.title,
+                  style = MaterialTheme.typography.headlineMedium,
+                  fontWeight = FontWeight.Bold,
+                )
+                Row(
+                  modifier =
+                    Modifier.clip(RoundedCornerShape(14.dp))
+                      .clickable(enabled = interactionEnabled && shownArticle.authorMid > 0L) {
+                        onAuthorProfile(
+                          shownArticle.authorMid,
+                          shownArticle.authorFace,
+                          shownArticle.authorName,
+                          authorAvatarBounds,
+                        )
+                      }
+                      .padding(vertical = 4.dp, horizontal = 2.dp),
+                  verticalAlignment = Alignment.CenterVertically,
                 ) {
-                  Text(
-                    shownArticle.authorName.ifBlank { "专栏作者" },
-                    style = MaterialTheme.typography.titleSmall,
-                  )
-                  Text(
-                    articleMeta(shownArticle),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                  )
+                  if (shownArticle.authorFace.isNotBlank()) {
+                    AsyncImage(
+                      model = shownArticle.authorFace,
+                      contentDescription = shownArticle.authorName,
+                      modifier =
+                        Modifier.size(38.dp)
+                          .onGloballyPositioned { authorAvatarBounds = it.boundsInRoot() }
+                          .clip(CircleShape)
+                          .background(MaterialTheme.colorScheme.surfaceVariant),
+                      contentScale = ContentScale.Crop,
+                    )
+                  }
+                  Column(
+                    Modifier.padding(start = if (shownArticle.authorFace.isBlank()) 0.dp else 10.dp)
+                  ) {
+                    Text(
+                      shownArticle.authorName.ifBlank { "专栏作者" },
+                      style = MaterialTheme.typography.titleSmall,
+                    )
+                    Text(
+                      articleMeta(shownArticle),
+                      style = MaterialTheme.typography.labelMedium,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                  }
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+              }
+            }
+            if (loading) {
+              item(key = "article_loading") {
+                CircularProgressIndicator(Modifier.padding(32.dp).size(28.dp), strokeWidth = 2.dp)
+              }
+            } else if (error != null) {
+              item(key = "article_error") {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                  Text(error, color = MaterialTheme.colorScheme.error)
+                  TextButton(onClick = onRetry) { Text("重试") }
                 }
               }
-              HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            }
-          }
-          if (loading) {
-            item(key = "article_loading") {
-              CircularProgressIndicator(Modifier.padding(32.dp).size(28.dp), strokeWidth = 2.dp)
-            }
-          } else if (error != null) {
-            item(key = "article_error") {
-              Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(error, color = MaterialTheme.colorScheme.error)
-                TextButton(onClick = onRetry) { Text("重试") }
-              }
-            }
-          } else {
-            itemsIndexed(
-              items = detail?.blocks.orEmpty(),
-              key = { index, block -> "${article.id}_${block::class.simpleName}_$index" },
-            ) { _, block ->
-              ArticleBlockContent(
-                block = block,
-                viewportHeight = viewportHeight,
-                horizontalPadding = horizontalPadding,
-                emoteCatalog = emoteCatalog,
-                hiddenVideoCoverItemId = hiddenVideoCoverItemId,
-                interactionEnabled = interactionEnabled,
-                onImage = ::openImage,
-                onProfile = onProfile,
-                onVideo = onVideo,
-                onVideoLongClick = onVideoLongClick,
-                onVideoBoundsChanged = onVideoBoundsChanged,
-              )
-            }
-          }
-          item(key = "article_comments_header") {
-            Row(
-              Modifier.fillMaxWidth()
-                .widthIn(max = 900.dp)
-                .padding(horizontal = horizontalPadding, vertical = 8.dp),
-              verticalAlignment = Alignment.CenterVertically,
-            ) {
-              Text(
-                "评论 ${FeedViewModel.formatCount(commentTotal)}",
-                modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-              )
-              CommentSort.entries.forEach { sort ->
-                FilterChip(
-                  selected = commentSort == sort,
-                  onClick = { if (sort != commentSort) commentSort = sort },
-                  enabled = interactionEnabled,
-                  label = { Text(sort.label) },
-                  modifier = Modifier.padding(start = 8.dp),
+            } else {
+              itemsIndexed(
+                items = detail?.blocks.orEmpty(),
+                key = { index, block -> "${article.id}_${block::class.simpleName}_$index" },
+              ) { _, block ->
+                ArticleBlockContent(
+                  block = block,
+                  viewportHeight = viewportHeight,
+                  horizontalPadding = horizontalPadding,
+                  emoteCatalog = emoteCatalog,
+                  hiddenVideoCoverItemId = hiddenVideoCoverItemId,
+                  interactionEnabled = interactionEnabled,
+                  onImage = ::openImage,
+                  onProfile = onProfile,
+                  onVideo = onVideo,
+                  onVideoLongClick = onVideoLongClick,
+                  onVideoBoundsChanged = onVideoBoundsChanged,
                 )
               }
             }
-          }
-          itemsIndexed(
-            items = comments,
-            key = { _, comment -> "article_comment_${comment.rpid}" },
-            contentType = { _, _ -> "article_comment" },
-          ) { _, comment ->
-            Box(
-              Modifier.fillMaxWidth()
-                .widthIn(max = 900.dp)
-                .padding(horizontal = horizontalPadding)
-                .onGloballyPositioned {
-                  if (commentNavigationTarget?.rootRpid == comment.rpid) {
-                    navigationRootBounds = it.boundsInRoot()
-                  }
+            item(key = "article_comments_header") {
+              Row(
+                Modifier.fillMaxWidth()
+                  .widthIn(max = 900.dp)
+                  .padding(horizontal = horizontalPadding, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+              ) {
+                Text(
+                  "评论 ${FeedViewModel.formatCount(commentTotal)}",
+                  modifier = Modifier.weight(1f),
+                  style = MaterialTheme.typography.titleMedium,
+                  fontWeight = FontWeight.SemiBold,
+                )
+                CommentSort.entries.forEach { sort ->
+                  FilterChip(
+                    selected = commentSort == sort,
+                    onClick = { if (sort != commentSort) commentSort = sort },
+                    enabled = interactionEnabled,
+                    label = { Text(sort.label) },
+                    modifier = Modifier.padding(start = 8.dp),
+                  )
                 }
-            ) {
-              CommentRow(
-                comment = comment,
-                showEmotes = showCommentEmotes,
-                emoteCatalog = emoteCatalog,
-                showLocation = showCommentLocation,
-                onLike = ::likeComment,
-                uploaderMid = shownArticle.authorMid,
-                onProfileClick = onCommentProfile,
-                onImagePreview = ::openImage,
-                onReplies = { target, bounds ->
-                  replySourceBounds = bounds
-                  replies = emptyList()
-                  repliesPage = 1
-                  repliesHasMore = false
-                  replyRoot = target
-                  loadReplies(target, 1)
-                },
-                onReply = { target ->
-                  replyTargetRoot = target
-                  replyTarget = target
-                },
-                bottomClearancePx = composerHeightPx,
-                viewportHeightPx = rootBounds.height,
-                hiddenLinkedVideoCoverItemId = hiddenVideoCoverItemId,
-                onLinkedVideoClick = onVideo,
-                onLinkedVideoBoundsChanged = onVideoBoundsChanged,
-                onLinkedVideoLongClick = onVideoLongClick,
-                onLinkedArticleClick = onArticle,
-                hiddenLinkedArticleItemId = hiddenLinkedArticleItemId,
-                largeText = true,
-              )
+              }
             }
-          }
-          if (commentsLoading) {
-            item(key = "article_comments_loading") {
-              CircularProgressIndicator(Modifier.padding(18.dp).size(24.dp), strokeWidth = 2.dp)
+            itemsIndexed(
+              items = comments,
+              key = { _, comment -> "article_comment_${comment.rpid}" },
+              contentType = { _, _ -> "article_comment" },
+            ) { _, comment ->
+              Box(
+                Modifier.fillMaxWidth()
+                  .widthIn(max = 900.dp)
+                  .padding(horizontal = horizontalPadding)
+                  .onGloballyPositioned {
+                    if (commentNavigationTarget?.rootRpid == comment.rpid) {
+                      navigationRootBounds = it.boundsInRoot()
+                    }
+                  }
+              ) {
+                CommentRow(
+                  comment = comment,
+                  showEmotes = showCommentEmotes,
+                  emoteCatalog = emoteCatalog,
+                  showLocation = showCommentLocation,
+                  onLike = ::likeComment,
+                  uploaderMid = shownArticle.authorMid,
+                  onProfileClick = onCommentProfile,
+                  onImagePreview = ::openImage,
+                  onReplies = { target, bounds ->
+                    replySourceBounds = bounds
+                    replies = emptyList()
+                    repliesPage = 1
+                    repliesHasMore = false
+                    replyRoot = target
+                    loadReplies(target, 1)
+                  },
+                  onReply = { target ->
+                    replyTargetRoot = target
+                    replyTarget = target
+                  },
+                  bottomClearancePx = composerHeightPx,
+                  viewportHeightPx = rootBounds.height,
+                  hiddenLinkedVideoCoverItemId = hiddenVideoCoverItemId,
+                  onLinkedVideoClick = onVideo,
+                  onLinkedVideoBoundsChanged = onVideoBoundsChanged,
+                  onLinkedVideoLongClick = onVideoLongClick,
+                  onLinkedArticleClick = onArticle,
+                  hiddenLinkedArticleItemId = hiddenLinkedArticleItemId,
+                  largeText = true,
+                )
+              }
             }
-          } else if (comments.isEmpty()) {
-            item(key = "article_comments_empty") {
-              Text(
-                "还没有评论，来坐第一排吧~",
-                modifier = Modifier.padding(vertical = 18.dp),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-              )
+            if (commentsLoading) {
+              item(key = "article_comments_loading") {
+                CircularProgressIndicator(Modifier.padding(18.dp).size(24.dp), strokeWidth = 2.dp)
+              }
+            } else if (comments.isEmpty()) {
+              item(key = "article_comments_empty") {
+                Text(
+                  "还没有评论，来坐第一排吧~",
+                  modifier = Modifier.padding(vertical = 18.dp),
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+              }
             }
-          }
-          item(key = "article_comments_safe_space") { Spacer(Modifier.height(composerClearance + 28.dp)) }
+            item(key = "article_comments_safe_space") {
+              Spacer(Modifier.height(composerClearance + 28.dp))
+            }
           }
         }
       }
@@ -685,9 +760,9 @@ fun ArticleScreen(
           scope.launch {
             runCatching {
                 withContext(Dispatchers.IO) {
-                  if (target == null) BiliApi.addComment(commentOid, message, commentType)
+                  if (target == null) BiliCommentApi.addComment(commentOid, message, commentType)
                   else
-                    BiliApi.addReply(
+                    BiliCommentApi.addReply(
                       commentOid,
                       (replyTargetRoot ?: target).rpid,
                       target.rpid,
@@ -702,12 +777,11 @@ fun ArticleScreen(
                   commentTotal += 1
                 } else {
                   val root = replyTargetRoot ?: target
-                  comments =
-                    comments.map { comment ->
-                      if (comment.rpid == root.rpid) {
-                        comment.copy(replyCount = comment.replyCount + 1)
-                      } else comment
-                    }
+                  comments = comments.map { comment ->
+                    if (comment.rpid == root.rpid) {
+                      comment.copy(replyCount = comment.replyCount + 1)
+                    } else comment
+                  }
                   replies = (replies + added).distinctBy { it.rpid }
                 }
                 replyTarget = null
@@ -755,10 +829,9 @@ fun ArticleScreen(
 
     displayedReplyRoot?.let { root ->
       Box(
-        Modifier.fillMaxSize()
-          .padding(top = 56.dp)
-          .zIndex(25f)
-          .onGloballyPositioned { replyTargetBounds = it.boundsInRoot() }
+        Modifier.fillMaxSize().padding(top = 56.dp).zIndex(25f).onGloballyPositioned {
+          replyTargetBounds = it.boundsInRoot()
+        }
       ) {
         ReplyThreadTransitionContainer(
           sourceBounds = replySourceBounds,
@@ -785,13 +858,13 @@ fun ArticleScreen(
             },
             onLoadMore = { loadReplies(root, repliesPage + 1) },
             navigationTargetRpid =
-              commentNavigationTarget
-                ?.targetRpid
-                ?.takeIf { commentNavigationTarget.rootRpid == root.rpid },
+              commentNavigationTarget?.targetRpid?.takeIf {
+                commentNavigationTarget.rootRpid == root.rpid
+              },
             navigationRequestId =
-              commentNavigationTarget
-                ?.requestId
-                ?.takeIf { commentNavigationTarget.rootRpid == root.rpid },
+              commentNavigationTarget?.requestId?.takeIf {
+                commentNavigationTarget.rootRpid == root.rpid
+              },
             onNavigationTargetReached = onCommentNavigationConsumed,
             onRefresh = { loadReplies(root, 1) },
             onDismiss = {
@@ -869,14 +942,16 @@ private fun ArticleBlockContent(
       ArticleBodyImage(block, viewportHeight, horizontalPadding, interactionEnabled, onImage)
     is ArticleBlock.Code -> {
       Surface(
-        modifier = Modifier.fillMaxWidth().widthIn(max = 860.dp).padding(horizontal = horizontalPadding),
+        modifier =
+          Modifier.fillMaxWidth().widthIn(max = 860.dp).padding(horizontal = horizontalPadding),
         shape = RoundedCornerShape(14.dp),
         color = MaterialTheme.colorScheme.surfaceVariant,
       ) {
         Text(
           block.content,
           modifier =
-            Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 14.dp),
+            Modifier.horizontalScroll(rememberScrollState())
+              .padding(horizontal = 16.dp, vertical = 14.dp),
           style = MaterialTheme.typography.bodyMedium,
           fontFamily = FontFamily.Monospace,
         )
@@ -967,8 +1042,8 @@ internal fun calculateArticleImageLayout(
   val ratio = sourceRatio.takeIf { it.isFinite() && it > 0f }?.coerceIn(.08f, 12f) ?: 16f / 9f
   val safeWidth = maxWidth.coerceAtLeast(1f)
   val safeHeight = maxHeight.coerceAtLeast(1f)
-  // Ordinary landscape and portrait images keep their complete frame. Only an exceptionally
-  // long source is centre-cropped; otherwise height is constrained solely by scaling it down.
+  // 普通横图和竖图保留完整画面。只有异常长的源图才做中心裁剪；否则高度仅通过
+  // 缩小来控制。
   val crop = dimensionsKnown && ratio < .32f
   val preferredWidth =
     when {
@@ -998,7 +1073,7 @@ private fun ArticleVideoBlock(
   LaunchedEffect(block.bvid) {
     video =
       withContext(Dispatchers.IO) {
-        runCatching { BiliApi.getVideoInfo(block.bvid)?.toCommentVideoFeedItem() }.getOrNull()
+        runCatching { BiliVideoApi.getVideoInfo(block.bvid)?.toCommentVideoFeedItem() }.getOrNull()
       }
   }
   BoxWithConstraints(

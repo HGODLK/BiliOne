@@ -45,8 +45,7 @@ class VideoActionStateTest {
     assertEquals(2, booleanState.coins)
     assertFalse(booleanState.favorited)
 
-    val numericState =
-      parseVideoEngagement(JSONObject("""{"like":0,"coin":1,"favorite":1}"""))
+    val numericState = parseVideoEngagement(JSONObject("""{"like":0,"coin":1,"favorite":1}"""))
     assertTrue(numericState.loaded)
     assertFalse(numericState.liked)
     assertEquals(1, numericState.coins)

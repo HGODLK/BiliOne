@@ -14,12 +14,21 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
+/**
+ * 在 WebView 中执行提取脚本并解析推荐信息的调度器。
+ *
+ * 负责把 assets 中的 feed-extractor.js 注入 WebView 执行，带超时与重试：
+ *  - 单次求值超时或抛错会先归一为可重试的 [FeedExtractionResult.Failure]；
+ *  - Empty 与可重试失败会在 [maxAttempts] 内按 [retryDelayMillis] 间隔重试；
+ *  - 所有求值都在主线程立即调度（WebView 求值要求主线程），结果交给 [FeedItemJsonParser] 解析。
+ */
 class FeedPageExtractor(
   context: Context,
   private val maxAttempts: Int = 4,
   private val retryDelayMillis: Long = 500,
   private val evaluationTimeoutMillis: Long = 3_000,
 ) {
+  // 构造时一次性读取提取脚本文本，避免每次提取重复 IO。
   private val script =
     context.applicationContext.assets.open("extraction/feed-extractor.js").bufferedReader().use {
       it.readText()
@@ -31,6 +40,7 @@ class FeedPageExtractor(
     require(evaluationTimeoutMillis > 0) { "evaluationTimeoutMillis must be positive" }
   }
 
+  /** 执行提取：在 [maxAttempts] 内循环求值，遇到可重试结果按间隔延迟重试。 */
   suspend fun extract(webView: WebView): FeedExtractionResult =
     withContext(Dispatchers.Main.immediate) {
       var lastResult: FeedExtractionResult =
@@ -51,6 +61,7 @@ class FeedPageExtractor(
       lastResult
     }
 
+  /** 单次求值：超时归一为 EVALUATION_TIMEOUT，抛错归一为 EVALUATION_FAILED。 */
   private suspend fun evaluateAttempt(webView: WebView): FeedExtractionResult {
     return try {
       val rawResult =
@@ -72,6 +83,7 @@ class FeedPageExtractor(
     }
   }
 
+  /** 把 WebView 回调式的 evaluateJavascript 包装为可挂起、可取消的协程调用。 */
   private suspend fun evaluateJavascript(webView: WebView, source: String): String =
     suspendCancellableCoroutine { continuation ->
       try {
@@ -83,9 +95,11 @@ class FeedPageExtractor(
       }
     }
 
+  /** 空结果与可重试失败都需要继续重试。 */
   private fun FeedExtractionResult.shouldRetry(): Boolean =
     this is FeedExtractionResult.Empty || (this is FeedExtractionResult.Failure && retryable)
 
+  /** 仅在 Debug 构建下输出每次尝试的结果与统计，用于诊断提取漏斗。 */
   private fun logAttempt(attempt: Int, result: FeedExtractionResult) {
     if (!BuildConfig.DEBUG) return
     val outcome =

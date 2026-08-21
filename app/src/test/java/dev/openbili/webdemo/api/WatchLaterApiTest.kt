@@ -11,7 +11,7 @@ class WatchLaterApiTest {
   @Test
   fun watchLaterParsesTheServerListIntoFeedCards() {
     val cards =
-      BiliApi.parseWatchLaterResponse(
+      BiliHistoryApi.parseWatchLaterResponse(
         JSONObject(
           """
           {
@@ -46,7 +46,7 @@ class WatchLaterApiTest {
   @Test
   fun watchLaterSkipsMalformedEntries() {
     val cards =
-      BiliApi.parseWatchLaterResponse(
+      BiliHistoryApi.parseWatchLaterResponse(
         JSONObject("""{"data":{"list":[{"title":"missing aid"},{"aid":321,"title":"valid"}]}}""")
       )
 

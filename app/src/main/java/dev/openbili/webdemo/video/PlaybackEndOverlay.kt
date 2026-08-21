@@ -33,6 +33,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.BlurredEdgeTreatment
@@ -40,12 +42,16 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.openbili.webdemo.PlayerState
 import dev.openbili.webdemo.feed.CoverImage
 import dev.openbili.webdemo.feed.FeedItem
+import dev.openbili.webdemo.ui.controlFocusOutline
 
 @Composable
 internal fun PlayerErrorActions(
@@ -89,8 +95,19 @@ internal fun AutoNextOverlay(
   onFullscreen: () -> Unit,
   onNext: () -> Unit,
   onReplay: () -> Unit,
+  controlEnabled: Boolean = false,
+  initialFocusRequester: FocusRequester? = null,
   modifier: Modifier = Modifier,
 ) {
+  val fallbackReplayFocusRequester = remember { FocusRequester() }
+  val replayFocusRequester = initialFocusRequester ?: fallbackReplayFocusRequester
+  val nextFocusRequester = remember { FocusRequester() }
+  LaunchedEffect(controlEnabled, triggered) {
+    if (controlEnabled && !triggered) {
+      androidx.compose.runtime.withFrameNanos {}
+      runCatching { replayFocusRequester.requestFocus() }
+    }
+  }
   Box(modifier.graphicsLayer { alpha = revealAlpha() }.background(Color.Black)) {
     CoverImage(
       coverUrl = coverUrl,
@@ -154,7 +171,20 @@ internal fun AutoNextOverlay(
         ) {
           Button(
             onClick = onReplay,
-            modifier = Modifier.height(44.dp).widthIn(min = 140.dp),
+            modifier =
+              Modifier.height(44.dp)
+                .widthIn(min = 140.dp)
+                .focusRequester(replayFocusRequester)
+                .focusProperties {
+                  left = FocusRequester.Cancel
+                  right = nextFocusRequester
+                }
+                .controlFocusOutline(
+                  RoundedCornerShape(24.dp),
+                  MaterialTheme.colorScheme.primary,
+                  width = 3.dp,
+                  enabled = controlEnabled,
+                ),
             shape = RoundedCornerShape(24.dp),
             colors =
               ButtonDefaults.buttonColors(
@@ -173,7 +203,23 @@ internal fun AutoNextOverlay(
             Spacer(Modifier.width(6.dp))
             Text("重新播放")
           }
-          Button(onClick = onNext) { Text("立即播放") }
+          Button(
+            onClick = onNext,
+            modifier =
+              Modifier.focusRequester(nextFocusRequester)
+                .focusProperties {
+                  left = replayFocusRequester
+                  right = FocusRequester.Cancel
+                }
+                .controlFocusOutline(
+                  RoundedCornerShape(24.dp),
+                  MaterialTheme.colorScheme.primary,
+                  width = 3.dp,
+                  enabled = controlEnabled,
+                ),
+          ) {
+            Text("立即播放")
+          }
         }
       }
     }
@@ -184,6 +230,7 @@ internal fun AutoNextOverlay(
         Modifier.align(Alignment.BottomEnd).padding(12.dp).graphicsLayer {
           alpha = 1f - handoffProgress().coerceIn(0f, 1f)
         },
+      controlEnabled = controlEnabled,
     )
   }
 }
@@ -200,6 +247,8 @@ internal fun PlaybackEndedRecommendations(
   onReplay: () -> Unit,
   onRecommendationClick: (FeedItem, Rect) -> Unit,
   onRecommendationLongClick: (FeedItem) -> Unit,
+  controlEnabled: Boolean = false,
+  initialFocusRequester: FocusRequester? = null,
   modifier: Modifier = Modifier,
 ) {
   Surface(
@@ -228,6 +277,8 @@ internal fun PlaybackEndedRecommendations(
           onReplay = onReplay,
           onRecommendationClick = onRecommendationClick,
           onRecommendationLongClick = onRecommendationLongClick,
+          controlEnabled = controlEnabled,
+          initialFocusRequester = initialFocusRequester,
           modifier = Modifier.fillMaxSize(),
         )
       }
@@ -235,6 +286,7 @@ internal fun PlaybackEndedRecommendations(
         isFullscreen = isFullscreen,
         onClick = onFullscreen,
         modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp),
+        controlEnabled = controlEnabled,
       )
     }
   }
@@ -247,8 +299,19 @@ internal fun PlaybackEndedForeground(
   onReplay: () -> Unit,
   onRecommendationClick: (FeedItem, Rect) -> Unit,
   onRecommendationLongClick: (FeedItem) -> Unit,
+  controlEnabled: Boolean = false,
+  initialFocusRequester: FocusRequester? = null,
   modifier: Modifier = Modifier,
 ) {
+  val firstRecommendationFocusRequester = remember { FocusRequester() }
+  val fallbackReplayFocusRequester = remember { FocusRequester() }
+  val replayFocusRequester = initialFocusRequester ?: fallbackReplayFocusRequester
+  LaunchedEffect(controlEnabled, recommendations.firstOrNull()?.id) {
+    if (controlEnabled) {
+      androidx.compose.runtime.withFrameNanos {}
+      runCatching { replayFocusRequester.requestFocus() }
+    }
+  }
   Column(
     modifier = modifier.padding(horizontal = 24.dp, vertical = 18.dp),
     horizontalAlignment = Alignment.CenterHorizontally,
@@ -272,6 +335,7 @@ internal fun PlaybackEndedForeground(
         contentPadding = PaddingValues(horizontal = 0.dp),
       ) {
         items(recommendations.take(3), key = { it.id }) { item ->
+          val index = recommendations.indexOfFirst { it.id == item.id }
           RecommendationCard(
             item = item,
             onClick = { bounds -> onRecommendationClick(item, bounds) },
@@ -279,6 +343,11 @@ internal fun PlaybackEndedForeground(
             coverVisible = item.id != hiddenCoverItemId,
             overlayStyle = true,
             showDuration = true,
+            controlEnabled = controlEnabled,
+            controlFocusRequester = firstRecommendationFocusRequester.takeIf { index == 0 },
+            controlDownFocusRequester = replayFocusRequester,
+            controlAtHorizontalStart = index == 0,
+            controlAtHorizontalEnd = index == minOf(2, recommendations.lastIndex),
           )
         }
       }
@@ -286,7 +355,21 @@ internal fun PlaybackEndedForeground(
     Spacer(Modifier.height(24.dp))
     Button(
       onClick = onReplay,
-      modifier = Modifier.height(48.dp).widthIn(min = 164.dp),
+      modifier =
+        Modifier.height(48.dp)
+          .widthIn(min = 164.dp)
+          .focusRequester(replayFocusRequester)
+          .focusProperties {
+            up =
+              if (recommendations.isNotEmpty()) firstRecommendationFocusRequester
+              else FocusRequester.Cancel
+          }
+          .controlFocusOutline(
+            RoundedCornerShape(24.dp),
+            MaterialTheme.colorScheme.primary,
+            width = 3.dp,
+            enabled = controlEnabled,
+          ),
       shape = RoundedCornerShape(24.dp),
       colors =
         ButtonDefaults.buttonColors(
@@ -308,6 +391,7 @@ internal fun PlaybackEndedFullscreenButton(
   isFullscreen: Boolean,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
+  controlEnabled: Boolean = false,
 ) {
   Surface(
     modifier = modifier,
@@ -315,7 +399,17 @@ internal fun PlaybackEndedFullscreenButton(
     color = Color.Black.copy(alpha = .42f),
     contentColor = Color.White,
   ) {
-    IconButton(onClick = onClick, modifier = Modifier.size(44.dp)) {
+    IconButton(
+      onClick = onClick,
+      modifier =
+        Modifier.size(44.dp)
+          .controlFocusOutline(
+            CircleShape,
+            MaterialTheme.colorScheme.primary,
+            width = 3.dp,
+            enabled = controlEnabled,
+          ),
+    ) {
       FullscreenControlIcon(
         exiting = isFullscreen,
         modifier = Modifier.size(22.dp),

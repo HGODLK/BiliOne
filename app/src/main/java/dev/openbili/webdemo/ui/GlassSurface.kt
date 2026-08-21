@@ -19,8 +19,8 @@ import androidx.compose.ui.unit.dp
 val LocalGlassEffectsEnabled = staticCompositionLocalOf { true }
 
 /**
- * A translucent, readable surface. It deliberately does not blur its own content or continuously
- * sample content behind it; unsupported blur configurations therefore require no special fallback.
+ * 一块半透明、可读的表面。它有意不模糊自身内容，也不持续采样其后的内容；
+ * 因此不受支持的模糊配置无需特殊回退。
  */
 @Composable
 fun GlassSurface(

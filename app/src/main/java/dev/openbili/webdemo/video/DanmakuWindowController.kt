@@ -1,20 +1,20 @@
 package dev.openbili.webdemo.video
 
-import dev.openbili.webdemo.api.BiliApi
+import dev.openbili.webdemo.api.BiliDanmakuApi
 import dev.openbili.webdemo.api.DanmakuItem
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 internal class DanmakuWindowController(
-  private val loadSegment: (Long, Int) -> List<DanmakuItem> = BiliApi::getDanmakuSegment
+  private val loadSegment: (Long, Int) -> List<DanmakuItem> = BiliDanmakuApi::getDanmakuSegment
 ) {
   private var activeCid = 0L
   private var activeCenterSegment = -1

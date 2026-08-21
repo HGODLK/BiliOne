@@ -20,7 +20,7 @@ class CommentPictureParsingTest {
       }
     val content = JSONObject("""{"pictures":[$pictures]}""")
 
-    val result = BiliApi.parseCommentPictures(content)
+    val result = BiliCommentApi.parseCommentPictures(content)
 
     assertEquals(9, result.size)
     assertEquals("https://i0.hdslb.com/bfs/note/0.jpg", result.first().url)
@@ -35,7 +35,7 @@ class CommentPictureParsingTest {
         """{"pictures":[{"img_src":"javascript:alert(1)"},{"img_src":""},{"img_url":"//i1.hdslb.com/a.png"}]}"""
       )
 
-    val result = BiliApi.parseCommentPictures(content)
+    val result = BiliCommentApi.parseCommentPictures(content)
 
     assertEquals(listOf("https://i1.hdslb.com/a.png"), result.map(CommentImage::url))
   }

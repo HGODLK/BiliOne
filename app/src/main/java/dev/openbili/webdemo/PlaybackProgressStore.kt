@@ -3,7 +3,7 @@ package dev.openbili.webdemo
 import android.content.Context
 import kotlin.math.max
 
-/** Persistent playback positions used when the remote history is late or unavailable. */
+/** 远端历史迟到或不可用时使用的持久播放位置。 */
 internal object PlaybackProgressStore {
   private const val PREFS_NAME = "playback_progress"
   private const val POSITION_SUFFIX = ":position"
@@ -51,10 +51,8 @@ internal object PlaybackProgressStore {
   fun normalize(positionMs: Long, durationMs: Long): Long {
     val position = positionMs.coerceAtLeast(0L)
     if (durationMs <= 0L) return position
-
-    // Near-end is still a valid exit position. Actual playback completion is tracked separately by
-    // the page cache, so treating the last 2% as completed here loses both local and server resume
-    // progress when a user backs out before the media really ends.
+    // 接近结尾仍是有效的退出位置。实际播放完成由页面缓存单独跟踪，因此在这里把
+    // 最后 2% 当作已完成，会在用户于媒体真正结束前退出时丢失本地和服务器的续播进度。
     return position.coerceAtMost(durationMs)
   }
 

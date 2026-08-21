@@ -12,7 +12,7 @@ class AccountUnreadSummaryTest {
   @Test
   fun `parses reply and mention unread counts without relying on chat`() {
     val summary =
-      BiliApi.parseInteractionUnreadSummary(
+      BiliInteractionApi.parseInteractionUnreadSummary(
         JSONObject(
           """
           {
@@ -38,7 +38,7 @@ class AccountUnreadSummaryTest {
   @Test
   fun `missing or negative interaction counts never create unread indicators`() {
     val summary =
-      BiliApi.parseInteractionUnreadSummary(
+      BiliInteractionApi.parseInteractionUnreadSummary(
         JSONObject("""{"code":0,"data":{"chat":-1,"reply":-2,"like":-3}}""")
       )
 
@@ -49,7 +49,7 @@ class AccountUnreadSummaryTest {
   @Test
   fun `like messages preserve comment target and pagination cursor`() {
     val page =
-      BiliApi.parseLikeMessagePage(
+      BiliInteractionApi.parseLikeMessagePage(
         JSONObject(
           """
           {
@@ -100,7 +100,7 @@ class AccountUnreadSummaryTest {
   @Test
   fun `parses all visible private-message unread categories`() {
     val count =
-      BiliApi.parsePrivateMessageUnreadCount(
+      BiliPrivateMessageApi.parsePrivateMessageUnreadCount(
         JSONObject(
           """
           {
@@ -126,7 +126,7 @@ class AccountUnreadSummaryTest {
   @Test
   fun `negative private-message counts are ignored`() {
     val count =
-      BiliApi.parsePrivateMessageUnreadCount(
+      BiliPrivateMessageApi.parsePrivateMessageUnreadCount(
         JSONObject("""{"code":0,"data":{"follow_unread":-3,"unfollow_unread":2}}""")
       )
 

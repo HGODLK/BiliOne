@@ -27,14 +27,12 @@ internal fun detectSimAvailability(context: Context): SimAvailability {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
               telephonyManager.activeModemCount
             } else {
-              @Suppress("DEPRECATION")
-              telephonyManager.phoneCount
+              @Suppress("DEPRECATION") telephonyManager.phoneCount
             }
           if (slotCount <= 0) emptyList()
           else (0 until slotCount).map(telephonyManager::getSimState)
         } else {
-          @Suppress("DEPRECATION")
-          listOf(telephonyManager.simState)
+          @Suppress("DEPRECATION") listOf(telephonyManager.simState)
         }
       classifySimAvailability(hasTelephony = true, simStates = states)
     }

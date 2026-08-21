@@ -81,15 +81,14 @@ class BiliSubtitleApiTest {
               {"from": 9.0, "to": 9.0, "content": "无效时间"}
             ]
           }
-          """.trimIndent()
+          """
+            .trimIndent()
         )
       )
 
     assertEquals(1, cues.size)
     assertEquals(
-      "WEBVTT\n\n" +
-        "00:00:04.140 --> 00:00:08.520\n" +
-        "第一行\n第二行 &lt;测试&gt; &amp;\n\n",
+      "WEBVTT\n\n" + "00:00:04.140 --> 00:00:08.520\n" + "第一行\n第二行 &lt;测试&gt; &amp;\n\n",
       BiliSubtitleApi.toWebVtt(cues),
     )
   }

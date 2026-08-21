@@ -43,10 +43,11 @@ class PrivateMessageHistoryNormalizationTest {
         withdrawTargetMessageKey = 100L,
       )
     val withdrawNotice =
-      message(id = 11L, key = 101L, type = 5, content = "100").copy(
-        withdrawn = true,
-        withdrawTargetMessageKey = 100L,
-      )
+      message(id = 11L, key = 101L, type = 5, content = "100")
+        .copy(
+          withdrawn = true,
+          withdrawTargetMessageKey = 100L,
+        )
 
     val result = normalizePrivateMessageHistory(listOf(original, withdrawnOriginal, withdrawNotice))
 

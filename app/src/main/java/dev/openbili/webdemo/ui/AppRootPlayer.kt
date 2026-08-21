@@ -3,29 +3,27 @@ package dev.openbili.webdemo.ui
 import android.content.Context
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.media3.common.Player
+import dev.openbili.webdemo.api.BiliReportApi
 import dev.openbili.webdemo.PlaybackProgressStore
 import dev.openbili.webdemo.PlayerState
 import dev.openbili.webdemo.PlayerViewModel
-import dev.openbili.webdemo.api.BiliApi
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Player interaction state that must survive recomposition while AppRoot moves between pages. */
-internal class AppRootPlayerSessionState(
-  initialShowDanmaku: Boolean = true,
-) {
+/** 在 AppRoot 于页面间移动时，必须跨重组存活的播放器交互状态。 */
+internal class AppRootPlayerSessionState(initialShowDanmaku: Boolean = true) {
   var currentPositionMs by mutableStateOf(0L)
   var scrubPreviewMs by mutableStateOf<Long?>(null)
   var pendingSeekTargetMs by mutableStateOf<Long?>(null)
@@ -37,7 +35,7 @@ internal class AppRootPlayerSessionState(
   var playerControlsVisible by mutableStateOf(true)
   var playbackEnded by mutableStateOf(false)
   var playbackSpeed by mutableStateOf(1f)
-  /** Increments only for intentional timeline changes, so danmaku can bypass clock smoothing. */
+  /** 只在有意的时间线变化时递增，让弹幕可以绕过时钟平滑。 */
   var danmakuPositionEpoch by mutableStateOf(0L)
     private set
 
@@ -66,10 +64,9 @@ internal class AppRootPlayerSessionState(
     seekConfirmationJob?.cancel()
     pendingSeekTargetMs = null
     val target = targetMs.coerceAtLeast(0L)
-    // A scrub pauses Media3, so the ordinary 200 ms player-position poll stops advancing the
-    // overlay. Each new preview target is therefore an explicit danmaku timeline update rather
-    // than waiting for the eventual committed seek; otherwise comments appear to disappear while
-    // the thumb is dragged and only return after release.
+    // 拖动会暂停 Media3，因此普通的 200 ms 播放器位置轮询不再推进覆盖层。每个新的
+    // 预览目标因此都是一次显式的弹幕时间线更新，而不是等待最终提交的 seek；否则
+    // 拖拽拇指时评论看似消失，只有松手后才回来。
     if (scrubPreviewMs != target) advanceDanmakuPositionEpoch()
     scrubPreviewMs = target
     requestScrubFrame(player, target, scope)
@@ -94,7 +91,7 @@ internal class AppRootPlayerSessionState(
     if (speedBeforeTemporaryBoost == null) {
       playerViewModel.exoPlayer?.setPlaybackSpeed(resolved)
     } else {
-      // Keep the long-press boost active, but make its release return to the newly selected speed.
+      // 保持长按加速生效，但让它的释放回到新选的速度。
       speedBeforeTemporaryBoost = resolved
     }
   }
@@ -107,7 +104,7 @@ internal class AppRootPlayerSessionState(
     playerViewModel.exoPlayer?.setPlaybackSpeed(1f)
   }
 
-  /** Keeps a restored parent's end overlay mounted while its media is prepared back at the end. */
+  /** 在媒体于结尾处重新准备期间，让恢复的父页保持其结束覆盖层挂载。 */
   fun restorePlaybackEnded(ended: Boolean) {
     playbackEnded = ended
     retainRestoredPlaybackEnd = ended
@@ -169,8 +166,8 @@ internal class AppRootPlayerSessionState(
     seekConfirmationJob?.cancel()
     player.seekTo(target)
     seekConfirmationJob = scope.launch {
-      // Remote DASH seeks are asynchronous. Keep the preview authoritative until Media3 reports
-      // the target, so the progress bar and danmaku do not jump back to an older polling sample.
+      // 远端 DASH seek 是异步的。保持预览权威直到 Media3 上报目标位置，
+      // 让进度条和弹幕不会跳回较旧的轮询采样。
       val deadline = System.nanoTime() + 1_500_000_000L
       delay(40)
       while (
@@ -201,10 +198,9 @@ internal class AppRootPlayerSessionState(
   }
 
   /**
-   * A paused ExoPlayer renders the frame reached by a seek, which makes the video follow the
-   * progress thumb in both directions. Pointer input can arrive at 120 Hz, so coalesce it to a
-   * small trailing stream instead of asking a remote DASH source to perform every intermediate
-   * seek. The progress bar and danmaku remain immediate through [scrubPreviewMs].
+   * 暂停的 ExoPlayer 会渲染 seek 到达的那一帧，让视频在拖拽进度拇指时双向跟随。
+   * 指针输入可以以 120 Hz 到达，因此把它合并成一小段尾随流，而不是要求远端 DASH
+   * 源执行每一个中间 seek。进度条和弹幕通过 [scrubPreviewMs] 保持即时。
    */
   private fun requestScrubFrame(player: Player, targetMs: Long, scope: CoroutineScope) {
     latestScrubFrameTargetMs = targetMs
@@ -217,14 +213,13 @@ internal class AppRootPlayerSessionState(
     }
 
     scrubFrameSeekJob?.cancel()
-    scrubFrameSeekJob =
-      scope.launch {
-        if (delayMs > 0L) delay(delayMs)
-        val latestTarget = latestScrubFrameTargetMs ?: return@launch
-        player.seekTo(latestTarget)
-        lastScrubFrameSeekAtNanos = System.nanoTime()
-        scrubFrameSeekJob = null
-      }
+    scrubFrameSeekJob = scope.launch {
+      if (delayMs > 0L) delay(delayMs)
+      val latestTarget = latestScrubFrameTargetMs ?: return@launch
+      player.seekTo(latestTarget)
+      lastScrubFrameSeekAtNanos = System.nanoTime()
+      scrubFrameSeekJob = null
+    }
   }
 
   private fun clearScrubFrameSeek() {
@@ -250,7 +245,7 @@ internal fun scrubFrameSeekDelayMs(lastSeekAtNanos: Long, nowNanos: Long): Long 
 }
 
 /**
- * Owns player preparation, polling, background pause, history reporting, and first-frame reveal.
+ * 负责播放器准备、轮询、后台暂停、历史上报和首帧展示。
  */
 @Composable
 internal fun AppRootPlayerEffects(
@@ -284,10 +279,9 @@ internal fun AppRootPlayerEffects(
 
   LaunchedEffect(selectedVideoId) { sessionState.resetSeek() }
 
-  val playbackMediaKey =
-    selectedVideoId?.let { id ->
-      "$id:${historyCid.takeIf { it > 0L } ?: bangumiEpisodeId.takeIf { it > 0L } ?: 0L}"
-    }
+  val playbackMediaKey = selectedVideoId?.let { id ->
+    "$id:${historyCid.takeIf { it > 0L } ?: bangumiEpisodeId.takeIf { it > 0L } ?: 0L}"
+  }
   LaunchedEffect(playbackMediaKey) {
     playbackMediaKey?.let { sessionState.resetPlaybackSpeedForMedia(playerViewModel, it) }
   }
@@ -395,7 +389,16 @@ internal fun AppRootPlayerEffects(
         return@LaunchedEffect
       }
       val player = playerViewModel.exoPlayer
-      if (player != null) {
+      if (
+        player != null &&
+          playerViewModel.isPlaybackIdentityActive(selectedVideoId, historyAid, historyCid) &&
+          dev.openbili.webdemo.isPlaybackSnapshotValid(
+            expectedMediaId = selectedVideoId,
+            actualMediaId = player.currentMediaItem?.mediaId,
+            playbackState = player.playbackState,
+            requireReady = true,
+          )
+      ) {
         val positionMs = player.currentPosition.coerceAtLeast(0L)
         PlaybackProgressStore.save(
           context.applicationContext,
@@ -408,7 +411,7 @@ internal fun AppRootPlayerEffects(
           withContext(Dispatchers.IO) {
             runCatching {
               if (bangumiSubType > 0 && bangumiEpisodeId > 0L && bangumiSeasonId > 0L) {
-                BiliApi.reportBangumiPlayback(
+                BiliReportApi.reportBangumiPlayback(
                   aid = historyAid,
                   cid = historyCid,
                   episodeId = bangumiEpisodeId,
@@ -419,7 +422,7 @@ internal fun AppRootPlayerEffects(
                   subType = bangumiSubType,
                 )
               } else {
-                BiliApi.reportPlayback(historyAid, historyCid, positionMs / 1000L)
+                BiliReportApi.reportPlayback(historyAid, historyCid, positionMs / 1000L)
               }
             }
           }

@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -16,10 +17,13 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -35,6 +39,15 @@ fun LoginSheet(
   onRetry: () -> Unit,
 ) {
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+  val controlMode = LocalControlMode.current
+  val closeFocusRequester = remember { FocusRequester() }
+
+  LaunchedEffect(controlMode, loginState::class) {
+    if (controlMode) {
+      androidx.compose.runtime.withFrameNanos {}
+      runCatching { closeFocusRequester.requestFocus() }
+    }
+  }
 
   ModalBottomSheet(
     onDismissRequest = onDismiss,
@@ -82,7 +95,7 @@ fun LoginSheet(
             fontWeight = FontWeight.Medium,
           )
           HorizontalDivider()
-          TextButton(onClick = onRetry) { Text("重新获取二维码") }
+          ControlSheetButton(onClick = onRetry) { Text("重新获取二维码") }
         }
         is LoginState.AppQrReady -> {
           QrImage(qrInfo = state.qrInfo)
@@ -109,7 +122,7 @@ fun LoginSheet(
             textAlign = TextAlign.Center,
           )
           HorizontalDivider()
-          TextButton(onClick = onRetry) { Text("重新获取二维码") }
+          ControlSheetButton(onClick = onRetry) { Text("重新获取二维码") }
         }
         is LoginState.Success -> {
           Text(
@@ -136,7 +149,7 @@ fun LoginSheet(
             style = MaterialTheme.typography.bodyMedium,
             textAlign = TextAlign.Center,
           )
-          TextButton(onClick = onRetry) { Text("重试") }
+          ControlSheetButton(onClick = onRetry) { Text("重试") }
         }
         is LoginState.AppFailed -> {
           Text(
@@ -149,11 +162,38 @@ fun LoginSheet(
             style = MaterialTheme.typography.bodyMedium,
             textAlign = TextAlign.Center,
           )
-          TextButton(onClick = onRetry) { Text("重试") }
+          ControlSheetButton(onClick = onRetry) { Text("重试") }
         }
+      }
+      TextButton(
+        onClick = onDismiss,
+        modifier =
+          Modifier.focusRequester(closeFocusRequester)
+            .controlFocusOutline(
+              shape = RoundedCornerShape(20.dp),
+              color = MaterialTheme.colorScheme.primary,
+            ),
+      ) {
+        Text("关闭")
       }
     }
   }
+}
+
+@Composable
+private fun ControlSheetButton(
+  onClick: () -> Unit,
+  content: @Composable RowScope.() -> Unit,
+) {
+  TextButton(
+    onClick = onClick,
+    modifier =
+      Modifier.controlFocusOutline(
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.primary,
+      ),
+    content = content,
+  )
 }
 
 @Composable

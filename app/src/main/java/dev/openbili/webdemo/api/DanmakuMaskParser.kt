@@ -10,11 +10,10 @@ import kotlin.math.ceil
 import kotlin.math.hypot
 
 /**
- * Converts Bilibili's webmask resource into a compact timeline of normalized allowed-background
- * contours.
+ * 把 B 站 webmask 资源解析成"归一化允许弹幕背景轮廓"的紧凑时间线。
  *
- * Parsing, gzip inflation, SVG path decoding, and rasterization are intended to run off the main
- * thread. The player only performs a binary time lookup and applies a cached Canvas clip path.
+ * 解析、gzip 解压、SVG 路径解码与降采样都应在主线程之外执行；播放器只做一次二分
+ * 时间查找并套用缓存的 Canvas 裁剪路径。
  */
 internal object DanmakuMaskParser {
   fun parse(resource: DanmakuMaskResource): DanmakuMaskTimeline? =
@@ -54,8 +53,8 @@ internal object DanmakuMaskParser {
 
     fun flushPendingFrame() {
       val svgData = pendingSvgData ?: return
-      // A webmask can be supplied above the renderer's cadence. Retain at most one source frame
-      // per 1/60-second slot so smart blocking never creates more geometry updates than danmaku.
+      // webmask 的源帧率可能高于渲染节奏：每个 1/60 秒槽位最多保留一帧源数据，
+      // 保证智能防挡产生的几何更新频率不会超过弹幕本身。
       val sampleSlot = pendingTimeMs.toLong() * SMART_MASK_SAMPLE_FPS / 1_000L
       if (sampleSlot == lastOutputSampleSlot) {
         pendingTimeMs = -1
@@ -100,13 +99,13 @@ internal object DanmakuMaskParser {
         sourceFrameCount += 1
         if (timeMs >= 0) {
           if (timeMs == pendingTimeMs) {
-            // Segment zero can contain pre-roll frames clamped to the same timestamp. The final
-            // duplicate is the frame that actually belongs at that timestamp.
+            // 第 0 段可能包含被钳到同一时间戳的 pre-roll 帧；最后一个重复帧才是真正
+            // 属于该时间戳的帧。
             pendingSvgData = inflated.copyOfRange(dataStart, dataEnd)
           } else {
             flushPendingFrame()
-            // dm_mask normally carries ~30 fps source timestamps. Keep each distinct 60 Hz
-            // sample slot so moving subjects never fall back to the old 100 ms stepping.
+            // dm_mask 通常携带约 30fps 的源时间戳：保留每个独立的 60Hz 采样槽位，
+            // 让运动主体不会退回旧的 100ms 步进。
             pendingTimeMs = timeMs
             pendingSvgData = inflated.copyOfRange(dataStart, dataEnd)
           }
@@ -137,17 +136,17 @@ internal object DanmakuMaskParser {
     return decodeSvgPath(svg)
   }
 
-  /** Keeps the SVG silhouette itself; rasterization is intentionally avoided to prevent block edges. */
+  /**
+   * 只保留 SVG 轮廓本身；刻意不做光栅化，避免出现块状锯齿边缘。
+   */
   private fun decodeSvgPath(svg: String): DecodedMask? {
     val viewBoxMatch = VIEW_BOX_REGEX.find(svg) ?: return null
     val minX = viewBoxMatch.groupValues[1].toFloatOrNull() ?: return null
     val minY = viewBoxMatch.groupValues[2].toFloatOrNull() ?: return null
-    val viewWidth =
-      viewBoxMatch.groupValues[3].toFloatOrNull()?.takeIf { it > 0f } ?: return null
-    val viewHeight =
-      viewBoxMatch.groupValues[4].toFloatOrNull()?.takeIf { it > 0f } ?: return null
+    val viewWidth = viewBoxMatch.groupValues[3].toFloatOrNull()?.takeIf { it > 0f } ?: return null
+    val viewHeight = viewBoxMatch.groupValues[4].toFloatOrNull()?.takeIf { it > 0f } ?: return null
     val pathMatches = PATH_DATA_REGEX.findAll(svg).toList()
-    // A valid path-less SVG explicitly means that this sample has no protected subject.
+    // 合法但无 path 的 SVG 明确表示该采样帧没有受保护主体。
     if (pathMatches.isEmpty()) return DecodedMask()
 
     val evenOdd = svg.contains("fill-rule=\"evenodd\"", ignoreCase = true)
@@ -169,7 +168,7 @@ internal object DanmakuMaskParser {
         .takeIf(List<FloatArray>::isNotEmpty)
     }
     val contours = flattenedPaths.flatten()
-    // A declared path that cannot be decoded is a bad sample, not an intentional empty mask.
+    // 声明了 path 却解不出轮廓属于坏采样帧，而不是"有意为空的蒙版"。
     if (contours.isEmpty()) return null
     val packed = ArrayList<Float>()
     contours.forEach { contour ->
@@ -181,9 +180,8 @@ internal object DanmakuMaskParser {
     }
     packed.removeAt(packed.lastIndex)
     packed.removeAt(packed.lastIndex)
-    // The filled SVG path always describes the background where danmaku may be shown. The
-    // transparent remainder is the protected subject, even when a close-up leaves less than half
-    // of the frame as background.
+    // SVG 填充路径描述的是"允许显示弹幕的背景区域"；透明剩余部分是受保护主体——
+    // 即使特写镜头让背景不足半帧也按此规则处理。
     return DecodedMask(packed.toFloatArray(), evenOddFill = evenOdd)
   }
 
@@ -194,9 +192,8 @@ internal object DanmakuMaskParser {
   ): List<FloatArray> {
     val nodes =
       runCatching {
-          // Bilibili's Potrace output wraps long path commands across multiple lines. AndroidX's
-          // PathParser treats a line break between two numeric parameters as part of one number,
-          // rejects the whole path, and leaves only incidental tiny paths behind.
+          // B 站 Potrace 输出会把长路径命令折成多行。AndroidX PathParser 会把两个数字
+          // 参数之间的换行当成一个数字的一部分，从而拒绝整条路径，只留下零星小路径。
           PathParser.createNodesFromPathData(pathData.replace(PATH_DATA_WHITESPACE_REGEX, " "))
         }
         .getOrNull() ?: return emptyList()
@@ -458,8 +455,8 @@ internal object DanmakuMaskParser {
         }
         'A',
         'a' -> {
-          // Potrace-generated Bilibili masks use lines and cubic curves. Keep uncommon SVG arcs
-          // safely bounded by their endpoint instead of rejecting the entire frame.
+          // Potrace 生成的 B 站蒙版只使用直线与三次曲线：少见的 SVG 圆弧按端点做安全
+          // 有界处理，而不是拒绝整帧。
           while (index + 6 < parameters.size) {
             currentX =
               if (command == 'a') currentX + parameters[index + 5] else parameters[index + 5]

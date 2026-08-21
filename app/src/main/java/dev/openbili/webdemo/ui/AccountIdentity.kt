@@ -2,6 +2,8 @@ package dev.openbili.webdemo.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.LocalIndication
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -26,6 +28,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.boundsInRoot
@@ -38,8 +41,8 @@ import dev.openbili.webdemo.api.UserInfo
 private val RootIdentityWidth = 218.dp
 
 /**
- * Shared root-page header. Keeping the system inset and the 64 dp content row here prevents Home
- * and My from applying subtly different TopAppBar/sidebar measurements to the same identity block.
+ * 共享的根页头部。把系统内边距和 64 dp 内容行保留在这里，防止首页和我的页对同一个
+ * 标识块应用细微不同的 TopAppBar/侧栏测量。
  */
 @Composable
 fun RootAccountHeader(
@@ -48,6 +51,9 @@ fun RootAccountHeader(
   modifier: Modifier = Modifier,
   containerColor: Color = MaterialTheme.colorScheme.background,
   showUid: Boolean = true,
+  focusEnabled: Boolean = true,
+  clickIndicationEnabled: Boolean = true,
+  identityModifier: Modifier = Modifier,
   nameStyle: TextStyle? = null,
   trailingContent: @Composable RowScope.() -> Unit = {},
 ) {
@@ -65,28 +71,42 @@ fun RootAccountHeader(
       user = user,
       onClick = onClick,
       modifier =
-        if (showUid) Modifier.width(RootIdentityWidth)
-        else Modifier.widthIn(max = RootIdentityWidth),
+        identityModifier.then(
+          if (showUid) Modifier.width(RootIdentityWidth)
+          else Modifier.widthIn(max = RootIdentityWidth)
+        ),
       showUid = showUid,
+      focusEnabled = focusEnabled,
+      clickIndicationEnabled = clickIndicationEnabled,
       nameStyle = nameStyle,
     )
     trailingContent()
   }
 }
 
-/** Shared root-page account header so Home and My keep identical identity geometry. */
+/** 共享的根页账号头部，让首页和我的页保持完全一致的标识几何形状。 */
 @Composable
 fun AccountIdentity(
   user: UserInfo,
   onClick: (Rect) -> Unit,
   modifier: Modifier = Modifier,
   showUid: Boolean = true,
+  focusEnabled: Boolean = true,
+  clickIndicationEnabled: Boolean = true,
   nameStyle: TextStyle? = null,
 ) {
   var avatarBounds by remember { mutableStateOf(Rect.Zero) }
+  val interactionSource = remember { MutableInteractionSource() }
   Row(
     modifier =
-      modifier.height(64.dp).clip(RoundedCornerShape(12.dp)).clickable { onClick(avatarBounds) },
+      modifier
+        .height(64.dp)
+        .focusProperties { canFocus = focusEnabled }
+        .clip(RoundedCornerShape(12.dp))
+        .clickable(
+          interactionSource = interactionSource,
+          indication = if (clickIndicationEnabled) LocalIndication.current else null,
+        ) { onClick(avatarBounds) },
     verticalAlignment = Alignment.CenterVertically,
   ) {
     Box(

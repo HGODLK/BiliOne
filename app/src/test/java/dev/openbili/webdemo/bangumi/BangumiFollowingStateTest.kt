@@ -12,6 +12,60 @@ import org.junit.Test
 
 class BangumiFollowingStateTest {
   @Test
+  fun `return anchor survives page recreation only for its category session`() {
+    val viewModel = BangumiExploreViewModel()
+    val anchor =
+      BangumiExploreReturnAnchor(
+        category = BangumiExploreCategory.ANIME,
+        sessionId = 4L,
+        itemStableId = "season-42",
+        firstVisibleItemIndex = 18,
+        firstVisibleItemScrollOffset = 36,
+      )
+
+    viewModel.rememberReturnAnchor(anchor)
+
+    assertEquals(anchor, viewModel.returnAnchor(BangumiExploreCategory.ANIME, 4L))
+    assertEquals(null, viewModel.returnAnchor(BangumiExploreCategory.GUOCHUANG, 4L))
+    assertEquals(null, viewModel.returnAnchor(BangumiExploreCategory.ANIME, 5L))
+
+    viewModel.consumeReturnAnchor(anchor)
+    assertEquals(null, viewModel.returnAnchor(BangumiExploreCategory.ANIME, 4L))
+  }
+
+  @Test
+  fun `return anchor keeps exact following scroll and latest matching source bounds`() {
+    val viewModel = BangumiExploreViewModel()
+    val anchor =
+      BangumiExploreReturnAnchor(
+        category = BangumiExploreCategory.ANIME,
+        sessionId = 8L,
+        itemStableId = "season-42",
+        firstVisibleItemIndex = 2,
+        firstVisibleItemScrollOffset = 24,
+      )
+    viewModel.rememberReturnAnchor(anchor)
+
+    val followingScroll = BangumiExploreFollowingScrollAnchor(5, 37)
+    val sourceBounds = BangumiExploreSourceBounds(120f, 80f, 440f, 260f)
+    viewModel.updateReturnAnchorFollowingScroll("season-42", followingScroll)
+    viewModel.updateReturnAnchorSourceBounds("season-42", sourceBounds)
+    viewModel.updateReturnAnchorSourceBounds(
+      "another-season",
+      BangumiExploreSourceBounds(0f, 0f, 10f, 10f),
+    )
+
+    val updated = viewModel.returnAnchor(BangumiExploreCategory.ANIME, 8L)
+    assertEquals(followingScroll, updated?.followingScrollAnchor)
+    assertEquals(sourceBounds, updated?.sourceBounds)
+    assertEquals(updated, viewModel.returnAnchorForItem("season-42"))
+
+    // 锚点的几何信息会持续更新，因此消费时按稳定身份而不是旧 data class 值匹配。
+    viewModel.consumeReturnAnchor(anchor)
+    assertEquals(null, viewModel.returnAnchor(BangumiExploreCategory.ANIME, 8L))
+  }
+
+  @Test
   fun `anime and guochuang following components expose only their own cards and flags`() {
     val animeCard = SpaceContentCard(id = "anime", title = "番剧")
     val guochuangCard = SpaceContentCard(id = "guochuang", title = "国创")

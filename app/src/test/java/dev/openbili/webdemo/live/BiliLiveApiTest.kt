@@ -4,8 +4,8 @@ import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Test
 import org.junit.runner.RunWith
+import org.junit.Test
 import org.robolectric.RobolectricTestRunner
 
 @RunWith(RobolectricTestRunner::class)
@@ -90,6 +90,46 @@ class BiliLiveApiTest {
     assertEquals(5050L, rooms.single().roomId)
     assertEquals("2.5万人气", rooms.single().watchedText)
     assertTrue(rooms.single().keyframeUrl.orEmpty().contains("keyframe.jpg"))
+  }
+
+  @Test
+  fun liveHomeRecommendationsPreferHeroListWhenHomepageAlsoContainsFollowing() {
+    val rooms =
+      BiliLiveApi.parseLiveHomeRecommendations(
+        JSONObject(
+          """
+          {
+            "data": {
+              "recommend_room_list": [
+                {
+                  "roomid": 5050,
+                  "uid": 433351,
+                  "title": "网页顶部推荐",
+                  "uname": "推荐主播",
+                  "status": 1
+                }
+              ],
+              "room_list": [
+                {
+                  "module_info": {"id": 13},
+                  "list": [
+                    {
+                      "roomid": 6060,
+                      "title": "我的关注",
+                      "uname": "关注主播",
+                      "status": 1
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+          """
+        )
+      )
+
+    assertEquals(listOf(5050L), rooms.map { it.roomId })
+    assertEquals("网页顶部推荐", rooms.single().title)
   }
 
   @Test
@@ -243,6 +283,8 @@ class BiliLiveApiTest {
                     "user_cover": "//i0.hdslb.com/cover.jpg",
                     "system_cover": "//i0.hdslb.com/keyframe.jpg",
                     "face": "//i0.hdslb.com/face.jpg",
+                    "area_v2_parent_id": 1,
+                    "area_v2_id": 2,
                     "area_v2_parent_name": "单机游戏",
                     "area_v2_name": "主机游戏"
                   }
@@ -259,6 +301,8 @@ class BiliLiveApiTest {
     assertEquals(1, response.rooms.size)
     val room = response.rooms.single()
     assertEquals(5050L, room.roomId)
+    assertEquals(1, room.parentAreaId)
+    assertEquals(2, room.areaId)
     assertEquals("单机游戏", room.parentAreaName)
     assertEquals("主机游戏", room.areaName)
     assertEquals("12.3万人气", room.watchedText)

@@ -22,7 +22,7 @@ internal data class StoredBangumiHistory(
   val viewedAt: Long,
 )
 
-/** Local PGC history used immediately while Bilibili's cursor history is still catching up. */
+/** 本地 PGC 历史，在 B 站游标历史尚未追上时立即使用。 */
 internal object BangumiLocalHistoryStore {
   private const val PREFERENCES = "bangumi_local_history"
   private const val KEY_ITEMS = "items"
@@ -91,9 +91,7 @@ internal object BangumiLocalHistoryStore {
   @Synchronized
   fun read(context: Context): List<StoredBangumiHistory> {
     val raw =
-      context
-        .getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
-        .getString(KEY_ITEMS, null)
+      context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).getString(KEY_ITEMS, null)
         ?: return emptyList()
     val array = runCatching { JSONArray(raw) }.getOrNull() ?: return emptyList()
     return buildList {

@@ -20,9 +20,8 @@ import dev.openbili.webdemo.feed.LoadedFeedImageRegistry
 import dev.openbili.webdemo.feed.LocalFeedImageLoadPolicy
 
 /**
- * Small avatar requests are used in several scrolling surfaces. Keeping them software-backed avoids
- * a hardware-pixel readback when a surrounding Compose layer is recorded for a transition. The
- * request is still bounded to the displayed size, so this does not increase image memory.
+ * 小型头像请求用于多个滚动表面。保持其软件后备，可在周围 Compose 图层为转场而录制时
+ * 避免一次硬件像素回读。请求仍受限于显示尺寸，因此不会增加图片内存。
  */
 @Composable
 fun AvatarImage(

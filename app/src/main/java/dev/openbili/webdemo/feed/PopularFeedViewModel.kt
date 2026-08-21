@@ -2,17 +2,17 @@ package dev.openbili.webdemo.feed
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import dev.openbili.webdemo.api.BiliApi
+import dev.openbili.webdemo.api.BiliFeedApi
 import dev.openbili.webdemo.api.FeedCard
 import dev.openbili.webdemo.api.FeedResponse
 import dev.openbili.webdemo.api.PopularPeriod
 import java.util.EnumMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -60,12 +60,13 @@ private data class PopularCacheKey(
   val variant: Int,
 )
 
-/** Public popular page with the five sections exposed by Bilibili's web page. */
+/** 公开热门页模型：承载 B 站网页暴露的五个分类与各自分页缓存。 */
 class PopularFeedViewModel : ViewModel() {
   private val _state = MutableStateFlow(PopularFeedUiState())
   val state: StateFlow<PopularFeedUiState> = _state.asStateFlow()
 
-  private val cache = EnumMap<PopularSection, MutableMap<Int, List<FeedItem>>>(PopularSection::class.java)
+  private val cache =
+    EnumMap<PopularSection, MutableMap<Int, List<FeedItem>>>(PopularSection::class.java)
   private var allPage = 1
   private var allNoMore = false
   private var generation = 0L
@@ -81,10 +82,8 @@ class PopularFeedViewModel : ViewModel() {
     loadJob?.cancel()
     val next =
       when (section) {
-        // Keep the already loaded comprehensive list on screen. Previously this branch retained
-        // the loading state of the page being left (for example, 入站必刷), which made a quick
-        // switch back look like the tab had stopped responding until another network response
-        // arrived.
+        // 把已加载的综合列表留在屏幕上。旧实现会在离开的页面（例如入站必刷）上
+        // 保留加载态，让快速切回看起来像标签卡死，直到下一次网络响应到达。
         PopularSection.ALL ->
           _state.value.copy(
             section = section,
@@ -180,103 +179,100 @@ class PopularFeedViewModel : ViewModel() {
     val requestState = _state.value
     val requestGeneration = ++generation
     val section = requestState.section
-    loadJob =
-      viewModelScope.launch {
-        try {
-          var weeklyPeriods = requestState.weeklyPeriods
-          var selectedWeeklyNumber = requestState.selectedWeeklyNumber
-          var musicPeriods = requestState.musicPeriods
-          var selectedMusicListId = requestState.selectedMusicListId
-          val requestedPage = allPage
-          val response =
-            withContext(Dispatchers.IO) {
-              when (section) {
-                PopularSection.ALL -> BiliApi.getPopularFeed(requestedPage)
-                PopularSection.WEEKLY -> {
-                  if (weeklyPeriods.isEmpty()) weeklyPeriods = BiliApi.getPopularWeeklyPeriods()
-                  selectedWeeklyNumber =
-                    selectedWeeklyNumber ?: weeklyPeriods.firstOrNull()?.id
-                  selectedWeeklyNumber?.let(BiliApi::getPopularWeekly) ?: FeedResponse(emptyList())
-                }
-                PopularSection.PRECIOUS -> BiliApi.getPopularPrecious()
-                PopularSection.RANKING -> BiliApi.getPopularRanking(requestState.rankCategory.rid)
-                PopularSection.MUSIC -> {
-                  if (musicPeriods.isEmpty()) musicPeriods = BiliApi.getPopularMusicPeriods()
-                  selectedMusicListId = selectedMusicListId ?: musicPeriods.firstOrNull()?.id
-                  selectedMusicListId?.let(BiliApi::getPopularMusic) ?: FeedResponse(emptyList())
-                }
+    loadJob = viewModelScope.launch {
+      try {
+        var weeklyPeriods = requestState.weeklyPeriods
+        var selectedWeeklyNumber = requestState.selectedWeeklyNumber
+        var musicPeriods = requestState.musicPeriods
+        var selectedMusicListId = requestState.selectedMusicListId
+        val requestedPage = allPage
+        val response =
+          withContext(Dispatchers.IO) {
+            when (section) {
+              PopularSection.ALL -> BiliFeedApi.getPopularFeed(requestedPage)
+              PopularSection.WEEKLY -> {
+                if (weeklyPeriods.isEmpty()) weeklyPeriods = BiliFeedApi.getPopularWeeklyPeriods()
+                selectedWeeklyNumber = selectedWeeklyNumber ?: weeklyPeriods.firstOrNull()?.id
+                selectedWeeklyNumber?.let(BiliFeedApi::getPopularWeekly) ?: FeedResponse(emptyList())
+              }
+              PopularSection.PRECIOUS -> BiliFeedApi.getPopularPrecious()
+              PopularSection.RANKING -> BiliFeedApi.getPopularRanking(requestState.rankCategory.rid)
+              PopularSection.MUSIC -> {
+                if (musicPeriods.isEmpty()) musicPeriods = BiliFeedApi.getPopularMusicPeriods()
+                selectedMusicListId = selectedMusicListId ?: musicPeriods.firstOrNull()?.id
+                selectedMusicListId?.let(BiliFeedApi::getPopularMusic) ?: FeedResponse(emptyList())
               }
             }
-          if (requestGeneration != generation || _state.value.section != section) return@launch
-          val incoming = response.cards.map(::toFeedItem)
-          if (section == PopularSection.ALL) {
-            if (incoming.isEmpty()) {
-              allNoMore = true
-              if (refresh && cachedItems(section, 0).isEmpty()) {
-                _state.value = _state.value.copy(content = FeedUiState.Empty("暂时没有热门内容"))
-              } else {
-                val existing = _state.value.content as? FeedUiState.Content
-                _state.value =
-                  _state.value.copy(
-                    content =
-                      existing?.copy(
-                        isRefreshing = false,
-                        isLoadingMore = false,
-                        refreshMessage = if (refresh) "刷新结果为空，已保留原内容" else null,
-                      )
-                        ?: FeedUiState.Empty("暂时没有热门内容")
-                  )
-              }
-              return@launch
+          }
+        if (requestGeneration != generation || _state.value.section != section) return@launch
+        val incoming = response.cards.map(::toFeedItem)
+        if (section == PopularSection.ALL) {
+          if (incoming.isEmpty()) {
+            allNoMore = true
+            if (refresh && cachedItems(section, 0).isEmpty()) {
+              _state.value = _state.value.copy(content = FeedUiState.Empty("暂时没有热门内容"))
+            } else {
+              val existing = _state.value.content as? FeedUiState.Content
+              _state.value =
+                _state.value.copy(
+                  content =
+                    existing?.copy(
+                      isRefreshing = false,
+                      isLoadingMore = false,
+                      refreshMessage = if (refresh) "刷新结果为空，已保留原内容" else null,
+                    ) ?: FeedUiState.Empty("暂时没有热门内容")
+                )
             }
-          } else if (incoming.isEmpty()) {
-            _state.value = _state.value.copy(content = FeedUiState.Empty("暂时没有可展示的热门内容"))
             return@launch
           }
-
-          val variant =
-            when (section) {
-              PopularSection.ALL, PopularSection.PRECIOUS -> 0
-              PopularSection.WEEKLY -> selectedWeeklyNumber ?: 0
-              PopularSection.RANKING -> requestState.rankCategory.rid
-              PopularSection.MUSIC -> selectedMusicListId ?: 0
-            }
-          val currentItems = cache[section].orEmpty()[variant].orEmpty()
-          val merged =
-            if (section == PopularSection.ALL && !refresh) {
-              val seen = currentItems.mapTo(HashSet()) { it.videoUrl }
-              (currentItems + incoming.filter { seen.add(it.videoUrl) })
-            } else {
-              incoming
-            }
-          cache[section]!![variant] = merged
-          if (section == PopularSection.ALL) {
-            allPage = requestedPage + 1
-          }
-          _state.value =
-            _state.value.copy(
-              content = FeedUiState.Content(items = merged),
-              weeklyPeriods = weeklyPeriods,
-              selectedWeeklyNumber = selectedWeeklyNumber,
-              musicPeriods = musicPeriods,
-              selectedMusicListId = selectedMusicListId,
-            )
-        } catch (error: Throwable) {
-          if (error is CancellationException) throw error
-          if (requestGeneration != generation || _state.value.section != section) return@launch
-          val existing = _state.value.content as? FeedUiState.Content
-          _state.value =
-            _state.value.copy(
-              content =
-                existing?.copy(
-                  isRefreshing = false,
-                  isLoadingMore = false,
-                  refreshMessage = "加载失败：${error.message ?: "请稍后重试"}",
-                )
-                  ?: FeedUiState.NetworkError(error.message ?: "加载热门失败")
-            )
+        } else if (incoming.isEmpty()) {
+          _state.value = _state.value.copy(content = FeedUiState.Empty("暂时没有可展示的热门内容"))
+          return@launch
         }
+
+        val variant =
+          when (section) {
+            PopularSection.ALL,
+            PopularSection.PRECIOUS -> 0
+            PopularSection.WEEKLY -> selectedWeeklyNumber ?: 0
+            PopularSection.RANKING -> requestState.rankCategory.rid
+            PopularSection.MUSIC -> selectedMusicListId ?: 0
+          }
+        val currentItems = cache[section].orEmpty()[variant].orEmpty()
+        val merged =
+          if (section == PopularSection.ALL && !refresh) {
+            val seen = currentItems.mapTo(HashSet()) { it.videoUrl }
+            (currentItems + incoming.filter { seen.add(it.videoUrl) })
+          } else {
+            incoming
+          }
+        cache[section]!![variant] = merged
+        if (section == PopularSection.ALL) {
+          allPage = requestedPage + 1
+        }
+        _state.value =
+          _state.value.copy(
+            content = FeedUiState.Content(items = merged),
+            weeklyPeriods = weeklyPeriods,
+            selectedWeeklyNumber = selectedWeeklyNumber,
+            musicPeriods = musicPeriods,
+            selectedMusicListId = selectedMusicListId,
+          )
+      } catch (error: Throwable) {
+        if (error is CancellationException) throw error
+        if (requestGeneration != generation || _state.value.section != section) return@launch
+        val existing = _state.value.content as? FeedUiState.Content
+        _state.value =
+          _state.value.copy(
+            content =
+              existing?.copy(
+                isRefreshing = false,
+                isLoadingMore = false,
+                refreshMessage = "加载失败：${error.message ?: "请稍后重试"}",
+              ) ?: FeedUiState.NetworkError(error.message ?: "加载热门失败")
+          )
       }
+    }
   }
 
   private fun cachedContent(section: PopularSection, variant: Int?): FeedUiState =

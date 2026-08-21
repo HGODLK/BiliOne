@@ -23,7 +23,8 @@ class FeedCardParserTest {
               "face": "//i2.hdslb.com/bfs/face/avatar.jpg@128w_128h_1c_1s.webp"
             }
           }
-          """.trimIndent()
+          """
+            .trimIndent()
         )
       )
 

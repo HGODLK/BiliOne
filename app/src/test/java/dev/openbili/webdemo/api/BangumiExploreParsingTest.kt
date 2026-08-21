@@ -31,10 +31,11 @@ class BangumiExploreParsingTest {
             }]}
           ]}
         }
-        """.trimIndent()
+        """
+          .trimIndent()
       )
 
-    val page = BiliApi.parseBangumiExplorePage(response, BangumiExploreCategory.ANIME)
+    val page = BiliBangumiApi.parseBangumiExplorePage(response, BangumiExploreCategory.ANIME)
 
     assertEquals(listOf("热门推荐", "排行榜"), page.sections.map { it.title })
     assertEquals(BangumiExploreSectionKind.HOT, page.sections[0].kind)
@@ -58,11 +59,12 @@ class BangumiExploreParsingTest {
             }]
           }]
         }]}}}
-        """.trimIndent()
+        """
+          .trimIndent()
       )
 
     val item =
-      BiliApi.parseBangumiExplorePage(response, BangumiExploreCategory.ANIME)
+      BiliBangumiApi.parseBangumiExplorePage(response, BangumiExploreCategory.ANIME)
         .sections
         .single()
         .items
@@ -74,7 +76,10 @@ class BangumiExploreParsingTest {
     assertTrue(item.coverUrl.startsWith("https://"))
     assertEquals(
       BangumiExploreSectionKind.TIMELINE,
-      BiliApi.parseBangumiExplorePage(response, BangumiExploreCategory.ANIME).sections.single().kind,
+      BiliBangumiApi.parseBangumiExplorePage(response, BangumiExploreCategory.ANIME)
+        .sections
+        .single()
+        .kind,
     )
   }
 
@@ -88,12 +93,24 @@ class BangumiExploreParsingTest {
             "card_style":"v_card","rating":"9.9","rating_count":123,
             "link":"https://www.bilibili.com/bangumi/play/ss404"}]
         }]}]}}
-        """.trimIndent()
+        """
+          .trimIndent()
       )
 
-    val item = BiliApi.parseBangumiExplorePage(response, BangumiExploreCategory.ANIME).sections.single().items.single()
+    val item =
+      BiliBangumiApi.parseBangumiExplorePage(response, BangumiExploreCategory.ANIME)
+        .sections
+        .single()
+        .items
+        .single()
 
-    assertEquals(BangumiExploreSectionKind.FEED, BiliApi.parseBangumiExplorePage(response, BangumiExploreCategory.ANIME).sections.single().kind)
+    assertEquals(
+      BangumiExploreSectionKind.FEED,
+      BiliBangumiApi.parseBangumiExplorePage(response, BangumiExploreCategory.ANIME)
+        .sections
+        .single()
+        .kind,
+    )
     assertEquals(BangumiExploreCardStyle.POSTER, item.style)
     assertEquals("https://i0.hdslb.com/recommend.png", item.coverUrl)
     assertEquals(9.9, item.rating ?: 0.0, 0.001)
@@ -108,7 +125,7 @@ class BangumiExploreParsingTest {
         JSONObject()
           .put("title", "推荐$index")
           .put("cover", "//i0.hdslb.com/feed-$index.png")
-          .put("link", "https://www.bilibili.com/bangumi/play/ss${index + 1}"),
+          .put("link", "https://www.bilibili.com/bangumi/play/ss${index + 1}")
       )
     }
     val response =
@@ -116,15 +133,20 @@ class BangumiExploreParsingTest {
         .put("code", 0)
         .put(
           "data",
-          JSONObject().put(
-            "modules",
-            JSONArray().put(JSONObject().put("style", "web_feed_v3").put("items", feedItems)),
-          ),
+          JSONObject()
+            .put(
+              "modules",
+              JSONArray().put(JSONObject().put("style", "web_feed_v3").put("items", feedItems)),
+            ),
         )
 
     assertEquals(
       28,
-      BiliApi.parseBangumiExplorePage(response, BangumiExploreCategory.ANIME).sections.single().items.size,
+      BiliBangumiApi.parseBangumiExplorePage(response, BangumiExploreCategory.ANIME)
+        .sections
+        .single()
+        .items
+        .size,
     )
   }
 }

@@ -35,6 +35,7 @@ import coil3.imageLoader
 import coil3.request.ImageRequest
 import coil3.request.allowHardware
 import dev.openbili.webdemo.R
+import dev.openbili.webdemo.DevicePerformancePolicy
 import dev.openbili.webdemo.api.DANMAKU_COLORFUL_VIP_GRADIENT
 import dev.openbili.webdemo.api.DanmakuInlineEmote
 import dev.openbili.webdemo.api.DanmakuItem
@@ -90,7 +91,7 @@ internal fun splitInlineDanmaku(
 internal fun danmakuViewportCornerRadiusPx(fullscreen: Boolean, density: Float): Float =
   if (fullscreen) 0f else PLAYER_CORNER_RADIUS_DP * density.coerceAtLeast(0f)
 
-/** A main-thread player sample that can be safely advanced by the danmaku render thread. */
+/** 一个主线程播放器采样，可被弹幕渲染线程安全推进。 */
 internal data class DanmakuPlaybackClockSnapshot(
   val positionMs: Long,
   val sampledAtRealtimeNs: Long,
@@ -121,16 +122,16 @@ internal data class DanmakuPlaybackClockSnapshot(
 }
 
 /**
- * A PlayerView-native danmaku layer.
+ * 一个基于 PlayerView 原生层的弹幕层。
  *
- * Keeping this view in PlayerView's root overlay covers the full player, including portrait-video
- * sidebars, while the smart-mask path remains mapped to Media3's real content frame.
+ * 把该视图放在 PlayerView 的根覆盖层中可以盖住整个播放器（包括竖屏视频的侧边栏），
+ * 而智能蒙版路径仍然映射到 Media3 的真实内容帧。
  */
 class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder.Callback {
   /**
-   * State used by Canvas rendering is guarded as one unit. UI callbacks only hold this lock for
-   * infrequent configuration/lifecycle changes; the continuous frame loop owns it on the dedicated
-   * render thread, so Compose scrolling never executes danmaku drawing work.
+   * Canvas 渲染使用的状态作为一个整体受锁保护。UI 回调只在不频繁的配置/生命周期变更时
+   * 短暂持有该锁；连续帧循环在专用渲染线程上持有它，因此 Compose 滚动永远不会执行弹幕
+   * 绘制工作。
    */
   private val renderStateLock = Any()
   private val density = resources.displayMetrics.density
@@ -176,6 +177,7 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
   @Volatile private var playbackClockSnapshot = DanmakuPlaybackClockSnapshot.Initial
   private var displayEnabled = false
   private var transitionSuppressed = false
+  private val occlusionController = DanmakuOcclusionController()
   private var playbackPaused = true
   private var fullscreen = false
   private var highDynamicRange = false
@@ -203,9 +205,8 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
   private var reparenting = false
   private var frozenPositionMs = 0L
   private var frozenMaskPositionMs = 0L
-  // The player clock can jump several seconds while the decoder/compositor is catching up during
-  // startup. Keep a visual clock so an already-visible comment is not discarded before a frame
-  // has had a chance to draw it at the left edge.
+  // 启动期间解码器/合成器追赶进度时，播放器时钟可能跳变数秒。保留一个视觉时钟，
+  // 让已经可见的评论不会在某一帧有机会把它画到左边缘之前就被丢弃。
   private var visualPositionMs = 0L
   private var visualPositionPreciseMs = 0.0
   private var visualClockLastFrameNs = 0L
@@ -230,11 +231,13 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
   private val imageBitmaps = LinkedHashMap<String, Bitmap>(32, .75f, true)
   private val imageRequests = HashSet<String>()
   private var imageAllocationBytes = 0L
+  private val imageCacheBytes = DevicePerformancePolicy.danmakuImageCacheBytes
+  private val textCacheBytes = DevicePerformancePolicy.danmakuTextCacheBytes
   private var imageScope = newImageScope()
 
   /**
-   * Choreographer is created on this Looper, so both frame callbacks and Canvas submission stay off
-   * the main thread while retaining display-vsync pacing.
+   * Choreographer 在该 Looper 上创建，因此帧回调与 Canvas 提交都留在主线程之外，
+   * 同时保留显示器 vsync 节奏。
    */
   private inner class RenderLoop(val generation: Long) {
     val thread = HandlerThread("DanmakuRender", Process.THREAD_PRIORITY_DISPLAY).apply { start() }
@@ -310,11 +313,10 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
   }
 
   init {
-    // Keep the transparent danmaku surface above the app window. A media-overlay SurfaceView is
-    // still below that window and punches out its complete bounds; in fullscreen, that hole also
-    // removes the Compose cover gradient from the video letterbox and exposes SurfaceFlinger's
-    // black fill. An on-top translucent surface preserves the separate 120 Hz buffer while its
-    // transparent pixels reveal the brightness-adjusted letterbox underneath.
+    // 让透明弹幕表面保持在应用窗口之上。media-overlay 的 SurfaceView 仍在该窗口之下，
+    // 并会挖穿其完整边界；在全屏时那个洞还会把 Compose 封面渐变从视频黑边上移除，
+    // 露出 SurfaceFlinger 的黑色填充。一个置顶的半透明表面既保留独立的 120 Hz 缓冲，
+    // 其透明像素又能透出下面经过亮度调整的黑边。
     setZOrderOnTop(true)
     holder.setFormat(PixelFormat.TRANSLUCENT)
     holder.addCallback(this)
@@ -324,6 +326,7 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
       requestedFrameRate = View.REQUESTED_FRAME_RATE_CATEGORY_HIGH
     }
+    DanmakuOcclusionRegistry.register(this)
   }
 
   fun update(
@@ -353,62 +356,62 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
       val nextSpeed = speed.coerceIn(.5f, 2f)
       val speedChanged = this.speed != nextSpeed
       val nextOpacity = opacity.coerceIn(.2f, 1f)
-    val opacityChanged = this.opacity != nextOpacity
-    val nextDisplayArea = displayArea.coerceIn(.1f, 1f)
-    val displayAreaChanged = this.displayArea != nextDisplayArea
-    val nextDensityLevel = densityLevel.coerceIn(MIN_DENSITY_LEVEL, MAX_DENSITY_LEVEL)
-    val densityLevelChanged = this.densityLevel != nextDensityLevel
-    val nextBlockLevel = blockLevel.coerceIn(1, 5)
-    val blockLevelChanged = this.blockLevel != nextBlockLevel
-    val nextFontScale = fontScale.coerceIn(.7f, 1.5f)
-    val fontScaleChanged = this.fontScale != nextFontScale
-    val itemsChanged = items !== sourceItemsRef
-    val maskChanged = mask !== maskTimeline
-    val smartBlockingChanged = smartBlocking != smartBlockingEnabled
-    val highDynamicRangeChanged = highDynamicRange != this.highDynamicRange
-    val fullscreenChanged = fullscreen != this.fullscreen
-    this.speed = nextSpeed
-    this.opacity = nextOpacity
-    this.displayArea = nextDisplayArea
-    this.densityLevel = nextDensityLevel
-    this.blockLevel = nextBlockLevel
-    this.fontScale = nextFontScale
-    maskTimeline = mask
-    smartBlockingEnabled = smartBlocking
-    this.highDynamicRange = highDynamicRange
-    if (itemsChanged) {
-      sourceItemsRef = items
-      sourceItems = filterDanmakuByBlockLevel(items, nextBlockLevel).sortedBy(DanmakuItem::timeMs)
-      requestImages(sourceItems)
-    } else if (blockLevelChanged) {
-      sourceItems = filterDanmakuByBlockLevel(items, nextBlockLevel).sortedBy(DanmakuItem::timeMs)
-      requestImages(sourceItems)
-    }
-    var renderCacheInvalidated = false
-    if (fontScaleChanged) {
-      measurements.clear()
-      clearRenderCache()
-      renderCacheInvalidated = true
-    }
-    if (itemsChanged || blockLevelChanged) {
-      trimItemCaches()
-    }
-    val scheduleGeometryChanged =
-      speedChanged ||
-        displayAreaChanged ||
-        densityLevelChanged ||
-        blockLevelChanged ||
-        fontScaleChanged
-    val scheduleChanged = scheduleGeometryChanged || itemsChanged
-    if (opacityChanged) {
-      clearRenderCache()
-      renderCacheInvalidated = true
-    }
-    if (scheduleChanged) {
-      rebuildSchedule()
-    }
-    if (maskChanged || smartBlockingChanged) clearMaskClipCache()
-    if (highDynamicRangeChanged) {
+      val opacityChanged = this.opacity != nextOpacity
+      val nextDisplayArea = displayArea.coerceIn(.1f, 1f)
+      val displayAreaChanged = this.displayArea != nextDisplayArea
+      val nextDensityLevel = densityLevel.coerceIn(MIN_DENSITY_LEVEL, MAX_DENSITY_LEVEL)
+      val densityLevelChanged = this.densityLevel != nextDensityLevel
+      val nextBlockLevel = blockLevel.coerceIn(1, 5)
+      val blockLevelChanged = this.blockLevel != nextBlockLevel
+      val nextFontScale = fontScale.coerceIn(.7f, 1.5f)
+      val fontScaleChanged = this.fontScale != nextFontScale
+      val itemsChanged = items !== sourceItemsRef
+      val maskChanged = mask !== maskTimeline
+      val smartBlockingChanged = smartBlocking != smartBlockingEnabled
+      val highDynamicRangeChanged = highDynamicRange != this.highDynamicRange
+      val fullscreenChanged = fullscreen != this.fullscreen
+      this.speed = nextSpeed
+      this.opacity = nextOpacity
+      this.displayArea = nextDisplayArea
+      this.densityLevel = nextDensityLevel
+      this.blockLevel = nextBlockLevel
+      this.fontScale = nextFontScale
+      maskTimeline = mask
+      smartBlockingEnabled = smartBlocking
+      this.highDynamicRange = highDynamicRange
+      if (itemsChanged) {
+        sourceItemsRef = items
+        sourceItems = filterDanmakuByBlockLevel(items, nextBlockLevel).sortedBy(DanmakuItem::timeMs)
+        requestImages(sourceItems)
+      } else if (blockLevelChanged) {
+        sourceItems = filterDanmakuByBlockLevel(items, nextBlockLevel).sortedBy(DanmakuItem::timeMs)
+        requestImages(sourceItems)
+      }
+      var renderCacheInvalidated = false
+      if (fontScaleChanged) {
+        measurements.clear()
+        clearRenderCache()
+        renderCacheInvalidated = true
+      }
+      if (itemsChanged || blockLevelChanged) {
+        trimItemCaches()
+      }
+      val scheduleGeometryChanged =
+        speedChanged ||
+          displayAreaChanged ||
+          densityLevelChanged ||
+          blockLevelChanged ||
+          fontScaleChanged
+      val scheduleChanged = scheduleGeometryChanged || itemsChanged
+      if (opacityChanged) {
+        clearRenderCache()
+        renderCacheInvalidated = true
+      }
+      if (scheduleChanged) {
+        rebuildSchedule()
+      }
+      if (maskChanged || smartBlockingChanged) clearMaskClipCache()
+      if (highDynamicRangeChanged) {
         clearRenderCache()
         renderCacheInvalidated = true
       }
@@ -424,9 +427,9 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
       )
         queueTextCacheAround(rawPositionMs)
       if (paused) {
-        // Preserve a deliberately smoothed on-screen position while the player is paused. Explicit
-        // seeks carry a new epoch above and therefore intentionally reset to their target instead.
-      frozenPositionMs = if (visualClockInitialized) visualPositionMs else rawPositionMs
+        // 播放器暂停时保留一个刻意平滑过的屏上位置。显式 seek 在上面带有新的 epoch，
+        // 因此会有意地重置到其目标位置。
+        frozenPositionMs = if (visualClockInitialized) visualPositionMs else rawPositionMs
         frozenMaskPositionMs = rawPositionMs
       }
       displayEnabled = enabled && scheduled.isNotEmpty()
@@ -440,7 +443,7 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
     refreshClockSampling()
   }
 
-  /** The visible Media3 frame, in this full-player overlay's coordinates. */
+  /** 可见的 Media3 帧，位于这个全播放器覆盖层的坐标系中。 */
   fun setVideoViewport(viewport: RectF) {
     val next = viewport.takeIf { it.width() > 0f && it.height() > 0f } ?: return
     synchronized(renderStateLock) {
@@ -459,22 +462,37 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
     }
   }
 
-  /** Avoid relaying out and redrawing the overlay while the SurfaceView bounds animate. */
+  /** SurfaceView 边界在动画期间避免重复布局与重绘覆盖层。 */
   fun setTransitionSuppressed(suppressed: Boolean) {
     synchronized(renderStateLock) {
       if (transitionSuppressed == suppressed) return
       if (suppressed) {
         hideForTransition()
-      return
+        return
       }
       transitionSuppressed = false
+      occlusionController.setDeclarativelySuppressed(false)
+      occlusionController.releaseImmediateSuppression()
       refreshRenderingState()
     }
-    // Compose finishes the fullscreen layout while this surface is hidden. Re-apply the final
-    // View size when the handoff ends; otherwise some devices keep the embedded buffer size and
-    // clip the right/bottom part of the fullscreen danmaku layer.
+    // Compose 在该表面隐藏期间完成全屏布局。交接结束时重新应用最终的 View 尺寸；
+    // 否则某些设备会保留内嵌缓冲尺寸，并把全屏弹幕层的右/下部分裁掉。
     syncSurfaceSizeFromLayout()
     requestRender()
+  }
+
+  /** 启动遮罩拥有应用级最高优先级，不能被播放器自身的恢复逻辑提前解除。 */
+  fun setStartupMaskVisible(visible: Boolean) {
+    synchronized(renderStateLock) {
+      val wasBlocked = occlusionController.currentSnapshot().blocked
+      occlusionController.setStartupMaskVisible(visible)
+      if (visible && !wasBlocked) {
+        stopFrames()
+        renderPosted = false
+        clearSurfaceForTransition()
+      }
+      refreshRenderingState()
+    }
   }
 
   fun setEmbeddedHost(host: ViewGroup) {
@@ -482,9 +500,9 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
   }
 
   /**
-   * An on-top SurfaceView does not inherit Compose's fullscreen Surface transform on Samsung
-   * devices. Once the boundary animation is hidden, attach this same surface directly to the
-   * Activity window so its layout is the real fullscreen size; move it back for embedded mode.
+   * 置顶 SurfaceView 在三星设备上不会继承 Compose 的全屏 Surface 变换。边界动画隐藏后，
+   * 把同一个表面直接挂到 Activity 窗口上，让它的布局就是真实的全屏尺寸；内嵌模式时再
+   * 移回去。
    */
   fun moveToFullscreenHost(fullscreen: Boolean): Boolean {
     val target =
@@ -509,25 +527,26 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
   }
 
   fun releaseHost() {
+    DanmakuOcclusionRegistry.unregister(this)
     embeddedHost = null
     (parent as? ViewGroup)?.removeView(this)
   }
 
-  /** Clears and hides the SurfaceControl without detaching the view or releasing raster caches. */
+  /** 清除并隐藏 SurfaceControl，不分离视图也不释放光栅缓存。 */
   fun hideForTransition() {
     synchronized(renderStateLock) {
       transitionSuppressed = true
+      occlusionController.setDeclarativelySuppressed(true)
+      occlusionController.suppressImmediately()
       stopFrames()
       renderPosted = false
-      // SurfaceView is composed independently from the Compose page. Merely changing View
-      // visibility can leave its last submitted buffer on screen until the next ViewRoot
-      // traversal, which makes danmaku float above an otherwise fading return animation. Submit
-      // one transparent buffer synchronously so the compositor has nothing left to retain.
+      // SurfaceView 与 Compose 页面独立合成。仅仅改变 View 可见性可能把最后提交的缓冲
+      // 留到下一次 ViewRoot 遍历之前，让弹幕漂浮在本该淡出的返回动画之上。同步提交一个
+      // 透明缓冲，让合成器没有可保留的内容。
       clearSurfaceForTransition()
       visibility = INVISIBLE
-      // Keep the current window refresh-rate request until the view is released/reparented after
-      // the transition. Updating WindowManager.LayoutParams here can relayout the window exactly
-      // when the first cover frame is due.
+      // 在视图于转场后被释放/重新挂载之前，保持当前的窗口刷新率请求。此时更新
+      // WindowManager.LayoutParams 可能恰好在首帧封面到期时触发布局窗口。
     }
   }
 
@@ -580,8 +599,8 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
 
   override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
     super.onSizeChanged(w, h, oldw, oldh)
-    // AspectRatioFrameLayout may settle one layout pass after a SurfaceView/window resize.
-    // Request a fresh frame immediately so the clip boundary never lingers at its old width.
+    // AspectRatioFrameLayout 可能在 SurfaceView/窗口尺寸变化后的下一次布局遍历才稳定。
+    // 立即请求新帧，让裁剪边界不会停留在旧的宽度上。
     if (w != oldw || h != oldh) {
       holder.setSizeFromLayout()
       updateRenderViewGeometry(w, h)
@@ -620,7 +639,7 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
     holder.setSizeFromLayout()
     requestLayout()
     post {
-      if (!isAttachedToWindow || transitionSuppressed) return@post
+      if (!isAttachedToWindow || occlusionController.currentSnapshot().blocked) return@post
       holder.setSizeFromLayout()
       updateRenderViewGeometry(width, height)
     }
@@ -671,7 +690,7 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
         !surfaceAvailable ||
         !holder.surface.isValid ||
         !displayEnabled ||
-        transitionSuppressed ||
+        occlusionController.currentSnapshot().blocked ||
         renderWidth() <= 0 ||
         renderHeight() <= 0
     ) {
@@ -701,13 +720,13 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
     val rawPositionMs =
       playbackClockSnapshot.positionAt(SystemClock.elapsedRealtimeNanos()).coerceAtLeast(0L)
     val positionMs = if (playbackPaused) frozenPositionMs else resolveVisualPosition(rawPositionMs)
-    // Text may intentionally smooth a coarse player-clock jump, but the subject mask must stay on
-    // the real playback clock so it never trails the independently composed video SurfaceView.
+    // 文本可能有意识地平滑粗略的播放器时钟跳变，但主体蒙版必须跟随真实播放时钟，
+    // 这样它永远不会落后于独立合成的视频 SurfaceView。
     val maskPositionMs = if (playbackPaused) frozenMaskPositionMs else rawPositionMs
     val scrollingMotionDurationMs = scrollingMotionDurationMs()
     val scrollingVisibleDurationMs = scrollingVisibleDurationMs()
-    // The overlay covers the complete player, while smart blocking is mapped only to Media3's
-    // actual video frame. This lets portrait videos use their side letterbox for danmaku.
+    // 覆盖层盖住整个播放器，而智能屏蔽只映射到 Media3 的实际视频帧。这让竖屏视频
+    // 可以使用两侧的黑边区域显示弹幕。
     renderViewport.set(0f, 0f, canvas.width.toFloat(), canvas.height.toFloat())
     val viewport = renderViewport
     val saveCount = canvas.save()
@@ -726,9 +745,9 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
       maskPositionMs = maskPositionMs,
       viewport = scaledVideoViewport(viewport),
     )
-    // A scrolling label reaches the left edge after its motion duration. It stays in the
-    // timeline for a short guard interval to absorb coarse player-clock samples, but it is
-    // already entirely off-canvas then; do not keep issuing texture draws for that tail.
+    // 一条滚动弹幕在运动时长结束后到达左边缘。它会在时间线里再保留一小段保护间隔，
+    // 以吸收粗略的播放器时钟采样，但那时它已经完全离开画布；不要为这段尾部持续
+    // 发出纹理绘制。
     val first = prepared.lowerBound(positionMs - scrollingMotionDurationMs)
     val last = prepared.upperBound(positionMs)
     var lastTextSize = Float.NaN
@@ -743,10 +762,10 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
           positionMs - value.item.timeMs <= scrollingMotionDurationMs
       if (onScreen && positionMs <= value.endMs) {
         activeCount++
-        // Bitmap-cache hits set up neither glyph shaping nor mutable Paint state. Avoid touching
-        // the RenderNode paint for the common path; it is needed only for HDR/fallback text.
+        // 位图缓存命中既不做字形塑形也不设置可变 Paint 状态。避免为常见路径触碰
+        // RenderNode 画笔；只有 HDR/回退文本才需要它。
         val needsDirectTextPaint =
-            value.item.imageUrl == null &&
+          value.item.imageUrl == null &&
             value.item.inlineEmotes.isEmpty() &&
             (highDynamicRange || !bitmapTextCache.contains(value))
         if (needsDirectTextPaint) {
@@ -832,8 +851,8 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
       drawInlineDanmaku(canvas, value, x, baseline)
       return
     }
-    // Stable SDR labels are rasterized only as they enter. This keeps their on-screen lifetime on
-    // one small texture path, avoiding tens of thousands of glyph operations every ten seconds.
+    // 稳定的 SDR 弹幕只在其入场时被光栅化。这让它们的屏上生命周期走一条小纹理路径，
+    // 避免每十秒产生数万次字形操作。
     if (
       !highDynamicRange &&
         (fixed || elapsed <= motionDuration) &&
@@ -922,7 +941,7 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
           renderGeneration != loop.generation ||
           !renderAttached ||
           !surfaceAvailable ||
-          transitionSuppressed ||
+          occlusionController.currentSnapshot().blocked ||
           !displayEnabled ||
           renderPosted
       )
@@ -1029,8 +1048,8 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
                 appendDirectContour(allowedContours, start, index, viewport)
               }
             }
-          // SVG paths always describe the allowed background. Restrict the difference to the
-          // actual video frame so portrait sidebars remain available for danmaku.
+          // SVG 路径始终描述允许显示的背景。把差值运算限制在实际视频帧内，
+          // 让竖屏侧边栏仍然可以显示弹幕。
           Path()
             .apply {
               addRect(viewport, Path.Direction.CW)
@@ -1038,9 +1057,9 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
             }
             .takeIf { differenceSucceeded }
         }
-      // Skia can reject a few self-intersecting SVG paths. Never pass the pre-operation
-      // video rectangle to clipOutPath: retain the previous valid silhouette for this one mask
-      // sample (or leave it unclipped on the first sample) and retry on the next timestamp.
+      // Skia 可能拒绝少数自相交的 SVG 路径。永远不要把运算前的视频矩形传给 clipOutPath：
+      // 对这一次蒙版采样保留上一个有效的剪影（首次采样则保持不裁剪），并在下一个
+      // 时间戳重试。
       cachedProtectedMaskPath =
         if (differenceSucceeded) nextProtectedMaskPath else previousProtectedMaskPath
       cachedMaskFrameIndex = frameIndex
@@ -1049,8 +1068,8 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
       cachedMaskViewportWidth = viewport.width()
       cachedMaskViewportHeight = viewport.height()
     }
-    // Clipping out only the subject is cheaper than constructing an inverted full-viewport path
-    // for every source mask frame, and avoids an extra large stencil region above HDR SurfaceView.
+    // 只裁剪掉主体比给每个源蒙版帧构造反向的全视口路径更便宜，也避免了在 HDR
+    // SurfaceView 之上再增加一个大模板区域。
     cachedProtectedMaskPath?.let { protectedPath ->
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
         canvas.clipOutPath(protectedPath)
@@ -1060,7 +1079,7 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
     }
   }
 
-  /** Appends the sampled SVG contour directly; it is cached until the next mask timestamp. */
+  /** 直接追加采样到的 SVG 轮廓；该轮廓会一直缓存到下一个蒙版时间戳。 */
   private fun Path.appendDirectContour(
     contours: FloatArray,
     start: Int,
@@ -1090,7 +1109,7 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
   }
 
   private fun refreshRenderingState() {
-    val rendering = displayEnabled && !transitionSuppressed
+    val rendering = displayEnabled && !occlusionController.currentSnapshot().blocked
     visibility = if (rendering) VISIBLE else GONE
     uiHighFrameRateRequested = rendering && !playbackPaused
     updateFrameRateHint(uiHighFrameRateRequested)
@@ -1105,11 +1124,10 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
   }
 
   /**
-   * A Canvas invalidated by Choreographer can still be compositor-paced at the default 60 Hz on
-   * variable-refresh panels. Ask for the highest cadence supported at the active mode's resolution
-   * while danmaku is actually moving. Using Display.refreshRate here would create a feedback loop:
-   * once a 60 fps video surface makes the panel select 60 Hz, this animation surface would vote for
-   * 60 Hz too and could never restore the panel's 120 Hz animation mode.
+   * 被 Choreographer 失效的 Canvas 在可变刷新率面板上仍可能以默认 60 Hz 被合成器定步。
+   * 当弹幕实际移动时，请求当前模式分辨率下支持的最高节奏。在这里使用 Display.refreshRate
+   * 会形成反馈回路：一旦 60 fps 的视频表面让面板选择了 60 Hz，这个动画表面也会投 60 Hz
+   * 的票，就再也无法恢复面板的 120 Hz 动画模式。
    */
   private fun updateFrameRateHint(rendering: Boolean) {
     val targetHz = if (rendering) preferredDanmakuRefreshRateHz() else 0f
@@ -1127,10 +1145,9 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
   }
 
   /**
-   * Window refresh-rate requests do not automatically describe this independently composed
-   * translucent SurfaceView. Give SurfaceFlinger a matching per-surface vote so Android 16's
-   * adaptive-refresh policy treats moving danmaku as continuous UI animation rather than a normal
-   * or fixed-rate video layer.
+   * 窗口刷新率请求并不会自动描述这个独立合成的半透明 SurfaceView。给 SurfaceFlinger 一个
+   * 匹配的按表面投票，让 Android 16 的自适应刷新策略把移动中的弹幕当作连续的 UI 动画，
+   * 而不是普通或固定帧率的视频层。
    */
   private fun updateSurfaceFrameRateHint(targetHz: Float) {
     if (
@@ -1201,8 +1218,8 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
     if (!animationRunning || playbackPaused) return
     val loop = renderLoop ?: return
     if (activeCount > 0) {
-      // Submit every active frame through this transparent child surface. It remains separately
-      // paced at the player's display cadence while the surrounding Compose tree stays static.
+      // 把每一帧活跃画面都提交到这个透明子表面。它保持独立地按播放器的显示节奏
+      // 定步，而周围的 Compose 树保持静止。
       requestRender()
       return
     }
@@ -1212,8 +1229,8 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
       untilNext
         ?.minus(FRAME_WAKE_MARGIN_MS)
         ?.coerceIn(MIN_IDLE_FRAME_DELAY_MS, MAX_IDLE_FRAME_DELAY_MS) ?: MAX_IDLE_FRAME_DELAY_MS
-    // Empty spans only need a low-frequency position check. A seek backwards is still discovered
-    // within the same bounded delay, while dense active spans continue to follow every VSync.
+    // 空白片段只需要低频的位置检查。向后 seek 仍能在同一个有界延迟内被发现，
+    // 而密集的活跃片段继续跟随每一个 VSync。
     loop.idleWakeRunnable?.let(loop.handler::removeCallbacks)
     loop.idleWakeRunnable = Runnable {
       loop.idleWakeRunnable = null
@@ -1222,7 +1239,7 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
     loop.handler.postDelayed(loop.idleWakeRunnable!!, delayMs)
   }
 
-  /** Only fixed top comments need cutout clearance; scrolling comments keep the full canvas. */
+  /** 只有固定置顶弹幕需要避开刘海区域；滚动弹幕保留整个画布。 */
   private fun fixedTopSafeInset(): Float =
     if (fullscreen) {
       val viewHeight = renderViewHeight.takeIf { it > 0 } ?: renderHeight().coerceAtLeast(1)
@@ -1232,16 +1249,15 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
     }
 
   /**
-   * Leave a short tail after the nominal flight. Player timestamps can advance in visible chunks
-   * during decoder catch-up; without this margin a frame can jump from visibly on-screen straight
-   * to the removal boundary before the text reaches the left edge.
+   * 在标称飞行结束后留一段短尾。解码器追赶期间播放器时间戳可能以可见的块前进；
+   * 没有这个余量，一帧可能在文本到达左边缘之前就从可见状态直接跳到移除边界。
    */
   private fun scrollingMotionDurationMs(): Long = (SCROLL_DURATION_MS / speed).toLong()
 
   /**
-   * Keep an already off-screen comment alive for a short tail. The old implementation added the
-   * guard to the movement itself, so a coarse decoder timestamp could still jump from visible to
-   * removed. Here the text reaches x=-textWidth first and only then becomes eligible for removal.
+   * 让已经离开屏幕的评论再存活一小段尾期。旧实现把保护加在移动本身上，因此粗略的
+   * 解码器时间戳仍可能从可见直接跳到移除。这里文本先到达 x=-textWidth，之后才有
+   * 资格被移除。
    */
   private fun scrollingVisibleDurationMs(): Long =
     scrollingMotionDurationMs() + (SCROLL_EXIT_GUARD_MS / speed).toLong()
@@ -1262,7 +1278,7 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
     }
   }
 
-  /** Queue the cold-start working set without rasterizing labels on the animation thread. */
+  /** 排队冷启动工作集，不在动画线程上光栅化弹幕。 */
   private fun queueTextCacheAround(positionMs: Long) {
     lastTextCacheQueueBucket = positionMs / BITMAP_QUEUE_INTERVAL_MS
     val activeStart = prepared.lowerBound(positionMs - scrollingMotionDurationMs())
@@ -1275,7 +1291,7 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
     )
   }
 
-  /** Keep a small asynchronous producer ahead of newly entering comments. */
+  /** 让一个小型异步生产者保持领先于新入场的弹幕。 */
   private fun queueTextCacheAhead(positionMs: Long) {
     val activeStart = prepared.lowerBound(positionMs - scrollingMotionDurationMs())
     val end = prepared.upperBound(positionMs + BITMAP_PREWARM_AHEAD_MS)
@@ -1356,9 +1372,8 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
   }
 
   /**
-   * Density controls horizontal distance only. Standard waits until the previous tail reaches the
-   * right edge before the next comment enters; lower levels add a gap, while higher levels allow a
-   * controlled overlap. Vertical lane count is independent and comes only from display area.
+   * 密度只控制水平距离。标准档位要等上一条的尾部到达右边缘后下一条才入场；低档位
+   * 增加间隔，而高档位允许受控重叠。垂直轨道数与此无关，只来自显示区域。
    */
   private fun scrollingLaneAvailable(
     previous: DanmakuItem?,
@@ -1488,9 +1503,9 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
     }
 
   /**
-   * Interpolates Media3's millisecond position at display cadence while the clocks agree. When a
-   * draw observes a real discontinuity, the existing snap/catch-up paths remain authoritative. This
-   * removes duplicate positions on 120 Hz displays without changing seeks or recovery.
+   * 在两个时钟一致时按显示节奏插值 Media3 的毫秒位置。当一次绘制观察到真正的不连续时，
+   * 现有的跳变/追赶路径仍然权威。这消除了 120 Hz 显示器上的重复位置，而不改变 seek
+   * 或恢复行为。
    */
   private fun resolveVisualPosition(rawPositionMs: Long): Long {
     val frameTimeNs = SystemClock.elapsedRealtimeNanos()
@@ -1501,15 +1516,15 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
     val frameElapsedNs = (frameTimeNs - visualClockLastFrameNs).coerceAtLeast(0L)
     visualClockLastFrameNs = frameTimeNs
     if (rawPositionMs + CLOCK_BACKWARD_RESET_TOLERANCE_MS < visualPositionMs) {
-      // Replay and any external seek that does not travel through AppRoot's seek controls.
+      // 重播以及任何不经过 AppRoot seek 控件的外部 seek。
       resetVisualClock(rawPositionMs, visualClockEpoch, frameTimeNs)
       return rawPositionMs
     }
 
     if (rawPositionMs - visualPositionMs > MAX_SMOOTHABLE_CLOCK_JUMP_MS) {
-      // Entering a video from watch history can move ExoPlayer from zero to a saved position
-      // without travelling through this screen's seek controls. That is a timeline discontinuity,
-      // not decoder catch-up: snap to the real position so old danmaku are not replayed rapidly.
+      // 从观看历史进入视频可能让 ExoPlayer 从零跳到保存的位置，而不经过本页的 seek
+      // 控件。那是时间线不连续，不是解码器追赶：直接跳到真实位置，避免旧弹幕被
+      // 快速重放。
       resetVisualClock(rawPositionMs, visualClockEpoch, frameTimeNs)
       return rawPositionMs
     }
@@ -1530,8 +1545,8 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
       }
     }
 
-    // A short decoder stall can leave the quantized player clock behind the interpolated clock.
-    // Hold the last visual position until Media3 catches up instead of moving danmaku backwards.
+    // 短暂的解码器停顿可能让量化后的播放器时钟落后于插值时钟。保持最后的视觉位置
+    // 直到 Media3 赶上，而不是让弹幕倒退。
     if (rawPositionMs <= visualPositionMs) return visualPositionMs
 
     val crossesDanmaku = hasDanmakuInWindow(visualPositionMs, rawPositionMs)
@@ -1568,7 +1583,7 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
     visualClockCatchingUp = false
   }
 
-  /** True when skipping [startMs, endMs] could make a comment appear or disappear mid-flight. */
+  /** 为 true 表示跳过 [startMs, endMs] 可能让一条评论在飞行途中出现或消失。 */
   private fun hasDanmakuInWindow(startMs: Long, endMs: Long): Boolean {
     if (prepared.isEmpty()) return false
     val first = prepared.lowerBound(startMs - MAX_DANMAKU_VISIBLE_DURATION_MS)
@@ -1627,7 +1642,7 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
     }
   }
 
-  /** Vertical coverage is controlled solely by display area, never by horizontal density. */
+  /** 垂直覆盖范围只由显示区域控制，从不取决于水平密度。 */
   private fun laneCountFor(displayArea: Float): Int {
     val viewportHeight =
       renderHeight().takeIf { it > 0 }?.toFloat() ?: FALLBACK_VIEWPORT_HEIGHT_DP * density
@@ -1681,10 +1696,10 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
             imageRequests.remove(url)
             bitmap?.let {
               imageBitmaps[url] = it
-            imageAllocationBytes += it.allocationByteCount
-            trimImageCache()
-            requestRender()
-          }
+              imageAllocationBytes += it.allocationByteCount
+              trimImageCache()
+              requestRender()
+            }
           }
         }
       }
@@ -1696,7 +1711,7 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
     }
 
   private fun trimImageCache() {
-    while (imageAllocationBytes > IMAGE_CACHE_BYTES && imageBitmaps.isNotEmpty()) {
+    while (imageAllocationBytes > imageCacheBytes && imageBitmaps.isNotEmpty()) {
       val eldestKey = imageBitmaps.entries.first().key
       imageAllocationBytes -= imageBitmaps.remove(eldestKey)?.allocationByteCount ?: 0
     }
@@ -1707,9 +1722,9 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
   }
 
   /**
-   * Rasterizes SDR labels on one background worker. A cache miss stays on Canvas' direct glyph path
-   * for that frame, so playback never allocates or paints a software Bitmap on the animation
-   * thread. The completed bitmap is adopted by a later frame and remains bounded by byte count.
+   * 在一个后台工作器上光栅化 SDR 弹幕。缓存未命中时该帧仍走 Canvas 的直接字形路径，
+   * 因此播放永远不会在动画线程上分配或绘制软件 Bitmap。完成的位图由后续帧接管，
+   * 并始终受字节数上限约束。
    */
   private inner class BitmapTextCache {
     private val lock = Any()
@@ -1756,12 +1771,14 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
       x: Float,
       baseline: Float,
     ): Boolean {
-      val bitmap = synchronized(lock) { bitmaps[value.cacheKey] } ?: return false
-      val paddingX = textCachePaddingX()
-      val paddingY = textCachePaddingY()
-      val top = baseline + value.ascent - paddingY
-      canvas.drawBitmap(bitmap, x - paddingX, top, null)
-      return true
+      return synchronized(lock) {
+        val bitmap = bitmaps[value.cacheKey] ?: return@synchronized false
+        val paddingX = textCachePaddingX()
+        val paddingY = textCachePaddingY()
+        val top = baseline + value.ascent - paddingY
+        canvas.drawBitmap(bitmap, x - paddingX, top, null)
+        true
+      }
     }
 
     private fun enqueue(value: PreparedDanmaku, opacitySnapshot: Float): Boolean {
@@ -1809,6 +1826,7 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
           if (bitmap != null && request.generation == generation) {
             bitmaps.put(request.value.cacheKey, bitmap)?.let { replaced ->
               allocatedBytes -= replaced.allocationByteCount.toLong()
+              if (!replaced.isRecycled) replaced.recycle()
             }
             allocatedBytes += bitmap.allocationByteCount.toLong()
             trimToByteLimit()
@@ -1832,7 +1850,7 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
         return null
       }
       val requiredBytes = bitmapWidth.toLong() * bitmapHeight * Int.SIZE_BYTES
-      if (requiredBytes > BITMAP_TEXT_CACHE_BYTES) return null
+      if (requiredBytes > textCacheBytes) return null
       val bitmap =
         runCatching { Bitmap.createBitmap(bitmapWidth, bitmapHeight, Bitmap.Config.ARGB_8888) }
           .getOrNull() ?: return null
@@ -1888,9 +1906,12 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
     }
 
     private fun trimToByteLimit() {
-      while (allocatedBytes > BITMAP_TEXT_CACHE_BYTES && bitmaps.isNotEmpty()) {
+      while (allocatedBytes > textCacheBytes && bitmaps.isNotEmpty()) {
         val eldestKey = bitmaps.entries.first().key
-        allocatedBytes -= bitmaps.remove(eldestKey)?.allocationByteCount?.toLong() ?: 0L
+        bitmaps.remove(eldestKey)?.let { bitmap ->
+          allocatedBytes -= bitmap.allocationByteCount.toLong()
+          if (!bitmap.isRecycled) bitmap.recycle()
+        }
       }
     }
 
@@ -1899,6 +1920,7 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
         generation++
         buildQueue.clear()
         pendingKeys.clear()
+        bitmaps.values.forEach { bitmap -> if (!bitmap.isRecycled) bitmap.recycle() }
         bitmaps.clear()
         allocatedBytes = 0L
       }
@@ -1910,6 +1932,7 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
         workerScope.cancel()
         buildQueue.clear()
         pendingKeys.clear()
+        bitmaps.values.forEach { bitmap -> if (!bitmap.isRecycled) bitmap.recycle() }
         bitmaps.clear()
         allocatedBytes = 0L
         workerRunning = false
@@ -1951,7 +1974,7 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
     val color: Int,
   )
 
-  /** Content plus pixels-affecting style lets recurring text share the same raster cache entry. */
+  /** 内容加上影响像素的样式，让重复出现的文本共享同一个光栅缓存条目。 */
   private data class RenderCacheKey(
     val content: String,
     val textSize: Float,
@@ -2018,8 +2041,8 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
 }
 
 /**
- * Advances the visual clock at display cadence while Media3's millisecond clock remains close
- * enough to prove that playback is continuous. Returning null preserves the discontinuity paths.
+ * 当 Media3 的毫秒时钟保持足够接近、足以证明播放连续时，按显示节奏推进视觉时钟。
+ * 返回 null 表示保留不连续路径。
  */
 internal fun interpolateDanmakuPosition(
   currentPositionMs: Double,

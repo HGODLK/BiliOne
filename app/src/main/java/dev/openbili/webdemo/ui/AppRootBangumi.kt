@@ -8,6 +8,28 @@ import dev.openbili.webdemo.api.SpaceContentCard
 import dev.openbili.webdemo.api.SpaceContentKind
 import dev.openbili.webdemo.feed.FeedItem
 
+/** 番剧共享转场的几何目标；它不决定来源页面与进入生命周期。 */
+internal enum class BangumiTransitionVisual {
+  PLAYER_LANDSCAPE,
+  POSTER_PORTRAIT,
+  ;
+
+  val fitCover: Boolean
+    get() = this == POSTER_PORTRAIT
+}
+
+/** 竖版共享海报落点不是播放器，转场期间应保留完整页面遮罩。 */
+internal fun shouldPunchRootVideoEntryPortal(
+  transitionVisual: BangumiTransitionVisual?,
+  playerBoundsReady: Boolean,
+): Boolean =
+  transitionVisual != BangumiTransitionVisual.POSTER_PORTRAIT &&
+    (transitionVisual == null || playerBoundsReady)
+
+/** 换季后的详情已不再对应来源卡，退出时必须整体淡出，不能伪造封面飞回。 */
+internal fun shouldFadeBangumiExitDirectly(seasonChangedFromSource: Boolean): Boolean =
+  seasonChangedFromSource
+
 internal data class ActiveBangumiPage(
   val sourceCard: SpaceContentCard,
   val sourceProfileEntryId: Long,
@@ -15,7 +37,7 @@ internal data class ActiveBangumiPage(
   val sourceBounds: Rect?,
   val sourceVideoCoverUrl: String = "",
   val returnToSourceCover: Boolean = false,
-  /** Keeps the portrait transition contract while routing source-cover visibility to Explore. */
+  /** 在把源封面可见性路由给 Explore 的同时，保持竖屏转场契约。 */
   val sourceIsBangumiExplorePoster: Boolean = false,
   val sourceUsesLivePlayer: Boolean = false,
   val sourceOrigin: PageOrigin = PageOrigin.Profile(sourceProfileEntryId, sourceMid),
@@ -30,10 +52,10 @@ internal data class ActiveBangumiPage(
   val playbackFallbackEmitted: Boolean = false,
 )
 
-/** Bilibili's PGC heartbeat expects the actual season media type, not only anime vs guochuang. */
+/** B 站 PGC 心跳期望真实的季度媒体类型，而不只是番剧与国创之分。 */
 internal fun pgcPlaybackSubType(seasonType: Int): Int = seasonType.takeIf { it > 0 } ?: 1
 
-/** Result of resolving which episode and start position to use when entering a bangumi page. */
+/** 进入番剧页时解析用哪一集和哪个起始位置的结果。 */
 data class BangumiEntryTarget(
   val card: SpaceContentCard,
   val startPositionMs: Long,
@@ -41,12 +63,13 @@ data class BangumiEntryTarget(
 )
 
 /**
- * Pure function that decides the effective entry target for a bangumi card.
+ * 决定番剧卡片有效进入目标的纯函数。
  *
- * Priority:
- * 1. [sourceCard.watchProgress] with valid episodeId → server-recorded episode and position.
- * 2. [localSelection] (when [allowLocalSelection]) → last-watched from BangumiPlaybackStore.
- * 3. Fallback → source card's default [SpaceContentCard.episodeId] / new_ep.
+ * 优先级：
+ * 1. 带有效 episodeId 的 [sourceCard.watchProgress] → 服务器记录的分集与位置。
+ * 2. [localSelection]（当 [allowLocalSelection] 时）→ BangumiPlaybackStore 记录的
+ *    上次观看位置。
+ * 3. 回退 → 源卡片默认的 [SpaceContentCard.episodeId] / new_ep。
  */
 internal fun resolveBangumiEntryTarget(
   sourceCard: SpaceContentCard,

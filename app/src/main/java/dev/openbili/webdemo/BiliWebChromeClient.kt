@@ -49,7 +49,7 @@ class BiliWebChromeClient(
     resultMsg: Message,
   ): Boolean {
     val transport = resultMsg.obj as? WebView.WebViewTransport ?: return false
-    // Script-only popups have no trustworthy user intent and are not needed for video playback.
+    // 纯脚本弹窗没有可信的用户意图，视频播放也不需要它。
     if (!isUserGesture) return false
 
     val temporary = WebView(view.context)

@@ -14,16 +14,16 @@ class ArticleAndHistoryParserTest {
   fun bangumiEpisodeIdOnlyMatchesEpisodePlaybackUrls() {
     assertEquals(
       12345L,
-      BiliApi.bangumiEpisodeId("https://www.bilibili.com/bangumi/play/ep12345?from=history"),
+      BiliVideoApi.bangumiEpisodeId("https://www.bilibili.com/bangumi/play/ep12345?from=history"),
     )
-    assertEquals(null, BiliApi.bangumiEpisodeId("https://www.bilibili.com/bangumi/play/ss12345"))
-    assertEquals(null, BiliApi.bangumiEpisodeId("https://www.bilibili.com/video/BV1TEST"))
+    assertEquals(null, BiliVideoApi.bangumiEpisodeId("https://www.bilibili.com/bangumi/play/ss12345"))
+    assertEquals(null, BiliVideoApi.bangumiEpisodeId("https://www.bilibili.com/video/BV1TEST"))
   }
 
   @Test
   fun historyRequestKeepsReturnedCursorBusinessSeparateFromFilterType() {
     val url =
-      BiliApi.historyCursorUrl(
+      BiliHistoryApi.historyCursorUrl(
         HistoryCursor(max = 88, viewAt = 77, business = "pgc"),
         type = "archive",
       )
@@ -32,13 +32,93 @@ class ArticleAndHistoryParserTest {
     assertTrue(url.contains("view_at=77"))
     assertTrue(url.contains("business=pgc"))
     assertTrue(url.contains("type=archive"))
-    assertTrue(url.contains("ps=30"))
+    assertTrue(url.contains("ps=20"))
+    assertTrue(url.contains("web_location=333.1391"))
+  }
+
+  @Test
+  fun historySearchRequestMatchesWebSearchParameters() {
+    val url = BiliHistoryApi.historySearchUrl("鸣潮 一条龙", page = 2, business = "all")
+
+    assertTrue(url.contains("pn=2"))
+    assertTrue(url.contains("keyword=%E9%B8%A3%E6%BD%AE+%E4%B8%80%E6%9D%A1%E9%BE%99"))
+    assertTrue(url.contains("business=all"))
+    assertTrue(url.contains("add_time_start=0"))
+    assertTrue(url.contains("add_time_end=0"))
+    assertTrue(url.contains("arc_max_duration=0"))
+    assertTrue(url.contains("arc_min_duration=0"))
+    assertTrue(url.contains("device_type=0"))
+    assertTrue(url.contains("web_location=333.1391"))
+  }
+
+  @Test
+  fun historySearchParserKeepsPageAndHasMore() {
+    val response =
+      BiliHistoryApi.parseHistorySearchResponse(
+        JSONObject(
+          """
+          {
+            "code": 0,
+            "data": {
+              "has_more": true,
+              "page": {"pn": 2, "total": 31},
+              "list": [{
+                "title": "鸣潮历史",
+                "cover": "//i0.hdslb.com/video.jpg",
+                "author_name": "UP",
+                "view_at": 1700000000,
+                "history": {"business": "archive", "oid": 1, "bvid": "BV1TEST", "cid": 2}
+              }]
+            }
+          }
+          """
+        )
+      )
+
+    assertEquals(2, response.page)
+    assertEquals(31, response.total)
+    assertTrue(response.hasMore)
+    assertTrue(response.items.single() is AccountHistoryItem.Video)
+  }
+
+  @Test
+  fun historySearchParserAcceptsTopLevelIdentityFields() {
+    val response =
+      BiliHistoryApi.parseHistorySearchResponse(
+        JSONObject(
+          """
+          {
+            "code": 0,
+            "data": {
+              "has_more": false,
+              "page": {"pn": 1, "total": 1},
+              "list": [{
+                "title": "Deepseek 历史",
+                "uri": "https://www.bilibili.com/video/BV1TOPLEVEL",
+                "bvid": "BV1TOPLEVEL",
+                "aid": 123,
+                "cid": 456,
+                "duration": 90,
+                "view_at": 1700000000,
+                "cover": "//i0.hdslb.com/video.jpg",
+                "author_name": "UP"
+              }]
+            }
+          }
+          """
+        )
+      )
+
+    val item = response.items.single() as AccountHistoryItem.Video
+    assertEquals("BV1TOPLEVEL", item.card.bvid)
+    assertEquals(123L, item.card.aid)
+    assertEquals(1700000000L, item.viewAt)
   }
 
   @Test
   fun historyParserKeepsVideoAndArticleAndReturnsCursor() {
     val response =
-      BiliApi.parseHistoryResponse(
+      BiliHistoryApi.parseHistoryResponse(
         JSONObject(
           """
           {
@@ -73,6 +153,10 @@ class ArticleAndHistoryParserTest {
     assertEquals(2, response.items.size)
     assertTrue(response.items[0] is AccountHistoryItem.Video)
     assertTrue(response.items[1] is AccountHistoryItem.Article)
+    assertEquals(
+      "https://www.bilibili.com/read/cv99",
+      (response.items[1] as AccountHistoryItem.Article).article.sourceUrl,
+    )
     assertEquals(88L, response.cursor.max)
     assertEquals(77L, response.cursor.viewAt)
     assertEquals("article", response.cursor.business)
@@ -82,7 +166,7 @@ class ArticleAndHistoryParserTest {
   @Test
   fun historyParserKeepsLiveRoomPresentationFields() {
     val response =
-      BiliApi.parseHistoryResponse(
+      BiliHistoryApi.parseHistoryResponse(
         JSONObject(
           """
           {
@@ -124,7 +208,7 @@ class ArticleAndHistoryParserTest {
   @Test
   fun historyParserKeepsPgcIdentityAndMovieLabel() {
     val response =
-      BiliApi.parseHistoryResponse(
+      BiliHistoryApi.parseHistoryResponse(
         JSONObject(
           """
           {
@@ -163,7 +247,7 @@ class ArticleAndHistoryParserTest {
   @Test
   fun historyParserDoesNotPromoteArchiveAnimationTagsToPgc() {
     val response =
-      BiliApi.parseHistoryResponse(
+      BiliHistoryApi.parseHistoryResponse(
         JSONObject(
           """
           {
@@ -192,7 +276,7 @@ class ArticleAndHistoryParserTest {
   @Test
   fun historyParserNeverTreatsPgcAidAsEpisodeId() {
     val response =
-      BiliApi.parseHistoryResponse(
+      BiliHistoryApi.parseHistoryResponse(
         JSONObject(
           """
           {
@@ -226,7 +310,7 @@ class ArticleAndHistoryParserTest {
   @Test
   fun historyParserRetainsPgcRowsWithOnlyArchiveIdentity() {
     val response =
-      BiliApi.parseHistoryResponse(
+      BiliHistoryApi.parseHistoryResponse(
         JSONObject(
           """
           {
@@ -256,7 +340,7 @@ class ArticleAndHistoryParserTest {
   @Test
   fun historyParserRoutesTypedArchiveRowsToDramaPage() {
     val response =
-      BiliApi.parseHistoryResponse(
+      BiliHistoryApi.parseHistoryResponse(
         JSONObject(
           """
           {
@@ -274,7 +358,8 @@ class ArticleAndHistoryParserTest {
             }
           }
           """
-        )
+        ),
+        includeArchivePgcHints = true,
       )
 
     val item = response.items.single() as AccountHistoryItem.Bangumi
@@ -283,15 +368,49 @@ class ArticleAndHistoryParserTest {
   }
 
   @Test
+  fun historyParserKeepsTypedArchiveRowsAsVideosInMyHistory() {
+    val response =
+      BiliHistoryApi.parseHistoryResponse(
+        JSONObject(
+          """
+          {
+            "code": 0,
+            "data": {
+              "list": [{
+                "title": "人口第一大国最好的电影！被200万华人打出9.2分！",
+                "tag_name": "影视杂谈",
+                "uri": "https://www.bilibili.com/video/BV1DOC",
+                "history": {
+                  "business": "archive",
+                  "oid": 42,
+                  "bvid": "BV1DOC"
+                }
+              }]
+            }
+          }
+          """
+        )
+      )
+
+    assertTrue(response.items.single() is AccountHistoryItem.Video)
+  }
+
+  @Test
   fun bangumiIdentityParsesSeasonAndEpisodeRedirects() {
-    assertEquals(46089L, BiliApi.bangumiIdentityFromUrl("https://www.bilibili.com/bangumi/play/ss46089").seasonId)
-    assertEquals(12345L, BiliApi.bangumiIdentityFromUrl("https://www.bilibili.com/bangumi/play/ep12345").episodeId)
+    assertEquals(
+      46089L,
+      BiliBangumiApi.bangumiIdentityFromUrl("https://www.bilibili.com/bangumi/play/ss46089").seasonId,
+    )
+    assertEquals(
+      12345L,
+      BiliBangumiApi.bangumiIdentityFromUrl("https://www.bilibili.com/bangumi/play/ep12345").episodeId,
+    )
   }
 
   @Test
   fun bangumiSearchParserBuildsPortraitDestinationCards() {
     val response =
-      BiliApi.parseBangumiSearchResponse(
+      BiliSearchApi.parseBangumiSearchResponse(
         JSONObject(
           """
           {
@@ -325,20 +444,20 @@ class ArticleAndHistoryParserTest {
 
   @Test
   fun historyPgcLabelsKeepTheNativeBangumiCategories() {
-    assertEquals("番剧", BiliApi.historyPgcMediaLabel("番剧", ""))
-    assertEquals("国创", BiliApi.historyPgcMediaLabel("", "国创"))
-    assertEquals("国创", BiliApi.historyPgcMediaLabel("动画", "国创"))
-    assertEquals("港澳台番剧", BiliApi.historyPgcMediaLabel("番剧", "仅限港澳台地区"))
-    assertEquals("电影", BiliApi.historyPgcMediaLabel("剧场版", ""))
-    assertEquals("电视剧", BiliApi.historyPgcMediaLabel("电视剧", ""))
-    assertEquals("纪录片", BiliApi.historyPgcMediaLabel("纪录片", ""))
-    assertEquals("综艺", BiliApi.historyPgcMediaLabel("综艺", ""))
+    assertEquals("番剧", BiliHistoryApi.historyPgcMediaLabel("番剧", ""))
+    assertEquals("国创", BiliHistoryApi.historyPgcMediaLabel("", "国创"))
+    assertEquals("国创", BiliHistoryApi.historyPgcMediaLabel("动画", "国创"))
+    assertEquals("港澳台番剧", BiliHistoryApi.historyPgcMediaLabel("番剧", "仅限港澳台地区"))
+    assertEquals("电影", BiliHistoryApi.historyPgcMediaLabel("剧场版", ""))
+    assertEquals("电视剧", BiliHistoryApi.historyPgcMediaLabel("电视剧", ""))
+    assertEquals("纪录片", BiliHistoryApi.historyPgcMediaLabel("纪录片", ""))
+    assertEquals("综艺", BiliHistoryApi.historyPgcMediaLabel("综艺", ""))
   }
 
   @Test
   fun nativeGuochuangHintOverridesGenericAnimationAndStaleSeasonType() {
     val response =
-      BiliApi.parseHistoryResponse(
+      BiliHistoryApi.parseHistoryResponse(
         JSONObject(
           """
           {
@@ -371,7 +490,7 @@ class ArticleAndHistoryParserTest {
   @Test
   fun historyParserContinuesWhenFilteredPageIsNotFull() {
     val response =
-      BiliApi.parseHistoryResponse(
+      BiliHistoryApi.parseHistoryResponse(
         JSONObject(
           """
           {
@@ -396,7 +515,7 @@ class ArticleAndHistoryParserTest {
   @Test
   fun historyParserStopsOnEmptyTerminalPage() {
     val response =
-      BiliApi.parseHistoryResponse(
+      BiliHistoryApi.parseHistoryResponse(
         JSONObject(
           """
           {
@@ -416,7 +535,7 @@ class ArticleAndHistoryParserTest {
   @Test
   fun articleSearchParserDecodesTextAndPagination() {
     val response =
-      BiliApi.parseArticleSearchResponse(
+      BiliSearchApi.parseArticleSearchResponse(
         JSONObject(
           """
           {
@@ -470,7 +589,7 @@ class ArticleAndHistoryParserTest {
       """
         .trimIndent()
     val html = "<script>window.__INITIAL_STATE__=$state;(function(){})();</script>"
-    val detail = BiliApi.parseArticlePage(html, ArticleItem(id = 12, title = "占位"))
+    val detail = BiliArticleApi.parseArticlePage(html, ArticleItem(id = 12, title = "占位"))
 
     assertEquals("正文标题", detail.article.title)
     assertEquals("正文作者", detail.article.authorName)
@@ -503,11 +622,14 @@ class ArticleAndHistoryParserTest {
         .trimIndent()
     val html = "<script>window.__INITIAL_STATE__ = $state;</script><div>后续页面内容</div>"
 
-    val detail = BiliApi.parseArticlePage(html, ArticleItem(id = 12, title = "占位"))
+    val detail = BiliArticleApi.parseArticlePage(html, ArticleItem(id = 12, title = "占位"))
 
     assertEquals(33179525L, detail.commentOid)
     assertEquals(12, detail.commentType)
-    assertEquals("https://i0.hdslb.com/doge.png", (detail.blocks[0] as ArticleBlock.Text).emotes["[doge]"])
+    assertEquals(
+      "https://i0.hdslb.com/doge.png",
+      (detail.blocks[0] as ArticleBlock.Text).emotes["[doge]"],
+    )
     assertEquals("BV1ERTR6zECb", (detail.blocks[1] as ArticleBlock.Video).bvid)
   }
 
@@ -528,10 +650,11 @@ class ArticleAndHistoryParserTest {
             ]
           }}
         }
-        """.trimIndent()
+        """
+          .trimIndent()
       )
 
-    val detail = BiliApi.parseArticleJson(response, ArticleItem(id = 7, title = "占位"))
+    val detail = BiliArticleApi.parseArticleJson(response, ArticleItem(id = 7, title = "占位"))
 
     assertEquals("接口正文", detail.article.title)
     assertEquals(7654L, detail.commentOid)

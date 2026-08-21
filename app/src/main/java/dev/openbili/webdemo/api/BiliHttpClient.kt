@@ -1,12 +1,17 @@
 package dev.openbili.webdemo.api
 
+/**
+ * B 站 Web API HTTP 客户端：承载 [BiliHttpClient]。
+ *
+ * 统一管理 OkHttp 客户端、登录 Cookie 与设备指纹 Cookie 的持久化、桌面 UA、风控通行令牌
+ * （gaia token）以及 APP access token；所有 B 站接口请求都经由此处发出。
+ */
+
 import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
 import android.webkit.CookieManager
 import android.webkit.WebSettings
-import android.annotation.SuppressLint
-import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import okhttp3.Cookie
@@ -18,7 +23,15 @@ import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.ByteString.Companion.decodeBase64
+import okio.ByteString.Companion.toByteString
 
+/**
+ * B 站 HTTP 客户端与 Cookie/令牌统一管理。
+ *
+ * 提供 GET/POST（表单、JSON、multipart）请求封装，自动附带桌面 UA、Referer、Origin 与风控
+ * 通行令牌；负责登录 Cookie 的持久化与 WebView 同步，以及扫码授权所用的 APP access token 存取。
+ */
 object BiliHttpClient {
   private const val TAG = "BiliHttp"
   private const val PREFS_NAME = "bili_cookies"
@@ -27,6 +40,7 @@ object BiliHttpClient {
   private const val KEY_APP_ACCESS_TOKEN = "app_access_token"
   private const val KEY_APP_REFRESH_TOKEN = "app_refresh_token"
   private const val KEY_APP_TOKEN_EXPIRES_AT = "app_token_expires_at"
+  // 登录态相关 Cookie 名：退出登录时清除，匿名设备 Cookie（如 buvid3）保留。
   private val LOGIN_COOKIE_NAMES =
     setOf(
       "SESSDATA",
@@ -44,6 +58,11 @@ object BiliHttpClient {
   @Volatile private var cachedGaiaToken: String? = null
   private var prefs: SharedPreferences? = null
 
+  /**
+   * 初始化客户端：读取持久化的 Cookie、恢复风控令牌与桌面 UA，并确保设备指纹 buvid3 存在。
+   *
+   * @param context 用于读取 SharedPreferences 与 WebView 的上下文。
+   */
   fun init(context: Context) {
     prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     loadCookies()
@@ -54,12 +73,17 @@ object BiliHttpClient {
     ensureBuvid3()
   }
 
-  /** Resolve the WebView-provided Chrome version after the first app frame, never on startup. */
+  /** 首个应用帧之后解析 WebView 提供的 Chrome 版本，绝不在启动阶段执行。 */
   fun refreshDesktopUserAgent(context: Context) {
     buildDesktopUa(context)?.let { cachedDesktopUa = it }
     Log.d(TAG, "refreshed desktop UA = $cachedDesktopUa")
   }
 
+  /**
+   * 从 WebView 的默认 UA 中解析 Chrome 版本，拼出桌面版 UA。
+   *
+   * @return 桌面 UA 字符串，解析失败时返回 null。
+   */
   private fun buildDesktopUa(context: Context): String? {
     return try {
       val defaultUa = WebSettings.getDefaultUserAgent(context)
@@ -74,10 +98,12 @@ object BiliHttpClient {
     }
   }
 
+  // 兜底桌面 UA：WebView 版本解析失败时使用固定 Chrome 版本。
   private const val FALLBACK_DESKTOP_UA =
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko)" +
       " Chrome/130.0.0.0 Safari/537.36"
 
+  /** 确保存在设备指纹 buvid3 Cookie，不存在则随机生成并持久化。 */
   private fun ensureBuvid3() {
     synchronized(cookieStore) {
       if (cookieStore.any { it.name == "buvid3" }) return
@@ -90,6 +116,7 @@ object BiliHttpClient {
     }
   }
 
+  /** 把当前 Cookie 序列化写入 SharedPreferences（先剔除已过期的）。 */
   private fun persistCookies() {
     synchronized(cookieStore) {
       val now = System.currentTimeMillis()
@@ -99,11 +126,12 @@ object BiliHttpClient {
     }
   }
 
+  /** 从 SharedPreferences 读取并恢复 Cookie 列表。 */
   private fun loadCookies() {
     cookieStore.clear()
     val records = prefs?.getStringSet(KEY_COOKIES_V2, emptySet()).orEmpty()
     records.mapNotNullTo(cookieStore) { decodeCookie(it) }
-    // One-time compatibility with the original name-only persistence format.
+    // 对旧版仅按名称持久化的格式做一次性兼容迁移。
     if (cookieStore.isEmpty()) {
       val names = prefs?.getStringSet(KEY_COOKIES, emptySet()).orEmpty()
       for (name in names) {
@@ -122,6 +150,12 @@ object BiliHttpClient {
     Log.d(TAG, "loaded ${cookieStore.size} cookies from prefs")
   }
 
+  /**
+   * 主 OkHttp 客户端（带 Cookie 与鉴权）。
+   *
+   * 负责连接/读取超时、Cookie 存取、自动附带语言/Referer/Origin/UA 请求头，并注入风控通行
+   * 令牌 gaia_vtoken；每次响应都会交给 [RiskControlManager.inspectResponse] 检查是否触发风控。
+   */
   val client: OkHttpClient by lazy {
     OkHttpClient.Builder()
       .connectTimeout(15, TimeUnit.SECONDS)
@@ -165,10 +199,7 @@ object BiliHttpClient {
             original.url
           }
         val builder =
-          original
-            .newBuilder()
-            .url(requestUrl)
-            .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+          original.newBuilder().url(requestUrl).header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
         if (original.header("Accept") == null) {
           builder.header("Accept", "application/json, text/plain, */*")
         }
@@ -184,7 +215,7 @@ object BiliHttpClient {
       .build()
   }
 
-  /** Public, credential-free client for cacheable resources such as danmaku XML. */
+  /** 公开、不带凭据的客户端，用于弹幕 XML 等可缓存资源。 */
   private val publicClient: OkHttpClient by lazy {
     OkHttpClient.Builder()
       .connectTimeout(15, TimeUnit.SECONDS)
@@ -205,6 +236,11 @@ object BiliHttpClient {
       .build()
   }
 
+  /**
+   * 用给定的 Cookie 列表整体替换当前存储。
+   *
+   * @param cookies 新的 Cookie 列表。
+   */
   fun replaceCookies(cookies: List<Cookie>) {
     synchronized(cookieStore) {
       cookieStore.clear()
@@ -214,9 +250,15 @@ object BiliHttpClient {
     cachedGaiaToken = cookieValue("x-bili-gaia-vtoken")
   }
 
+  /** 当前风控通行令牌（gaia token），可能为空。 */
   val gaiaToken: String?
     get() = cachedGaiaToken
 
+  /**
+   * 保存风控通行令牌并写入 Cookie（x-bili-gaia-vtoken）。
+   *
+   * @param token 风控验证通过后返回的 grisk_id。
+   */
   fun setGaiaToken(token: String) {
     if (token.isBlank()) return
     val cookie =
@@ -235,7 +277,7 @@ object BiliHttpClient {
     persistCookies()
   }
 
-  /** Clears account credentials while retaining anonymous device cookies used by public APIs. */
+  /** 清除账号登录态，但保留公开接口使用的匿名设备 Cookie。 */
   fun clearLoginSession() {
     synchronized(cookieStore) { cookieStore.removeAll { it.name in LOGIN_COOKIE_NAMES } }
     clearAppAccessToken()
@@ -252,6 +294,13 @@ object BiliHttpClient {
     }
   }
 
+  /**
+   * 发送 GET 请求（带登录凭据的主客户端）。
+   *
+   * @param url 目标 URL。
+   * @param headers 附加请求头。
+   * @return OkHttp 响应（调用方负责关闭）。
+   */
   fun get(url: String, headers: Map<String, String> = emptyMap()): okhttp3.Response {
     val request =
       Request.Builder()
@@ -262,6 +311,13 @@ object BiliHttpClient {
     return client.newCall(request).execute()
   }
 
+  /**
+   * 发送 GET 请求（公开客户端，不带 Cookie）。
+   *
+   * @param url 目标 URL。
+   * @param headers 附加请求头。
+   * @return OkHttp 响应（调用方负责关闭）。
+   */
   fun getPublic(url: String, headers: Map<String, String> = emptyMap()): okhttp3.Response {
     val request =
       Request.Builder()
@@ -272,6 +328,14 @@ object BiliHttpClient {
     return publicClient.newCall(request).execute()
   }
 
+  /**
+   * 发送表单编码的 POST 请求。
+   *
+   * @param url 目标 URL。
+   * @param fields 表单字段。
+   * @param headers 附加请求头。
+   * @return OkHttp 响应（调用方负责关闭）。
+   */
   fun postForm(
     url: String,
     fields: Map<String, String>,
@@ -288,6 +352,17 @@ object BiliHttpClient {
     return client.newCall(request).execute()
   }
 
+  /**
+   * 发送 multipart/form-data 的 POST 请求（用于上传文件）。
+   *
+   * @param url 目标 URL。
+   * @param fields 表单字段。
+   * @param fileField 文件字段名。
+   * @param fileName 文件名。
+   * @param mimeType 文件 MIME 类型。
+   * @param bytes 文件内容字节。
+   * @return OkHttp 响应（调用方负责关闭）。
+   */
   fun postMultipart(
     url: String,
     fields: Map<String, String>,
@@ -307,12 +382,19 @@ object BiliHttpClient {
     return client.newCall(Request.Builder().url(url).post(body).build()).execute()
   }
 
+  /**
+   * 发送 JSON 体的 POST 请求。
+   *
+   * @param url 目标 URL。
+   * @param json JSON 字符串。
+   * @return OkHttp 响应（调用方负责关闭）。
+   */
   fun postJson(url: String, json: String): okhttp3.Response {
     val body = json.toRequestBody("application/json; charset=utf-8".toMediaType())
     return client.newCall(Request.Builder().url(url).post(body).build()).execute()
   }
 
-  /** Returns a cookie value for authenticated API calls without exposing it to logs. */
+  /** 返回鉴权接口所用的 Cookie 值，且不暴露到日志中。 */
   fun cookieValue(name: String): String? =
     synchronized(cookieStore) {
       cookieStore
@@ -321,6 +403,13 @@ object BiliHttpClient {
         ?.value
     }
 
+  /**
+   * 保存扫码授权得到的 APP access token 与刷新 token。
+   *
+   * @param accessToken 访问令牌。
+   * @param refreshToken 刷新令牌。
+   * @param expiresInSeconds 有效期（秒）。
+   */
   fun saveAppAccessToken(accessToken: String, refreshToken: String, expiresInSeconds: Long) {
     if (accessToken.isBlank()) return
     val expiresAt = System.currentTimeMillis() + expiresInSeconds.coerceAtLeast(60L) * 1_000L
@@ -332,6 +421,11 @@ object BiliHttpClient {
       ?.apply()
   }
 
+  /**
+   * 读取仍在有效期内的 APP access token。
+   *
+   * @return 有效的 access token，过期或不存在时返回 null（并清理过期记录）。
+   */
   fun appAccessToken(): String? {
     val expiresAt = prefs?.getLong(KEY_APP_TOKEN_EXPIRES_AT, 0L) ?: 0L
     if (expiresAt <= System.currentTimeMillis()) {
@@ -341,8 +435,10 @@ object BiliHttpClient {
     return prefs?.getString(KEY_APP_ACCESS_TOKEN, null)?.takeIf(String::isNotBlank)
   }
 
+  /** 是否存在仍在有效期内的 APP access token。 */
   fun hasValidAppAccessToken(): Boolean = appAccessToken() != null
 
+  /** 清除持久化的 APP access token。 */
   private fun clearAppAccessToken() {
     prefs
       ?.edit()
@@ -352,7 +448,7 @@ object BiliHttpClient {
       ?.apply()
   }
 
-  /** Copies the persisted login session into the system WebView cookie jar for official pages. */
+  /** 把持久化的登录会话复制到系统 WebView 的 Cookie 罐，供官方页面使用。 */
   fun syncCookiesToWebView() {
     val manager = CookieManager.getInstance()
     manager.setAcceptCookie(true)
@@ -370,35 +466,44 @@ object BiliHttpClient {
     manager.flush()
   }
 
+  /**
+   * 过滤出匹配指定 URL 且未过期的 Cookie。
+   *
+   * @param cookies 待过滤的 Cookie 列表。
+   * @param url 目标 URL。
+   * @param now 当前时间戳。
+   * @return 匹配且有效的 Cookie 列表。
+   */
   internal fun matchingCookies(
     cookies: List<Cookie>,
     url: HttpUrl,
     now: Long = System.currentTimeMillis(),
   ): List<Cookie> = cookies.filter { it.expiresAt >= now && it.matches(url) }
 
-  @SuppressLint("NewApi") // java.util.Base64 is supplied on API 24/25 by core library desugaring.
+  /** 把 Cookie 序列化为 base64Url 字符串用于持久化。 */
   internal fun encodeCookie(cookie: Cookie): String =
-    Base64.getUrlEncoder()
-      .withoutPadding()
-      .encodeToString(
-        listOf(
-            cookie.name,
-            cookie.value,
-            cookie.expiresAt.toString(),
-            cookie.domain,
-            cookie.path,
-            cookie.secure.toString(),
-            cookie.httpOnly.toString(),
-            cookie.hostOnly.toString(),
-          )
-          .joinToString("\u001f")
-          .toByteArray(Charsets.UTF_8)
+    listOf(
+        cookie.name,
+        cookie.value,
+        cookie.expiresAt.toString(),
+        cookie.domain,
+        cookie.path,
+        cookie.secure.toString(),
+        cookie.httpOnly.toString(),
+        cookie.hostOnly.toString(),
       )
+      .joinToString("\u001f")
+      .toByteArray(Charsets.UTF_8)
+      .toByteString()
+      .base64Url()
+      .trimEnd('=')
 
-  @SuppressLint("NewApi") // java.util.Base64 is supplied on API 24/25 by core library desugaring.
+  /** 从 base64Url 字符串反序列化 Cookie，失败或已过期时返回 null。 */
   internal fun decodeCookie(raw: String): Cookie? =
     runCatching {
-        val fields = String(Base64.getUrlDecoder().decode(raw), Charsets.UTF_8).split("\u001f")
+        val fields =
+          String(raw.decodeBase64()?.toByteArray() ?: return@runCatching null, Charsets.UTF_8)
+            .split("\u001f")
         require(fields.size == 8)
         val builder =
           Cookie.Builder()

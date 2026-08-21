@@ -113,8 +113,7 @@ internal fun PlayerGestureLayer(
         isFullscreen = { latestFullscreen },
         onFullscreenChanged = { latestFullscreenChanged(it) },
         onSeekBy = { deltaMs ->
-          val target =
-            (positionProvider() + deltaMs).coerceIn(0L, durationMs.coerceAtLeast(0L))
+          val target = (positionProvider() + deltaMs).coerceIn(0L, durationMs.coerceAtLeast(0L))
           latestSeek(target)
           latestSeekPreview(null)
           latestIndicator(
@@ -261,13 +260,19 @@ internal fun PlayerGestureLayer(
               when {
                 enabledSeek && absX > absY * 1.35f -> PlayerDragMode.SEEK
                 absY > absX * 1.2f &&
-                  playerVerticalGestureMode(start.x, size.width.toFloat(), enabledBrightness, enabledVolume) ==
-                    PlayerDragMode.BRIGHTNESS ->
-                  PlayerDragMode.BRIGHTNESS
+                  playerVerticalGestureMode(
+                    start.x,
+                    size.width.toFloat(),
+                    enabledBrightness,
+                    enabledVolume,
+                  ) == PlayerDragMode.BRIGHTNESS -> PlayerDragMode.BRIGHTNESS
                 absY > absX * 1.2f &&
-                  playerVerticalGestureMode(start.x, size.width.toFloat(), enabledBrightness, enabledVolume) ==
-                    PlayerDragMode.VOLUME ->
-                  PlayerDragMode.VOLUME
+                  playerVerticalGestureMode(
+                    start.x,
+                    size.width.toFloat(),
+                    enabledBrightness,
+                    enabledVolume,
+                  ) == PlayerDragMode.VOLUME -> PlayerDragMode.VOLUME
                 else -> return@detectDragGestures
               }
           }
@@ -446,10 +451,9 @@ internal enum class GestureIndicatorKind {
 internal data class GestureIndicator(val kind: GestureIndicatorKind, val value: Float)
 
 /**
- * Window attributes can trigger a display/color-mode transaction on HDR SurfaceView devices.
- * Pointer input may produce several drag samples in one display frame, so coalescing them to one
- * assignment per VSync avoids racing that transaction with an SDR/HDR surface handoff while
- * preserving the exact final brightness and continuous gesture feedback.
+ * 窗口属性在 HDR SurfaceView 设备上可能触发显示/色彩模式事务。指针输入可能在
+ * 一个显示帧内产生多个拖动采样：把它们合并为每 VSync 一次赋值，避免与 SDR/HDR
+ * 表面交接竞争该事务，同时保留精确的最终亮度与连续手势反馈。
  */
 private class FrameCoalescedWindowBrightness(
   private val window: Window?,
@@ -457,17 +461,16 @@ private class FrameCoalescedWindowBrightness(
 ) {
   private var pendingValue: Float? = null
   private var posted = false
-  private val applyPending =
-    Runnable {
-      posted = false
-      val value = pendingValue ?: return@Runnable
-      pendingValue = null
-      val target = window ?: return@Runnable
-      val attributes = target.attributes
-      if (kotlin.math.abs(attributes.screenBrightness - value) < .002f) return@Runnable
-      attributes.screenBrightness = value
-      target.attributes = attributes
-    }
+  private val applyPending = Runnable {
+    posted = false
+    val value = pendingValue ?: return@Runnable
+    pendingValue = null
+    val target = window ?: return@Runnable
+    val attributes = target.attributes
+    if (kotlin.math.abs(attributes.screenBrightness - value) < .002f) return@Runnable
+    attributes.screenBrightness = value
+    target.attributes = attributes
+  }
 
   fun submit(value: Float) {
     pendingValue = value
@@ -483,10 +486,11 @@ private class FrameCoalescedWindowBrightness(
   }
 }
 
-/** Shared arbitration state for the independent pointer detectors in [PlayerGestureLayer]. */
+/** [PlayerGestureLayer] 中独立指针检测器的共享仲裁状态。 */
 private class PlayerPointerGate {
   var generation: Long = 0L
     private set
+
   var active: Boolean = false
     private set
 
@@ -531,90 +535,91 @@ internal fun Modifier.twoFingerPlayerGesture(
     this
   } else {
     pointerInput(enabledFullscreenToggle, enabledDoubleTapSeek, edgeInset) {
-    var previousTapAt = 0L
-    var previousTapCenter = Offset.Unspecified
-    awaitEachGesture {
-      val first = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-      val startedAt = first.uptimeMillis
-      var sawTwoPointers = false
-      var invalid = false
-      var fullscreenTriggered = false
-      var contactClaimed = false
-      var initialSpan: Float? = null
-      var twoFingerCenter = Offset.Zero
-      var eventTime = startedAt
-      var maxMovement = 0f
-      val starts = mutableMapOf<androidx.compose.ui.input.pointer.PointerId, Offset>()
-      val safeInsetPx = edgeInset.toPx()
-      try {
-        while (true) {
-          val event = awaitPointerEvent(PointerEventPass.Initial)
-          eventTime = event.changes.maxOfOrNull { it.uptimeMillis } ?: eventTime
-          val active = event.changes.filter { it.pressed }
-          if (active.size > 2) invalid = true
-          if (active.size >= 2 && !contactClaimed) {
-            contactClaimed = true
-            onTwoFingerContactChanged(true)
-          }
-          if (active.size == 2) {
-            sawTwoPointers = true
-            active.forEach { change ->
-              val origin = starts.getOrPut(change.id) { change.position }
-              maxMovement =
-                kotlin.math.max(maxMovement, (change.position - origin).getDistance())
+      var previousTapAt = 0L
+      var previousTapCenter = Offset.Unspecified
+      awaitEachGesture {
+        val first = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+        val startedAt = first.uptimeMillis
+        var sawTwoPointers = false
+        var invalid = false
+        var fullscreenTriggered = false
+        var contactClaimed = false
+        var initialSpan: Float? = null
+        var twoFingerCenter = Offset.Zero
+        var eventTime = startedAt
+        var maxMovement = 0f
+        val starts = mutableMapOf<androidx.compose.ui.input.pointer.PointerId, Offset>()
+        val safeInsetPx = edgeInset.toPx()
+        try {
+          while (true) {
+            val event = awaitPointerEvent(PointerEventPass.Initial)
+            eventTime = event.changes.maxOfOrNull { it.uptimeMillis } ?: eventTime
+            val active = event.changes.filter { it.pressed }
+            if (active.size > 2) invalid = true
+            if (active.size >= 2 && !contactClaimed) {
+              contactClaimed = true
+              onTwoFingerContactChanged(true)
             }
-            twoFingerCenter = (active[0].position + active[1].position) / 2f
-            val span = (active[0].position - active[1].position).getDistance()
-            val originSpan = initialSpan ?: span.also { initialSpan = it }
-            if (active.any { it.position.x !in safeInsetPx..(size.width - safeInsetPx) }) {
-              invalid = true
-            }
-            if (enabledFullscreenToggle && !invalid && !fullscreenTriggered) {
-              val target =
-                fullscreenTargetForSpan(
-                  isFullscreen = isFullscreen(),
-                  initialSpan = originSpan,
-                  currentSpan = span,
-                  minimumMovementPx =
-                    kotlin.math.max(viewConfiguration.touchSlop * .75f, 10.dp.toPx()),
-                )
-              if (target != null) {
-                fullscreenTriggered = true
-                onFullscreenChanged(target)
+            if (active.size == 2) {
+              sawTwoPointers = true
+              active.forEach { change ->
+                val origin = starts.getOrPut(change.id) { change.position }
+                maxMovement = kotlin.math.max(maxMovement, (change.position - origin).getDistance())
+              }
+              twoFingerCenter = (active[0].position + active[1].position) / 2f
+              val span = (active[0].position - active[1].position).getDistance()
+              val originSpan = initialSpan ?: span.also { initialSpan = it }
+              if (active.any { it.position.x !in safeInsetPx..(size.width - safeInsetPx) }) {
+                invalid = true
+              }
+              if (enabledFullscreenToggle && !invalid && !fullscreenTriggered) {
+                val target =
+                  fullscreenTargetForSpan(
+                    isFullscreen = isFullscreen(),
+                    initialSpan = originSpan,
+                    currentSpan = span,
+                    minimumMovementPx =
+                      kotlin.math.max(viewConfiguration.touchSlop * .75f, 10.dp.toPx()),
+                  )
+                if (target != null) {
+                  fullscreenTriggered = true
+                  onFullscreenChanged(target)
+                }
               }
             }
+            if (sawTwoPointers) event.changes.forEach { it.consume() }
+            if (active.isEmpty()) break
           }
-          if (sawTwoPointers) event.changes.forEach { it.consume() }
-          if (active.isEmpty()) break
+        } finally {
+          if (contactClaimed) onTwoFingerContactChanged(false)
         }
-      } finally {
-        if (contactClaimed) onTwoFingerContactChanged(false)
-      }
-      val wasTap =
-        enabledDoubleTapSeek &&
-          sawTwoPointers &&
-          !invalid &&
-          !fullscreenTriggered &&
-          eventTime - startedAt <= TWO_FINGER_TAP_TIMEOUT_MS &&
-          maxMovement <= viewConfiguration.touchSlop * 1.6f
-      if (wasTap) {
-        val closeToPrevious =
-          previousTapCenter != Offset.Unspecified &&
-            (twoFingerCenter - previousTapCenter).getDistance() <= 56.dp.toPx()
-        if (eventTime - previousTapAt in 60L..TWO_FINGER_DOUBLE_TAP_TIMEOUT_MS && closeToPrevious) {
-          onSeekBy(if (twoFingerCenter.x >= size.width / 2f) 5_000L else -5_000L)
+        val wasTap =
+          enabledDoubleTapSeek &&
+            sawTwoPointers &&
+            !invalid &&
+            !fullscreenTriggered &&
+            eventTime - startedAt <= TWO_FINGER_TAP_TIMEOUT_MS &&
+            maxMovement <= viewConfiguration.touchSlop * 1.6f
+        if (wasTap) {
+          val closeToPrevious =
+            previousTapCenter != Offset.Unspecified &&
+              (twoFingerCenter - previousTapCenter).getDistance() <= 56.dp.toPx()
+          if (
+            eventTime - previousTapAt in 60L..TWO_FINGER_DOUBLE_TAP_TIMEOUT_MS && closeToPrevious
+          ) {
+            onSeekBy(if (twoFingerCenter.x >= size.width / 2f) 5_000L else -5_000L)
+            previousTapAt = 0L
+            previousTapCenter = Offset.Unspecified
+          } else {
+            previousTapAt = eventTime
+            previousTapCenter = twoFingerCenter
+          }
+        } else if (fullscreenTriggered) {
           previousTapAt = 0L
           previousTapCenter = Offset.Unspecified
-        } else {
-          previousTapAt = eventTime
-          previousTapCenter = twoFingerCenter
         }
-      } else if (fullscreenTriggered) {
-        previousTapAt = 0L
-        previousTapCenter = Offset.Unspecified
       }
     }
-  }
   }
 
 private const val PINCH_SPAN_FRACTION = .035f

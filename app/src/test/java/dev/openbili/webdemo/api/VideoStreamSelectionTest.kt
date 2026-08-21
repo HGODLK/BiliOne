@@ -7,7 +7,7 @@ class VideoStreamSelectionTest {
   @Test
   fun highestQualityIsFirstAndAvcWinsWithinSameQuality() {
     val selected =
-      BiliApi.selectPreferredStreams(
+      BiliVideoApi.selectPreferredStreams(
         listOf(
           VideoStream(80, "1080P", "hevc", 12, "hev1"),
           VideoStream(120, "4K", "av1", 13, "av01"),
@@ -30,6 +30,6 @@ class VideoStreamSelectionTest {
         VideoStream(120, "4K", "4k", 7, "avc1"),
         VideoStream(80, "1080P", "1080", 7, "avc1"),
       )
-    assertEquals(2, BiliApi.defaultStreamIndex(streams))
+    assertEquals(2, BiliVideoApi.defaultStreamIndex(streams))
   }
 }

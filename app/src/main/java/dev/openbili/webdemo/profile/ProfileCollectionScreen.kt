@@ -28,6 +28,7 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -40,6 +41,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -50,6 +52,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
@@ -70,10 +74,13 @@ import dev.openbili.webdemo.feed.FeedItem
 import dev.openbili.webdemo.feed.LocalFeedImageLoadPolicy
 import dev.openbili.webdemo.feed.rememberGridFeedImageLoadPolicy
 import dev.openbili.webdemo.settings.AppSettings
-import dev.openbili.webdemo.ui.PressableVideoCard
+import dev.openbili.webdemo.ui.LocalControlMode
 import dev.openbili.webdemo.ui.NavigationCardBottomClearance
+import dev.openbili.webdemo.ui.PressableVideoCard
 import dev.openbili.webdemo.ui.VideoCardGradient
 import dev.openbili.webdemo.ui.VideoCardReveal
+import dev.openbili.webdemo.ui.controlFocusOutline
+import dev.openbili.webdemo.ui.requestFocusWithinFrames
 import kotlinx.coroutines.delay
 
 @Composable
@@ -97,12 +104,18 @@ internal fun ProfileCollectionGrid(
   onVideoLongClick: (FeedItem) -> Unit,
   hiddenCoverItemId: String?,
   onVideoBoundsChanged: (FeedItem, Rect) -> Unit,
+  initialFocusRequester: FocusRequester? = null,
+  videoReturnFocusRegistry: ProfileVideoReturnFocusRegistry,
+  onControlExitUp: (() -> Unit)? = null,
   onScrollStarted: () -> Unit,
   backHandlingEnabled: Boolean,
 ) {
+  val controlMode = LocalControlMode.current
   val state = rememberLazyGridState()
   val imageLoadPolicy = rememberGridFeedImageLoadPolicy(state)
   val cardBounds = remember(profile?.mid) { mutableMapOf<String, Rect>() }
+  val cardFocusRequesters = remember(profile?.mid) { mutableMapOf<String, FocusRequester>() }
+  val detailFocusRequester = remember(profile?.mid) { FocusRequester() }
   var displayedCollectionId by remember(profile?.mid) { mutableStateOf(selectedCollectionId) }
   var transitionSourceBounds by remember(profile?.mid) { mutableStateOf(Rect.Zero) }
   var transitionTargetBounds by remember(profile?.mid) { mutableStateOf(Rect.Zero) }
@@ -119,6 +132,16 @@ internal fun ProfileCollectionGrid(
       }
     }
   val displayedCollection = collections.firstOrNull { it.id == displayedCollectionId }
+  val firstFocusableCollectionId =
+    remember(filteredCollections) {
+      filteredCollections.firstOrNull { it.collectionId > 0L }?.id
+    }
+
+  LaunchedEffect(displayedCollectionId, detailContentReady, controlMode) {
+    if (controlMode && displayedCollectionId != null && detailContentReady) {
+      detailFocusRequester.requestFocusWithinFrames(maxFrames = 8)
+    }
+  }
 
   BackHandler(enabled = backHandlingEnabled && displayedCollectionId != null) {
     onSelectedCollectionChange(null)
@@ -149,6 +172,7 @@ internal fun ProfileCollectionGrid(
         detailContentReady = true
       }
     } else if (displayedCollectionId != null) {
+      val closingCollectionId = displayedCollectionId
       detailContentReady = false
       val latestSource = cardBounds[displayedCollectionId] ?: transitionSourceBounds
       if (latestSource.hasUsableSize()) transitionSourceBounds = latestSource
@@ -160,6 +184,12 @@ internal fun ProfileCollectionGrid(
       displayedCollectionId = null
       transitionSourceBounds = Rect.Zero
       transitionTargetBounds = Rect.Zero
+      if (controlMode) {
+        withFrameNanos {}
+        closingCollectionId?.let { id ->
+          runCatching { cardFocusRequesters[id]?.requestFocus() }
+        }
+      }
     }
   }
 
@@ -208,8 +238,25 @@ internal fun ProfileCollectionGrid(
                 batchKey = collections.firstOrNull()?.id,
                 itemKey = collection.id,
               ) {
+                val localFocusRequester = remember(collection.id) { FocusRequester() }
+                val cardFocusRequester =
+                  initialFocusRequester.takeIf { collection.id == firstFocusableCollectionId }
+                    ?: localFocusRequester
+                DisposableEffect(collection.id, cardFocusRequester) {
+                  cardFocusRequesters[collection.id] = cardFocusRequester
+                  onDispose {
+                    if (cardFocusRequesters[collection.id] === cardFocusRequester) {
+                      cardFocusRequesters.remove(collection.id)
+                    }
+                  }
+                }
                 CollectionCard(
                   collection = collection,
+                  focusRequester = cardFocusRequester,
+                  onControlKeyEvent =
+                    if (collection.id == firstFocusableCollectionId && onControlExitUp != null) {
+                      { event -> handleProfileControlExitUp(event, onControlExitUp) }
+                    } else null,
                   onBoundsChanged = { cardBounds[collection.id] = it },
                   onClick = {
                     transitionSourceBounds = cardBounds[collection.id] ?: Rect.Zero
@@ -255,6 +302,8 @@ internal fun ProfileCollectionGrid(
                 hiddenCoverItemId = hiddenCoverItemId,
                 onVideoBoundsChanged = onVideoBoundsChanged,
                 onScrollStarted = onScrollStarted,
+                initialFocusRequester = detailFocusRequester,
+                videoReturnFocusRegistry = videoReturnFocusRegistry,
               )
             }
           }
@@ -267,6 +316,8 @@ internal fun ProfileCollectionGrid(
 @Composable
 private fun CollectionCard(
   collection: SpaceContentCard,
+  focusRequester: FocusRequester? = null,
+  onControlKeyEvent: ((androidx.compose.ui.input.key.KeyEvent) -> Boolean)? = null,
   onBoundsChanged: (Rect) -> Unit,
   onClick: () -> Unit,
 ) {
@@ -276,6 +327,8 @@ private fun CollectionCard(
     onLongClick = {},
     modifier = Modifier.onGloballyPositioned { onBoundsChanged(it.boundsInRoot()) },
     shape = RoundedCornerShape(20.dp),
+    focusRequester = focusRequester,
+    onControlKeyEvent = onControlKeyEvent,
   ) {
     VideoCardGradient(coverUrl = collection.coverUrl, loadKey = collection.id) {
       Column(Modifier.padding(10.dp)) {
@@ -338,6 +391,8 @@ private fun CollectionDetail(
   hiddenCoverItemId: String?,
   onVideoBoundsChanged: (FeedItem, Rect) -> Unit,
   onScrollStarted: () -> Unit,
+  initialFocusRequester: FocusRequester? = null,
+  videoReturnFocusRegistry: ProfileVideoReturnFocusRegistry,
 ) {
   val state = rememberLazyGridState()
   val imageLoadPolicy = rememberGridFeedImageLoadPolicy(state)
@@ -360,6 +415,7 @@ private fun CollectionDetail(
       collection = collection,
       total = total,
       onDismiss = onDismiss,
+      initialFocusRequester = initialFocusRequester,
     )
     CompositionLocalProvider(LocalFeedImageLoadPolicy provides imageLoadPolicy) {
       LazyVerticalGrid(
@@ -409,15 +465,24 @@ private fun CollectionDetail(
           else ->
             itemsIndexed(videos, key = { _, video -> video.id }) { index, video ->
               var coverBounds by remember(video.id) { mutableStateOf(Rect.Zero) }
+              val cardFocusRequester =
+                rememberProfileVideoCardFocusRequester(
+                  itemId = video.id,
+                  registry = videoReturnFocusRegistry,
+                )
               VideoCardReveal(
                 index = index,
                 batchKey = collection.id,
                 itemKey = video.id,
               ) {
                 PressableVideoCard(
-                  onClick = { onVideoClick(video, coverBounds) },
+                  onClick = {
+                    videoReturnFocusRegistry.rememberReturningItem(video.id)
+                    onVideoClick(video, coverBounds)
+                  },
                   onLongClick = { onVideoLongClick(video) },
                   shape = RoundedCornerShape(18.dp),
+                  focusRequester = cardFocusRequester,
                 ) {
                   FeedCardContent(
                     item = video,
@@ -463,6 +528,7 @@ private fun CollectionDetailHeader(
   collection: SpaceContentCard,
   total: Int,
   onDismiss: () -> Unit,
+  initialFocusRequester: FocusRequester? = null,
 ) {
   Surface(
     modifier = Modifier.fillMaxWidth(),
@@ -473,7 +539,19 @@ private fun CollectionDetailHeader(
       Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
-      IconButton(onClick = onDismiss) {
+      IconButton(
+        onClick = onDismiss,
+        modifier =
+          Modifier.then(
+              if (initialFocusRequester != null) {
+                Modifier.focusRequester(initialFocusRequester)
+              } else Modifier
+            )
+            .controlFocusOutline(
+              shape = CircleShape,
+              color = MaterialTheme.colorScheme.primary,
+            ),
+      ) {
         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回合集和系列")
       }
       if (collection.coverUrl.isNotBlank()) {

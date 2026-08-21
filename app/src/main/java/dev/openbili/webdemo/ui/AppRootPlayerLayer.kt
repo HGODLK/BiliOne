@@ -65,8 +65,7 @@ internal fun shouldUseRootPlayerHost(
   startupWarmupVisible: Boolean,
   bangumiRootPageActive: Boolean,
   hasBangumiHomeTransition: Boolean,
-): Boolean =
-  !startupWarmupVisible && (bangumiRootPageActive || hasBangumiHomeTransition)
+): Boolean = !startupWarmupVisible && (bangumiRootPageActive || hasBangumiHomeTransition)
 
 internal fun shouldActivateBangumiRootPage(
   selectedTab: RootTab,
@@ -85,9 +84,7 @@ internal fun shouldSuppressDetailPlayerForBangumiCardTransition(
 ): Boolean =
   when (kind) {
     TransitionKind.ENTER_ROOT ->
-      phase == SessionPhase.PREPARING ||
-        phase == SessionPhase.READY ||
-        phase == SessionPhase.FLYING
+      phase == SessionPhase.PREPARING || phase == SessionPhase.READY || phase == SessionPhase.FLYING
     TransitionKind.EXIT_ROOT ->
       phase == SessionPhase.FLYING || phase == SessionPhase.REVEALING_BACKGROUND
     else -> false
@@ -129,14 +126,13 @@ internal fun RootPlayerLayer(
 ) {
   if (!hostEnabled) return
   val density = LocalDensity.current
-  // The preview portal owns the physical host while its media id is being switched. Requiring the
-  // old ownership id to already match the new target briefly parks the SurfaceView at 1 x 1 before
-  // the ownership effect can catch up, which is visible as a positional flash.
+  // 预览门户在其媒体 id 被切换期间拥有物理宿主。要求旧拥有权 id 已与新目标一致，
+  // 会在拥有权效应赶上之前把 SurfaceView 短暂停在 1 x 1，表现为位置闪烁。
   val previewOwned =
     ownership.role in setOf(RootPlayerSurfaceRole.PREVIEW_PENDING, RootPlayerSurfaceRole.PREVIEW)
-  // PREVIEW_PENDING must already receive the real preview bounds. Waiting for the first frame
-  // before sizing the SurfaceView creates a deadlock on devices that do not render a 1 px parked
-  // surface. A cover remains above it until that first frame is reported.
+  // PREVIEW_PENDING 必须已经收到真实的预览边界。等首帧再给 SurfaceView 定尺寸，
+  // 会在不渲染 1 px 停放表面的设备上造成死锁。在其首帧上报之前，其上方一直保留
+  // 一张封面。
   val previewPositioned =
     shouldPositionBangumiPreviewPortal(
       previewOwned = previewOwned,
@@ -145,12 +141,10 @@ internal fun RootPlayerLayer(
     )
   val bounds = if (previewPositioned) previewBounds else Rect.Zero
   val contentVisible = bounds.hasUsableSize()
-  // SurfaceView cannot be parked outside the window: on Samsung's SurfaceControl implementation
-  // an off-screen parent may stay in SurfaceFlinger's Offscreen Hierarchy after the Compose view
-  // returns. A one-pixel on-screen host keeps the one surface attached without exposing content.
-  val hostBounds =
-    if (contentVisible) bounds
-    else Rect(0f, 0f, 1f, 1f)
+  // SurfaceView 不能停放在窗口之外：在三星的 SurfaceControl 实现上，Compose 视图返回后，
+  // 屏幕外的父级可能仍留在 SurfaceFlinger 的 Offscreen Hierarchy 中。一个 1 像素的
+  // 屏上宿主能让那个表面保持挂接而不暴露内容。
+  val hostBounds = if (contentVisible) bounds else Rect(0f, 0f, 1f, 1f)
 
   Box(
     Modifier.offset { IntOffset(hostBounds.left.roundToInt(), hostBounds.top.roundToInt()) }
@@ -165,13 +159,14 @@ internal fun RootPlayerLayer(
         coverUrl = layerItem?.coverUrl.orEmpty(),
         modifier = Modifier.fillMaxSize(),
         loadKey = "root-player-background:${layerItem?.id.orEmpty()}",
+        useColorfulCardsPreference = false,
       ) {
         Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = .36f)))
       }
     }
-    // Keep the sole AndroidView mounted after warmup so it can be reused without reinflation. The
-    // idle root host deliberately leaves Media3 unbound; otherwise an old decoder can continue
-    // producing into this one-pixel SurfaceView and exhaust Samsung's buffer queue.
+    // 预热后保持唯一的 AndroidView 挂载，使其无需重新充气即可复用。空闲的根宿主
+    // 有意让 Media3 保持未绑定；否则旧解码器可能继续向这个 1 像素 SurfaceView 产出，
+    // 耗尽三星的缓冲队列。
     playerContent(
       SharedPlayerHostConfig(
         modifier = Modifier.fillMaxSize(),
@@ -193,8 +188,7 @@ internal fun RootPlayerLayer(
           )
           CachedBangumiTransitionCover(
             coverUrl = previewCoverBlend.toCoverUrl,
-            modifier =
-              Modifier.fillMaxSize().graphicsLayer { alpha = previewCoverBlend.progress },
+            modifier = Modifier.fillMaxSize().graphicsLayer { alpha = previewCoverBlend.progress },
           )
         } else {
           CoverImage(
@@ -225,8 +219,7 @@ internal fun RootPlayerLayer(
 }
 
 /**
- * Tracks the last danmaku parameters so the hosted overlay is not updated when nothing changed
- * across recompositions.
+ * 跟踪上一次的弹幕参数，让托管的覆盖层在重组之间没有任何变化时不更新。
  */
 internal class DanmakuUpdateState {
   private var itemsRef: List<DanmakuItem>? = null

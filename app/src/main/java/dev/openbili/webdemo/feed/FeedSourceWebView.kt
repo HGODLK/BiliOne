@@ -1,5 +1,13 @@
 package dev.openbili.webdemo.feed
 
+/**
+ * 推荐信息流的「数据源 WebView」宿主。
+ *
+ * 本文件负责用不可见的 WebView 打开 bilibili 公开页面并注入提取脚本，把脚本结果通过
+ * 回调交给 ViewModel。WebView 生命周期、页面超时、网络/证书错误与渲染进程崩溃等边界
+ * 都在这里统一处理，避免把 Android WebView 的细节泄漏到 Compose UI 层。
+ */
+
 import android.content.Context
 import android.graphics.Bitmap
 import android.net.http.SslError
@@ -31,9 +39,11 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /**
- * Renders the public source page behind an opaque Compose feed only while metadata is needed. The
- * view is full-sized so responsive/lazy DOM content can render, but it never accepts touch or
- * accessibility focus and is destroyed as soon as the ViewModel marks the request inactive.
+ * 渲染承载数据源的 WebView 组合体。
+ *
+ * 仅在需要元数据时，把公开源页面渲染在不透明的 Compose 信息流背后：视图保持全尺寸以让
+ * 响应式/懒加载 DOM 内容正常渲染，但从不接收触摸或无障碍焦点；一旦 ViewModel 将请求标记
+ * 为失效，即被销毁。
  */
 @Composable
 fun FeedSourceWebView(
@@ -85,16 +95,24 @@ fun FeedSourceWebView(
   }
 }
 
+/**
+ * 专用于提取的 WebView 子类。
+ *
+ * 维护「是否已完成」「是否已释放」两个状态位，保证超时、提取完成、释放三者在并发回调
+ * 下最多触发一次结果回传，并负责在释放时彻底销毁 WebView 资源。
+ */
 private class ExtractionWebView(context: Context) : WebView(context) {
   private var extractionJob: Job? = null
   private var completed = false
   private var pageTimeout: Runnable? = null
   private var released = false
 
+  /** 安排页面整体加载超时，超时后调用 [onTimeout]。 */
   fun schedulePageTimeout(onTimeout: () -> Unit) {
     pageTimeout = Runnable { onTimeout() }.also { postDelayed(it, PAGE_TIMEOUT_MILLIS) }
   }
 
+  /** 标记为已完成并移除超时任务；若已释放则返回 false 阻止重复回传。 */
   fun markCompleted(): Boolean {
     if (completed || released) return false
     completed = true
@@ -103,6 +121,7 @@ private class ExtractionWebView(context: Context) : WebView(context) {
     return true
   }
 
+  /** 启动提取协程；已完成/已释放或已有提取任务时直接忽略。 */
   fun startExtraction(
     scope: CoroutineScope,
     extractor: FeedPageExtractor,
@@ -121,6 +140,7 @@ private class ExtractionWebView(context: Context) : WebView(context) {
     }
   }
 
+  /** 释放 WebView：取消任务、移除回调、停止加载并销毁原生视图。 */
   fun release() {
     if (released) return
     released = true
@@ -141,6 +161,12 @@ private class ExtractionWebView(context: Context) : WebView(context) {
   }
 }
 
+/**
+ * 数据源页面的 WebViewClient。
+ *
+ * 拦截页面导航（只放行 [UrlPolicy] 允许的地址）、在页面内容可见/加载完成时触发提取，
+ * 并把主框架的网络错误、HTTP 错误、SSL 错误与渲染进程崩溃统一上报为网络错误。
+ */
 private class FeedSourceClient(
   private val startExtraction: () -> Unit,
   private val onNetworkError: (String) -> Unit,

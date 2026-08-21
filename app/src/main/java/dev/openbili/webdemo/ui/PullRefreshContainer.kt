@@ -52,7 +52,7 @@ fun PullRefreshContainer(
         state = state,
         enabled = enabled,
         onRefresh = onRefresh,
-      ),
+      )
   ) {
     content()
     if (enabled) {
@@ -67,8 +67,7 @@ fun PullRefreshContainer(
               IntOffset(
                 x = 0,
                 y =
-                  (travelPx *
-                      pullRefreshIndicatorOffsetFraction(distanceFraction, isRefreshing))
+                  (travelPx * pullRefreshIndicatorOffsetFraction(distanceFraction, isRefreshing))
                     .roundToInt(),
               )
             }
@@ -79,7 +78,7 @@ fun PullRefreshContainer(
                   distanceFraction = distanceFraction,
                   isRefreshing = isRefreshing,
                 )
-            },
+            }
       ) {
         Surface(
           modifier = Modifier.size(IndicatorSize),

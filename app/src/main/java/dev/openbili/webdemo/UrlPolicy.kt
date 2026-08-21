@@ -37,8 +37,8 @@ object UrlPolicy {
   }
 
   /**
-   * Resolves a feed link and returns a canonical video page URL. Feed extraction is deliberately
-   * narrower than general navigation: short links and non-video Bilibili pages are not feed items.
+   * 解析信息流链接并返回规范化的视频页 URL。信息流提取有意比通用导航更窄：短链接和
+   * 非视频 B 站页面不是信息流条目。
    */
   fun normalizeVideoUrl(
     rawUrl: String?,
@@ -50,7 +50,7 @@ object UrlPolicy {
 
     val rawHost = uri.host?.trimEnd('.')?.lowercase(Locale.ROOT) ?: return null
     if (!isBilibiliHost(rawHost)) return null
-    // Rewrite the mobile subdomain so the desktop site is served when combined with a desktop UA.
+    // 重写移动子域，让桌面 UA 生效时由桌面站点提供服务。
     val host = if (rawHost == "m.bilibili.com") "www.bilibili.com" else rawHost
 
     val path = uri.path.orEmpty()
@@ -63,15 +63,15 @@ object UrlPolicy {
   }
 
   /**
-   * Converts protocol-relative or relative cover URLs to HTTPS and rejects active/non-web schemes.
+   * 把协议相对或相对封面 URL 转换为 HTTPS，并拒绝主动式/非网页协议。
    */
   fun normalizeImageUrl(
     rawUrl: String?,
     baseUrl: String = "https://www.bilibili.com/",
   ): String? {
     val uri = resolve(rawUrl, baseUrl) ?: return null
-    // The offline-media subsystem owns this exact app-private path and never exposes it outside the
-    // app. Allow only its persisted cover file; continue rejecting every other local/active scheme.
+    // 离线媒体子系统拥有这个确切的应用私有路径，从不把它暴露到应用之外。只允许其
+    // 持久化的封面文件；继续拒绝其他所有本地/主动式协议。
     val scheme = uri.scheme?.lowercase(Locale.ROOT)
     if (scheme == "file") {
       val path = uri.path.orEmpty().replace('\\', '/')
@@ -83,7 +83,7 @@ object UrlPolicy {
           path.endsWith("/cover.jpg")
       }
     }
-    // Accept http (force-upgrade to https) and https; reject everything else.
+    // 接受 http（强制升级到 https）和 https；拒绝其他一切。
     if (scheme != "https" && scheme != "http") return null
     if (uri.rawUserInfo != null) return null
     val host = uri.host?.trimEnd('.')?.lowercase(Locale.ROOT) ?: return null

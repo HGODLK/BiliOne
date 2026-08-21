@@ -36,9 +36,8 @@ internal fun navigationBringIntoViewRect(
 }
 
 @Stable
-class NavigationBringIntoViewRequester internal constructor(
-  internal val delegate: BringIntoViewRequester,
-) {
+class NavigationBringIntoViewRequester
+internal constructor(internal val delegate: BringIntoViewRequester) {
   private var targetSize = IntSize.Zero
   internal var topClearancePx: Int = 0
   internal var bottomClearancePx: Int = 0
@@ -48,8 +47,8 @@ class NavigationBringIntoViewRequester internal constructor(
   }
 
   suspend fun bringIntoView() {
-    // Relocation can remain suspended when a parent is being replaced by a transition. Navigation
-    // may prefer the safe viewport, but it must still start if that parent never responds.
+    // 当父级正被转场替换时，重定位可能保持挂起。Navigation 可能偏好安全视口，
+    // 但如果那个父级从不响应，它仍必须启动。
     withTimeoutOrNull(NAVIGATION_BRING_INTO_VIEW_TIMEOUT_MS) {
       val requestedRect =
         navigationBringIntoViewRect(
@@ -58,8 +57,7 @@ class NavigationBringIntoViewRequester internal constructor(
           topClearancePx = topClearancePx,
           bottomClearancePx = bottomClearancePx,
         )
-      if (requestedRect == null) delegate.bringIntoView()
-      else delegate.bringIntoView(requestedRect)
+      if (requestedRect == null) delegate.bringIntoView() else delegate.bringIntoView(requestedRect)
     }
   }
 }
@@ -76,7 +74,5 @@ fun rememberNavigationBringIntoViewRequester(
   return requester
 }
 
-fun Modifier.navigationBringIntoViewTarget(
-  requester: NavigationBringIntoViewRequester
-): Modifier =
+fun Modifier.navigationBringIntoViewTarget(requester: NavigationBringIntoViewRequester): Modifier =
   bringIntoViewRequester(requester.delegate).onSizeChanged(requester::updateTargetSize)

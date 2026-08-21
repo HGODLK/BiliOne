@@ -22,40 +22,40 @@ data class DeviceMediaCapabilities(
           }
           .getOrDefault(emptyList())
       val display =
-        (context.getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager)
-          ?.getDisplay(Display.DEFAULT_DISPLAY)
+        (context.getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager)?.getDisplay(
+          Display.DEFAULT_DISPLAY
+        )
       val hdrTypes =
-        runCatching {
-            if (Build.VERSION.SDK_INT >= 34) {
-              display?.mode?.supportedHdrTypes ?: intArrayOf()
-            } else {
-              @Suppress("DEPRECATION")
-              display?.hdrCapabilities?.supportedHdrTypes ?: intArrayOf()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+          runCatching {
+              if (Build.VERSION.SDK_INT >= 34) {
+                display?.mode?.supportedHdrTypes ?: intArrayOf()
+              } else {
+                @Suppress("DEPRECATION")
+                display?.hdrCapabilities?.supportedHdrTypes ?: intArrayOf()
+              }
             }
-          }
-          .getOrDefault(intArrayOf())
+            .getOrDefault(intArrayOf())
+        } else {
+          intArrayOf()
+        }
       val hasDolbyVisionDisplay = Display.HdrCapabilities.HDR_TYPE_DOLBY_VISION in hdrTypes
       val hasHdr10Display =
         Display.HdrCapabilities.HDR_TYPE_HDR10 in hdrTypes ||
           Display.HdrCapabilities.HDR_TYPE_HDR10_PLUS in hdrTypes
-      val hasDolbyVisionDecoder =
-        codecInfos.supportsMime(MediaFormat.MIMETYPE_VIDEO_DOLBY_VISION)
-      val hasHdr10Decoder =
-        codecInfos.any { codec ->
-          codec.supportedTypes.any { it.equals(MediaFormat.MIMETYPE_VIDEO_HEVC, true) } &&
-            runCatching {
-                codec
-                  .getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_HEVC)
-                  .profileLevels
-                  .any { level ->
-                    level.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10 ||
-                      level.profile ==
-                        MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10Plus ||
-                      level.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10
-                  }
+      val hasDolbyVisionDecoder = codecInfos.supportsMime(MediaFormat.MIMETYPE_VIDEO_DOLBY_VISION)
+      val hasHdr10Decoder = codecInfos.any { codec ->
+        codec.supportedTypes.any { it.equals(MediaFormat.MIMETYPE_VIDEO_HEVC, true) } &&
+          runCatching {
+              codec.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_HEVC).profileLevels.any {
+                level ->
+                level.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10 ||
+                  level.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10Plus ||
+                  level.profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10
               }
-              .getOrDefault(false)
-        }
+            }
+            .getOrDefault(false)
+      }
       val hasAtmosDecoder = codecInfos.supportsMime(MediaFormat.MIMETYPE_AUDIO_EAC3_JOC)
       val hasHiResDecoder = codecInfos.supportsMime(MediaFormat.MIMETYPE_AUDIO_FLAC)
       return DeviceMediaCapabilities(
@@ -66,7 +66,8 @@ data class DeviceMediaCapabilities(
       )
     }
 
-    private fun List<MediaCodecInfo>.supportsMime(mime: String): Boolean =
-      any { codec -> codec.supportedTypes.any { it.equals(mime, ignoreCase = true) } }
+    private fun List<MediaCodecInfo>.supportsMime(mime: String): Boolean = any { codec ->
+      codec.supportedTypes.any { it.equals(mime, ignoreCase = true) }
+    }
   }
 }

@@ -1,13 +1,22 @@
 package dev.openbili.webdemo.api
 
+/**
+ * 全项目共用的 API 数据模型。
+ *
+ * 按业务域分节组织：信息流卡片、视频信息与播放地址、弹幕与智能防挡、评论、个人空间
+ * 与动态、番剧探索、文章与账号历史、登录用户、WBI 签名密钥。
+ */
+
 import dev.openbili.webdemo.UrlPolicy
+import dev.openbili.webdemo.live.LiveSearchRoom
 import org.json.JSONObject
 
 const val DANMAKU_COLORFUL_NONE = 0
 const val DANMAKU_COLORFUL_VIP_GRADIENT = 60001
 
-// ── Feed ─────────────────────────────────────────────────────────────────────
+// ── 信息流 ─────────────────────────────────────────────────────────────────────
 
+/** 全站通用的视频卡片模型，供推荐/热门/历史/收藏/缓存等页面共用。 */
 data class FeedCard(
   val aid: Long,
   val bvid: String,
@@ -26,7 +35,7 @@ data class FeedCard(
 ) {
   companion object {
     fun fromJson(obj: JSONObject): FeedCard {
-      // Popular API uses "aid"; recommendation API uses "id". Accept either.
+      // 热门接口用 "aid"、推荐接口用 "id"，两者都兼容。
       val aid = if (obj.has("aid")) obj.getLong("aid") else obj.getLong("id")
       val cid = if (obj.has("cid")) obj.getLong("cid") else 0L
       return FeedCard(
@@ -73,8 +82,9 @@ data class PopularPeriod(
   val subject: String = "",
 )
 
-// ── Video info ───────────────────────────────────────────────────────────────
+// ── 视频信息 ───────────────────────────────────────────────────────────────
 
+/** 视频资料（标题/UP 主/分 P/封面等）。 */
 data class VideoInfo(
   val bvid: String,
   val aid: Long,
@@ -143,6 +153,14 @@ data class VideoCollection(
   val id: Long,
   val title: String,
   val episodes: List<VideoCollectionEpisode>,
+  val sections: List<VideoCollectionSection> = emptyList(),
+)
+
+/** 合集中的可展开分组；普通合集通常只有一个分组或没有分组。 */
+data class VideoCollectionSection(
+  val id: Long,
+  val title: String,
+  val episodes: List<VideoCollectionEpisode>,
 )
 
 data class VideoCollectionEpisode(
@@ -165,7 +183,7 @@ enum class CommentSort(val label: String, val apiValue: Int) {
   TIME("最新", 0),
 }
 
-// ── Play URL ─────────────────────────────────────────────────────────────────
+// ── 播放地址 ─────────────────────────────────────────────────────────────────
 
 data class VideoStream(
   val id: Int,
@@ -232,7 +250,7 @@ data class PlayUrlData(
     }
 }
 
-// ── Danmaku ──────────────────────────────────────────────────────────────────
+// ── 弹幕 ──────────────────────────────────────────────────────────────────
 
 data class DanmakuInlineEmote(
   val token: String,
@@ -248,7 +266,7 @@ data class DanmakuItem(
   val isLocal: Boolean = false,
   val sourceId: String? = null,
   val colorful: Int = DANMAKU_COLORFUL_NONE,
-  /** Optional live-room emoji rendered by the same lane scheduler as text danmaku. */
+  /** 直播房间可选表情，由与文字弹幕相同的分道调度器渲染。 */
   val imageUrl: String? = null,
   val imageLarge: Boolean = false,
   val inlineEmotes: List<DanmakuInlineEmote> = emptyList(),
@@ -262,7 +280,7 @@ internal data class DanmakuMaskResource(
 class DanmakuMaskTimeline
 internal constructor(
   private val frameTimesMs: IntArray,
-  /** Normalized allowed-background contours packed as x/y pairs and separated by NaN/NaN. */
+  /** 归一化的允许弹幕背景轮廓，打包为 x/y 点对并以 NaN/NaN 分隔各轮廓。 */
   private val allowedContours: List<FloatArray>,
   private val evenOddFills: BooleanArray,
 ) {
@@ -281,13 +299,12 @@ internal constructor(
     return low - 1
   }
 
-  /**
-   * Resolves the mask frame used for drawing.
-   *
-   * A short empty sample between two valid silhouettes is normally a one-frame upstream detection
-   * dropout. Reuse the preceding silhouette only for that bounded gap. A leading, trailing, or
-   * sustained empty span remains empty so scenes without a protected subject are not over-masked.
-   */
+/**
+ * 解析出绘制用的蒙版帧。
+ *
+ * 两段有效轮廓之间的短暂空采样通常是上游单帧漏检：只在这个有界间隔内沿用前一轮廓；
+ * 开头、结尾或持续的空段保持为空，避免给没有受保护主体的场景过度加蒙版。
+ */
   internal fun renderFrameIndexAt(positionMs: Long): Int {
     val frameIndex = frameIndexAt(positionMs)
     if (frameIndex < 0 || allowedContoursAt(frameIndex).isNotEmpty()) return frameIndex
@@ -327,9 +344,7 @@ internal constructor(
       }
       val start = index
       while (
-        index + 1 < contours.size &&
-          !contours[index].isNaN() &&
-          !contours[index + 1].isNaN()
+        index + 1 < contours.size && !contours[index].isNaN() && !contours[index + 1].isNaN()
       ) {
         index += 2
       }
@@ -343,9 +358,7 @@ internal constructor(
         if (
           (currentY > normalizedY) != (previousY > normalizedY) &&
             normalizedX <
-              (previousX - currentX) * (normalizedY - currentY) /
-                (previousY - currentY) +
-                currentX
+              (previousX - currentX) * (normalizedY - currentY) / (previousY - currentY) + currentX
         ) {
           crossings += 1
           winding += if (currentY > previousY) 1 else -1
@@ -364,7 +377,7 @@ internal constructor(
   }
 }
 
-// ── Comment ──────────────────────────────────────────────────────────────────
+// ── 评论 ──────────────────────────────────────────────────────────────────
 
 data class CommentImage(
   val url: String,
@@ -375,6 +388,15 @@ data class CommentImage(
 data class CommentMention(
   val mid: Long,
   val name: String,
+)
+
+/** 评论正文中由 B 站标注的行内跳转节点。 */
+data class CommentJumpLink(
+  /** 该字段就是 content.message 中被替换的原始关键字。 */
+  val key: String,
+  val title: String = "",
+  val prefixIconUrl: String = "",
+  val pcUrl: String = "",
 )
 
 data class OfficialVerification(
@@ -399,12 +421,16 @@ data class CommentItem(
   val location: String = "",
   val images: List<CommentImage> = emptyList(),
   val mentions: List<CommentMention> = emptyList(),
+  /** 评论接口 content.jump_url 返回的行内视频、专栏及网页跳转信息。 */
+  val jumpLinks: List<CommentJumpLink> = emptyList(),
   val level: Int = 0,
   val vipActive: Boolean = false,
   val vipLabel: String = "",
   val officialVerification: OfficialVerification = OfficialVerification(),
   val upLiked: Boolean = false,
   val upReplied: Boolean = false,
+  /** 是否为当前评论区的 UP 主置顶一级评论。 */
+  val isPinned: Boolean = false,
 )
 
 data class CommentResponse(
@@ -418,7 +444,7 @@ data class CommentNavigationTarget(
   val type: Int,
   val rootRpid: Long,
   val targetRpid: Long,
-  /** A fresh id for every card click, including repeat visits to the same reply. */
+  /** 每次卡片点击都生成全新 ID，包括重复进入同一条回复。 */
   val requestId: Long = System.nanoTime(),
 )
 
@@ -471,7 +497,7 @@ data class BangumiWatchProgress(
   val percent: Int? = null,
 )
 
-/** Semantic state of a season/user/status response for watch progress resolution. */
+/** 季度/用户/状态响应的语义化状态，用于追番进度判定。 */
 enum class BangumiWatchProgressState {
   RESOLVED,
   NO_RECORD,
@@ -523,7 +549,7 @@ data class SpaceBangumiResponse(
   val hasMore: Boolean,
 )
 
-/** One cursor page of PGC history after it has been restricted to a home-page media category. */
+/** 限制到首页媒体分类后的一页 PGC 历史游标。 */
 data class BangumiWatchingHistoryPage(
   val cards: List<SpaceContentCard>,
   val cursor: HistoryCursor,
@@ -582,17 +608,15 @@ enum class BangumiExploreCardStyle {
   POSTER,
 }
 
-/** Purpose-specific PGC crops used by the web version instead of one generic season cover. */
-enum class BangumiCoverVariant(
-  internal val imageSpec: String,
-) {
+/** 网页版使用的按用途区分的 PGC 封面裁切，而不是一张通用季度封面。 */
+enum class BangumiCoverVariant(internal val imageSpec: String) {
   NEW_HOT_HERO("600w_506h_!web-ogv-anime-newhot-bg.webp"),
   NEW_HOT_CARD("368w_202h_!web-ogv-anime-newhot-card.webp"),
   HORIZONTAL_CARD("560w_312h_!web-ogv-anime-horizontal-card.webp"),
   POSTER("560w_746h_!web-ogv-anime-ranking-card.webp"),
 }
 
-/** Returns Bilibili's purpose-specific PGC derivative when the cover comes from its image CDN. */
+/** 封面来自其图片 CDN 时返回 B 站的按用途 PGC 衍生图。 */
 fun bangumiCoverUrl(rawUrl: String, variant: BangumiCoverVariant): String {
   val normalized = UrlPolicy.normalizeImageUrl(rawUrl).orEmpty()
   if (normalized.isBlank() || !normalized.contains("hdslb.com/")) return normalized
@@ -601,7 +625,7 @@ fun bangumiCoverUrl(rawUrl: String, variant: BangumiCoverVariant): String {
   return "$base@${variant.imageSpec}" + if (query.isBlank()) "" else "?$query"
 }
 
-/** Returns the original CDN image while preserving query parameters and removing a derived crop. */
+/** 返回原 CDN 图片，保留查询参数并去掉派生裁切后缀。 */
 fun bangumiOriginalImageUrl(rawUrl: String): String {
   val normalized = UrlPolicy.normalizeImageUrl(rawUrl).orEmpty()
   if (normalized.isBlank() || !normalized.contains("hdslb.com/")) return normalized
@@ -610,7 +634,7 @@ fun bangumiOriginalImageUrl(rawUrl: String): String {
   return base + if (query.isBlank()) "" else "?$query"
 }
 
-/** Semantic role of a PGC module. The UI must not depend on mutable server-side titles. */
+/** PGC 模块的语义角色。UI 不得依赖会变的服务端标题。 */
 enum class BangumiExploreSectionKind {
   HOT,
   RANKING,
@@ -621,9 +645,8 @@ enum class BangumiExploreSectionKind {
 }
 
 /**
- * Aggregate result of /pgc/view/web/season/user/status. Replaces the narrower
- * `getBangumiUserFollowed` signature so consumers can access both follow and
- * watch-progress state from a single response.
+ * /pgc/view/web/season/user/status 的聚合结果，替代更窄的 `getBangumiUserFollowed`
+ * 签名，让调用方从一次响应中同时拿到关注状态与追番进度。
  */
 data class BangumiUserStatus(
   val followed: Boolean?,
@@ -639,7 +662,7 @@ data class BangumiExploreItem(
   val seasonId: Long,
   val episodeId: Long,
   val style: BangumiExploreCardStyle,
-  /** Section this item came from; used to keep section-specific transition behavior explicit. */
+  /** 条目来源板块；用于保持各板块专属转场行为明确。 */
   val sectionKind: BangumiExploreSectionKind = BangumiExploreSectionKind.OTHER,
   val rating: Double? = null,
   val ratingCount: Long = 0L,
@@ -662,7 +685,7 @@ data class BangumiExplorePage(
   val sections: List<BangumiExploreSection>,
 )
 
-/** Query values for the web PGC index. `-1` preserves Bilibili's "all" semantics. */
+/** 网页 PGC 索引的查询参数；`-1` 沿用 B 站的"全部"语义。 */
 data class BangumiIndexQuery(
   val seasonVersion: String = "-1",
   val spokenLanguageType: String = "-1",
@@ -673,9 +696,9 @@ data class BangumiIndexQuery(
   val seasonMonth: String = "-1",
   val year: String = "-1",
   val styleId: String = "-1",
-  /** Documentary/movie/TV use a release-date range instead of the anime `year` filter. */
+  /** 纪录片/电影/电视剧用上映时间区间代替动画的 `year` 过滤。 */
   val releaseDate: String = "-1",
-  /** Documentary-only producer filter. Not exposed yet, so it stays `-1`. */
+  /** 纪录片专属制片方过滤：尚未开放，保持 `-1`。 */
   val producerId: String = "-1",
   val order: BangumiIndexOrder = BangumiIndexOrder.FOLLOWING,
   val sortDescending: Boolean = true,
@@ -767,6 +790,7 @@ data class SpaceDynamicItem(
   val images: List<SpaceDynamicImage> = emptyList(),
   val video: SpaceDynamicVideo? = null,
   val article: ArticleItem? = null,
+  val live: LiveSearchRoom? = null,
   val commentOid: Long,
   val commentType: Int,
   val commentCount: Long = 0,
@@ -921,7 +945,7 @@ data class SearchUser(
   val officialVerification: OfficialVerification = OfficialVerification(),
 )
 
-// ── Article / account history ────────────────────────────────────────────────
+// ── 文章 / 账号历史 ────────────────────────────────────────────────────────
 
 data class ArticleItem(
   val id: Long,
@@ -984,7 +1008,8 @@ sealed interface AccountHistoryItem {
   val stableId: String
   val viewAt: Long
 
-  data class Video(val card: FeedCard, override val viewAt: Long = card.pubdate) : AccountHistoryItem {
+  data class Video(val card: FeedCard, override val viewAt: Long = card.pubdate) :
+    AccountHistoryItem {
     override val stableId: String = "video:${card.bvid.ifBlank { card.aid.toString() }}"
   }
 
@@ -1033,7 +1058,15 @@ data class AccountHistoryResponse(
   val hasMore: Boolean,
 )
 
-// ── Login / user ─────────────────────────────────────────────────────────────
+/** 历史记录标题搜索结果；网页端按页码搜索，而不是复用游标。 */
+data class AccountHistorySearchResponse(
+  val items: List<AccountHistoryItem>,
+  val page: Int,
+  val total: Int,
+  val hasMore: Boolean,
+)
+
+// ── 登录 / 用户 ─────────────────────────────────────────────────────────────
 
 data class UserInfo(
   val mid: Long,
@@ -1058,7 +1091,7 @@ data class AppQrStatus(
 
 // code: 86101=等待扫码 86090=已扫码待确认 0=登录成功 86038=过期
 
-// ── WBI keys ─────────────────────────────────────────────────────────────────
+// ── WBI 密钥 ─────────────────────────────────────────────────────────────────
 
 data class WbiKeys(val imgKey: String, val subKey: String, val fetchedAt: Long) {
   val isValid: Boolean

@@ -7,20 +7,21 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Rect
-import dev.openbili.webdemo.api.BiliApi
+import dev.openbili.webdemo.api.BiliFollowApi
+import dev.openbili.webdemo.api.BiliSpaceApi
 import dev.openbili.webdemo.api.FollowingGroup
 import dev.openbili.webdemo.api.SpaceContentCard
 import dev.openbili.webdemo.api.SpaceDynamicItem
 import dev.openbili.webdemo.api.SpaceProfile
 import dev.openbili.webdemo.feed.FeedItem
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Profile data, profile transition anchors, and follow mutations owned by the root navigator. */
+/** 根导航器拥有的资料数据、资料转场锚点和关注变更。 */
 internal class AppRootProfileState {
   val followingStates = mutableStateMapOf<Long, Boolean>()
   val followingBusy = mutableStateMapOf<Long, Boolean>()
@@ -82,7 +83,7 @@ internal class AppRootProfileState {
     spaceError = null
     scope.launch {
       try {
-        val result = withContext(Dispatchers.IO) { BiliApi.getSpaceVideos(mid, page) }
+        val result = withContext(Dispatchers.IO) { BiliSpaceApi.getSpaceVideos(mid, page) }
         if (!profileDataCommitAllowed(mid)) return@launch
         val loadedVideos =
           result.cards.map(::feedItemFromCard).map { video ->
@@ -127,7 +128,8 @@ internal class AppRootProfileState {
     spaceDynamicLoading = true
     spaceDynamicError = null
     scope.launch {
-      val result = withContext(Dispatchers.IO) { runCatching { BiliApi.getSpaceDynamics(mid, offset) } }
+      val result =
+        withContext(Dispatchers.IO) { runCatching { BiliSpaceApi.getSpaceDynamics(mid, offset) } }
       if (profileMid == mid && generation == spaceDynamicGeneration) {
         result
           .onSuccess { response ->
@@ -150,7 +152,7 @@ internal class AppRootProfileState {
     spaceCollectionsLoading = true
     spaceCollectionsError = null
     scope.launch {
-      val result = withContext(Dispatchers.IO) { runCatching { BiliApi.getSpaceCollections(mid) } }
+      val result = withContext(Dispatchers.IO) { runCatching { BiliSpaceApi.getSpaceCollections(mid) } }
       if (profileMid == mid && generation == spaceCollectionGeneration) {
         result
           .onSuccess { collections ->
@@ -209,7 +211,7 @@ internal class AppRootProfileState {
     scope.launch {
       val result =
         withContext(Dispatchers.IO) {
-          runCatching { BiliApi.getSpaceCollectionVideos(mid, collection, page) }
+          runCatching { BiliSpaceApi.getSpaceCollectionVideos(mid, collection, page) }
         }
       if (
         profileMid == mid &&
@@ -263,21 +265,21 @@ internal class AppRootProfileState {
       source.copy(
         liked = liked,
         likeCount =
-          (source.likeCount + if (liked == source.liked) 0 else if (liked) 1 else -1)
-            .coerceAtLeast(0L),
+          (source.likeCount + if (liked == source.liked) 0 else if (liked) 1 else -1).coerceAtLeast(
+            0L
+          ),
       )
     spaceDynamics = spaceDynamics.map { if (it.id == item.id) updated(it, targetLiked) else it }
     scope.launch {
       runCatching {
-          withContext(Dispatchers.IO) { BiliApi.setDynamicLike(item.id, targetLiked, accountMid) }
+          withContext(Dispatchers.IO) { BiliSpaceApi.setDynamicLike(item.id, targetLiked, accountMid) }
         }
         .onFailure { error ->
-          spaceDynamics =
-            spaceDynamics.map { current ->
-              if (current.id == item.id && current.liked == targetLiked)
-                updated(current, currentItem.liked)
-              else current
-            }
+          spaceDynamics = spaceDynamics.map { current ->
+            if (current.id == item.id && current.liked == targetLiked)
+              updated(current, currentItem.liked)
+            else current
+          }
           Toast.makeText(context, error.message ?: "点赞失败啦", Toast.LENGTH_SHORT).show()
         }
       dynamicLikeBusy.remove(item.id)
@@ -298,7 +300,7 @@ internal class AppRootProfileState {
     if ((item.authorMid > 0L && item.authorMid != accountMid) || !dynamicManageBusy.add(item.id))
       return
     scope.launch {
-      withContext(Dispatchers.IO) { runCatching { BiliApi.deleteDynamic(item.id) } }
+      withContext(Dispatchers.IO) { runCatching { BiliSpaceApi.deleteDynamic(item.id) } }
         .onSuccess {
           spaceDynamics = spaceDynamics.filterNot { it.id == item.id }
           if (selectedDynamicId == item.id) selectedDynamicId = null
@@ -327,17 +329,16 @@ internal class AppRootProfileState {
     val targetPinned = !item.pinned
     scope.launch {
       withContext(Dispatchers.IO) {
-          runCatching { BiliApi.setDynamicPinned(item.id, targetPinned) }
+          runCatching { BiliSpaceApi.setDynamicPinned(item.id, targetPinned) }
         }
         .onSuccess {
-          val updated =
-            spaceDynamics.map { current ->
-              when {
-                current.id == item.id -> current.copy(pinned = targetPinned)
-                targetPinned && current.pinned -> current.copy(pinned = false)
-                else -> current
-              }
+          val updated = spaceDynamics.map { current ->
+            when {
+              current.id == item.id -> current.copy(pinned = targetPinned)
+              targetPinned && current.pinned -> current.copy(pinned = false)
+              else -> current
             }
+          }
           spaceDynamics =
             if (targetPinned) {
               val pinnedItem = updated.firstOrNull { it.id == item.id }
@@ -396,7 +397,7 @@ internal class AppRootProfileState {
     if (mid <= 0 || profileMid != mid) return
     scope.launch {
       val profile =
-        withContext(Dispatchers.IO) { runCatching { BiliApi.getSpaceProfile(mid) }.getOrNull() }
+        withContext(Dispatchers.IO) { runCatching { BiliSpaceApi.getSpaceProfile(mid) }.getOrNull() }
       if (profileDataCommitAllowed(mid)) {
         spaceProfile = profile
         profile?.let {
@@ -490,7 +491,7 @@ internal class AppRootProfileState {
     if (followingGroupsLoaded || followingGroupsLoading) return
     followingGroupsLoading = true
     scope.launch {
-      val result = withContext(Dispatchers.IO) { runCatching { BiliApi.getFollowingGroups() } }
+      val result = withContext(Dispatchers.IO) { runCatching { BiliFollowApi.getFollowingGroups() } }
       result
         .onSuccess {
           followingGroups = it
@@ -524,10 +525,10 @@ internal class AppRootProfileState {
         withContext(Dispatchers.IO) {
           runCatching {
             if (!wasFollowing) {
-              BiliApi.setFollowing(mid, true)
+              BiliFollowApi.setFollowing(mid, true)
               followApplied = true
             }
-            if (wasFollowing || groupId != 0L) BiliApi.setFollowingGroup(mid, groupId)
+            if (wasFollowing || groupId != 0L) BiliFollowApi.setFollowingGroup(mid, groupId)
           }
         }
       result
@@ -579,7 +580,7 @@ internal class AppRootProfileState {
     val wasFollowing = followingStates[mid] == true
     followingBusy[mid] = true
     scope.launch {
-      val result = withContext(Dispatchers.IO) { runCatching { BiliApi.setFollowing(mid, false) } }
+      val result = withContext(Dispatchers.IO) { runCatching { BiliFollowApi.setFollowing(mid, false) } }
       result
         .onSuccess {
           followingStates[mid] = false

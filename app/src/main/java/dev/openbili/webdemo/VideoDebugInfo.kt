@@ -1,6 +1,6 @@
 package dev.openbili.webdemo
 
-/** Debug diagnostics collected during video WebView initialisation. */
+/** 视频 WebView 初始化期间收集的调试诊断信息。 */
 data class VideoDebugInfo(
   val setUserAgent: String?,
   val actualUserAgent: String?,

@@ -54,11 +54,11 @@ android {
 
   defaultConfig {
     applicationId = "io.github.shuyunr.bilione"
-    minSdk = 24
+    minSdk = 23
     targetSdk = 37
     // Increment when launcher artwork changes so OEM launchers invalidate their icon cache.
-    versionCode = 6
-    versionName = "0.3.0"
+    versionCode = 7
+    versionName = "0.3.0-preview.3"
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     vectorDrawables.useSupportLibrary = true
     buildConfigField(
@@ -123,7 +123,7 @@ dependencies {
   implementation("androidx.compose.foundation:foundation:1.11.4")
   implementation("androidx.compose.ui:ui:1.11.4")
   implementation("androidx.compose.ui:ui-tooling-preview:1.11.4")
-  implementation("androidx.webkit:webkit:1.16.0")
+  implementation("androidx.webkit:webkit:1.15.0")
   implementation("androidx.core:core-ktx:1.19.0")
   implementation("io.coil-kt.coil3:coil-compose:3.5.0")
   implementation("io.coil-kt.coil3:coil-gif:3.5.0")

@@ -41,8 +41,7 @@ data class OfflineStorageMigrationProgress(
 ) {
   val fraction: Float
     get() =
-      if (totalBytes <= 0L) 1f
-      else (copiedBytes.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f)
+      if (totalBytes <= 0L) 1f else (copiedBytes.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f)
 }
 
 data class OfflineSubtitle(
@@ -102,7 +101,8 @@ data class OfflineMediaEntry(
       uploader = partTitle.takeIf(String::isNotBlank),
       playCount = qualityLabel,
       duration = formatDuration(durationMs),
-      description = if (entitlementState == OfflineEntitlementState.REVOKED) "会员状态失效，缓存内容不可用" else "",
+      description =
+        if (entitlementState == OfflineEntitlementState.REVOKED) "会员状态失效，缓存内容不可用" else "",
     )
 }
 
@@ -136,7 +136,12 @@ data class OfflineMediaRequest(
   val requiresVip: Boolean = false,
 )
 
-internal fun offlineMediaId(kind: OfflineMediaKind, bvid: String, cid: Long, episodeId: Long): String =
+internal fun offlineMediaId(
+  kind: OfflineMediaKind,
+  bvid: String,
+  cid: Long,
+  episodeId: Long,
+): String =
   when (kind) {
     OfflineMediaKind.VIDEO -> "video_${bvid.filter(Char::isLetterOrDigit)}_$cid"
     OfflineMediaKind.BANGUMI -> "bangumi_${episodeId}_$cid"

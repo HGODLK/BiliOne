@@ -2,5 +2,5 @@ package dev.openbili.webdemo
 
 import android.app.Activity
 
-/** Debug-only window host for WebView fixture tests on Android 16. */
+/** 仅调试用的窗口宿主，供 Android 16 上的 WebView 夹具测试使用。 */
 class TestHostActivity : Activity()

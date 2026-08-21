@@ -1,22 +1,35 @@
 package dev.openbili.webdemo.video
 
+import android.view.KeyEvent as AndroidKeyEvent
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
+import dev.openbili.webdemo.ui.controlFocusOutline
+
+private const val CONTROL_SEEK_STEP_MS = 5_000L
 
 @Composable
 internal fun YoutubeSeekBar(
@@ -26,6 +39,9 @@ internal fun YoutubeSeekBar(
   onValueChangeFinished: (Float) -> Unit,
   onScrubStateChanged: (Boolean) -> Unit,
   modifier: Modifier = Modifier,
+  controlEnabled: Boolean = false,
+  controlFocusRequester: FocusRequester? = null,
+  controlDownFocusRequester: FocusRequester? = null,
 ) {
   var dragging by remember { mutableStateOf(false) }
   val maximum = durationMs.coerceAtLeast(1L).toFloat()
@@ -33,7 +49,54 @@ internal fun YoutubeSeekBar(
   val progressPink = Color(0xFFFF5C8A)
   Canvas(
     modifier =
-      modifier.height(26.dp).pointerInput(maximum) {
+      modifier
+        .height(26.dp)
+        .then(
+          if (controlEnabled && controlFocusRequester != null) {
+            Modifier.focusRequester(controlFocusRequester)
+          } else {
+            Modifier
+          }
+        )
+        .then(
+          if (controlEnabled) {
+            Modifier.focusProperties {
+                left = FocusRequester.Cancel
+                right = FocusRequester.Cancel
+                up = FocusRequester.Cancel
+                down = controlDownFocusRequester ?: FocusRequester.Cancel
+              }
+              .onPreviewKeyEvent { event ->
+                when (event.nativeKeyEvent.keyCode) {
+                  AndroidKeyEvent.KEYCODE_DPAD_LEFT,
+                  AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> {
+                    if (event.type == KeyEventType.KeyDown) {
+                      val delta =
+                        if (event.nativeKeyEvent.keyCode == AndroidKeyEvent.KEYCODE_DPAD_LEFT) {
+                          -CONTROL_SEEK_STEP_MS
+                        } else {
+                          CONTROL_SEEK_STEP_MS
+                        }
+                      val target = (value + delta).coerceIn(0f, maximum)
+                      onValueChange(target)
+                      onValueChangeFinished(target)
+                    }
+                    true
+                  }
+                  else -> false
+                }
+              }
+              .controlFocusOutline(
+                shape = RoundedCornerShape(10.dp),
+                color = MaterialTheme.colorScheme.primary,
+                width = 3.dp,
+              )
+              .focusable()
+          } else {
+            Modifier
+          }
+        )
+        .pointerInput(maximum) {
         awaitEachGesture {
           val down = awaitFirstDown(requireUnconsumed = false)
           dragging = true

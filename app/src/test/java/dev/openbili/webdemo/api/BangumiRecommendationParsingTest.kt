@@ -44,10 +44,11 @@ class BangumiRecommendationParsingTest {
             ]
           }
         }
-        """.trimIndent()
+        """
+          .trimIndent()
       )
 
-    val items = BiliApi.parseBangumiRecommendations(response)
+    val items = BiliBangumiApi.parseBangumiRecommendations(response)
 
     assertEquals(2, items.size)
     assertEquals("season:109700", items[0].stableId)
@@ -62,11 +63,9 @@ class BangumiRecommendationParsingTest {
   @Test
   fun missingBannerModuleReturnsNoRecommendations() {
     val response =
-      JSONObject(
-        """{"code":0,"data":{"modules":[{"style":"web_index_v3","items":[]}]}}"""
-      )
+      JSONObject("""{"code":0,"data":{"modules":[{"style":"web_index_v3","items":[]}]}}""")
 
-    assertEquals(emptyList<BangumiRecommendation>(), BiliApi.parseBangumiRecommendations(response))
+    assertEquals(emptyList<BangumiRecommendation>(), BiliBangumiApi.parseBangumiRecommendations(response))
   }
 
   @Test
@@ -87,15 +86,17 @@ class BangumiRecommendationParsingTest {
             }]
           }
         }
-        """.trimIndent()
+        """
+          .trimIndent()
       )
 
     val item =
-      BiliApi.parseBangumiRecommendations(
-        json = response,
-        bannerStyle = "web_banner_v2",
-        sourceName = "movie",
-      ).single()
+      BiliBangumiApi.parseBangumiRecommendations(
+          json = response,
+          bannerStyle = "web_banner_v2",
+          sourceName = "movie",
+        )
+        .single()
 
     assertEquals("movie:episode:4448452", item.stableId)
     assertEquals(4448452L, item.episodeId)
@@ -120,15 +121,17 @@ class BangumiRecommendationParsingTest {
             }]
           }
         }
-        """.trimIndent()
+        """
+          .trimIndent()
       )
 
     val item =
-      BiliApi.parseBangumiRecommendations(
-        json = response,
-        bannerStyle = "web_banner_v2",
-        sourceName = "variety",
-      ).single()
+      BiliBangumiApi.parseBangumiRecommendations(
+          json = response,
+          bannerStyle = "web_banner_v2",
+          sourceName = "variety",
+        )
+        .single()
 
     assertTrue(item.isLive)
     assertEquals(0L, item.episodeId)

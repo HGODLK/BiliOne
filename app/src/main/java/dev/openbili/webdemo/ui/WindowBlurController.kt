@@ -7,11 +7,10 @@ import java.util.function.Consumer
 import kotlin.math.roundToInt
 
 /**
- * Applies Android 12 cross-window blur to a dialog-like [Window] when the system permits it.
+ * 当系统允许时，对类似对话框的 [Window] 应用 Android 12 的跨窗口模糊。
  *
- * Call [attach] after the window is available and [close] when it is dismissed. The listener is
- * removed and the window reference is cleared on close, so an Activity cannot be retained by the
- * WindowManager service.
+ * 窗口可用后调用 [attach]，窗口被关闭时调用 [close]。关闭时会移除监听器并清空窗口
+ * 引用，因此 Activity 不会被 WindowManager 服务保留。
  */
 @RequiresApi(31)
 class WindowBlurController(

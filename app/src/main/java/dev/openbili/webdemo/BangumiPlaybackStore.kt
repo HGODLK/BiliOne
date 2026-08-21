@@ -4,7 +4,7 @@ import android.content.Context
 import dev.openbili.webdemo.api.BangumiEpisode
 import dev.openbili.webdemo.api.SpaceContentCard
 
-/** Persists the last selected season/episode independently from per-video playback positions. */
+/** 独立于逐视频播放位置地持久化最后选中的季度/分集。 */
 internal object BangumiPlaybackStore {
   private const val PREFS_NAME = "bangumi_playback_selection"
   private const val SEASON_SUFFIX = ":season"

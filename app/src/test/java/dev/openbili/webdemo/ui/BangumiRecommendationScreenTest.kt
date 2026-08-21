@@ -19,7 +19,9 @@ class BangumiRecommendationScreenTest {
 
   @Test
   fun cardIsHiddenOnlyWhenItsConcreteIdMatchesTransitionTarget() {
-    assertTrue(shouldHideBangumiRecommendationCard(cardId = "episode-1", hiddenCardId = "episode-1"))
+    assertTrue(
+      shouldHideBangumiRecommendationCard(cardId = "episode-1", hiddenCardId = "episode-1")
+    )
     assertFalse(shouldHideBangumiRecommendationCard(cardId = "episode-1", hiddenCardId = null))
   }
 
@@ -65,6 +67,63 @@ class BangumiRecommendationScreenTest {
   }
 
   @Test
+  fun exploreControllerRequiresVisibleSettledExplorePage() {
+    assertTrue(
+      shouldEnableBangumiExploreControl(
+        controlMode = true,
+        mainPageVisible = true,
+        verticalSettling = false,
+      )
+    )
+    assertFalse(
+      shouldEnableBangumiExploreControl(
+        controlMode = true,
+        mainPageVisible = false,
+        verticalSettling = false,
+      )
+    )
+    assertFalse(
+      shouldEnableBangumiExploreControl(
+        controlMode = true,
+        mainPageVisible = true,
+        verticalSettling = true,
+      )
+    )
+  }
+
+  @Test
+  fun pendingReturnAnchorRestoresExploreControllerWithoutExternalRequest() {
+    assertTrue(
+      shouldRestoreBangumiExploreControllerFocus(
+        active = true,
+        controlMode = true,
+        restoreRequestChanged = false,
+        hasReturnAnchor = true,
+      )
+    )
+  }
+
+  @Test
+  fun exploreControllerRestoreStillRequiresActiveControllerPage() {
+    assertFalse(
+      shouldRestoreBangumiExploreControllerFocus(
+        active = false,
+        controlMode = true,
+        restoreRequestChanged = false,
+        hasReturnAnchor = true,
+      )
+    )
+    assertFalse(
+      shouldRestoreBangumiExploreControllerFocus(
+        active = true,
+        controlMode = false,
+        restoreRequestChanged = false,
+        hasReturnAnchor = true,
+      )
+    )
+  }
+
+  @Test
   fun previewCoverGestureStartsOnlyAfterHorizontalTouchSlop() {
     assertNull(bangumiCardGestureIsHorizontal(Offset(7f, 1f), touchSlop = 8f))
     assertTrue(bangumiCardGestureIsHorizontal(Offset(20f, 4f), touchSlop = 8f)!!)
@@ -75,8 +134,7 @@ class BangumiRecommendationScreenTest {
   fun startupPreloadWaitsForEveryCarouselItem() {
     val carouselItems = (1L..7L).map(::recommendation)
     val loadedSeason = season(episodes = emptyList(), pv = null)
-    val seasons =
-      carouselItems.take(6).associate { item -> item.stableId to loadedSeason }
+    val seasons = carouselItems.take(6).associate { item -> item.stableId to loadedSeason }
     val errors = mapOf(carouselItems.last().stableId to "detail unavailable")
 
     assertTrue(bangumiPreloadDetailsSettled(carouselItems, seasons, errors))
@@ -261,8 +319,8 @@ class BangumiRecommendationScreenTest {
 
   @Test
   fun playbackCoverFallsBackToSeasonThenCard() {
-    val season = season(episodes = emptyList(), pv = null)
-      .copy(coverUrl = "https://example.com/season.webp")
+    val season =
+      season(episodes = emptyList(), pv = null).copy(coverUrl = "https://example.com/season.webp")
     val item = recommendation(seasonId = 1L, cardUrl = "https://example.com/card.png")
 
     assertEquals(season.coverUrl, recommendationPlaybackCover(item, season))
@@ -271,8 +329,8 @@ class BangumiRecommendationScreenTest {
 
   @Test
   fun mainCardCoverFallsBackToSeasonThenCard() {
-    val season = season(episodes = emptyList(), pv = null)
-      .copy(coverUrl = "https://example.com/season.webp")
+    val season =
+      season(episodes = emptyList(), pv = null).copy(coverUrl = "https://example.com/season.webp")
     val item = recommendation(seasonId = 1L, cardUrl = "https://example.com/card.png")
 
     assertEquals(season.coverUrl, recommendationMainEpisodeCover(item, season))
@@ -283,15 +341,16 @@ class BangumiRecommendationScreenTest {
     seasonId: Long = 1L,
     bannerUrl: String = "https://example.com/banner.png",
     cardUrl: String = "https://example.com/card.png",
-  ) = BangumiRecommendation(
-    stableId = "season:$seasonId",
-    title = "测试番剧",
-    bannerUrl = bannerUrl,
-    cardUrl = cardUrl,
-    targetUrl = "https://www.bilibili.com/bangumi/play/ss$seasonId",
-    seasonId = seasonId,
-    position = 0,
-  )
+  ) =
+    BangumiRecommendation(
+      stableId = "season:$seasonId",
+      title = "测试番剧",
+      bannerUrl = bannerUrl,
+      cardUrl = cardUrl,
+      targetUrl = "https://www.bilibili.com/bangumi/play/ss$seasonId",
+      seasonId = seasonId,
+      position = 0,
+    )
 
   private fun episode(id: Long, title: String, coverUrl: String = "") =
     BangumiEpisode(

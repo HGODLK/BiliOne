@@ -144,9 +144,8 @@ internal fun CommentComposer(
     )
   LaunchedEffect(effectiveLineCount, text.length) {
     if (detachedByVisualLines) {
-      // The detached editor is much wider than the comment pane, so remeasuring the same text
-      // there can reduce six wrapped lines to one. Release only after an actual deletion margin;
-      // layout changes by themselves can no longer bounce the two editors back and forth.
+      // 分离编辑器比评论窗格宽得多，同一段文本在那里重新测量可能把六行折成一行：
+      // 只有真正出现删除余量时才释放；仅布局变化不再让两个编辑器来回弹跳。
       detachedByVisualLines = text.isNotEmpty() && text.length > detachedReleaseLength
     } else if (commentEditorShouldDetach(text.length, effectiveLineCount)) {
       detachedReleaseLength = (text.length - 12).coerceAtLeast(0)
@@ -180,7 +179,8 @@ internal fun CommentComposer(
   }
   Column(
     modifier =
-      modifier.fillMaxWidth()
+      modifier
+        .fillMaxWidth()
         .then(if (detachedMode) Modifier.fillMaxSize().clickable(onClick = {}) else Modifier),
     verticalArrangement = Arrangement.spacedBy(8.dp),
   ) {
@@ -317,7 +317,7 @@ internal fun CommentComposer(
               Surface(
                 modifier = Modifier.align(Alignment.TopEnd).offset(x = 6.dp, y = (-6).dp),
                 shape = CircleShape,
-              color = MaterialTheme.colorScheme.surface.copy(alpha = .90f),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = .90f),
                 shadowElevation = 0.dp,
               ) {
                 IconButton(onClick = { imageUri = null }, modifier = Modifier.size(26.dp)) {
@@ -411,9 +411,7 @@ internal fun CommentComposer(
           }
           Surface(
             shape = CircleShape,
-            color =
-              if (text.isNotBlank()) MaterialTheme.colorScheme.primary
-              else inputFieldColor,
+            color = if (text.isNotBlank()) MaterialTheme.colorScheme.primary else inputFieldColor,
           ) {
             IconButton(
               onClick = {

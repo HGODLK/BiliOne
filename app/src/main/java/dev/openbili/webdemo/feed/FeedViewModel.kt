@@ -2,23 +2,47 @@ package dev.openbili.webdemo.feed
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import dev.openbili.webdemo.api.BiliApi
+import dev.openbili.webdemo.api.BiliFeedApi
 import dev.openbili.webdemo.api.UserInfo
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Paginated recommendation feed backed by the bilibili web API (WBI-signed). */
+internal fun mergeRefreshedFeedItems(
+  existingItems: List<FeedItem>,
+  refreshedItems: List<FeedItem>,
+): List<FeedItem> {
+  return uniqueRefreshedFeedItems(existingItems, refreshedItems) + existingItems
+}
+
+internal fun uniqueRefreshedFeedItems(
+  existingItems: List<FeedItem>,
+  refreshedItems: List<FeedItem>,
+): List<FeedItem> {
+  val existingUrls = existingItems.mapTo(HashSet()) { it.videoUrl }
+  return refreshedItems.filter { existingUrls.add(it.videoUrl) }
+}
+
+internal fun appendUniqueRefreshedFeedItems(
+  existingItems: List<FeedItem>,
+  pendingItems: List<FeedItem>,
+  incomingItems: List<FeedItem>,
+): List<FeedItem> {
+  val seenUrls = (existingItems + pendingItems).mapTo(HashSet()) { it.videoUrl }
+  return pendingItems + incomingItems.filter { seenUrls.add(it.videoUrl) }
+}
+
+/** 基于 B 站网页接口（WBI 签名）的分页推荐信息流模型。 */
 class FeedViewModel : ViewModel() {
   private val _state = MutableStateFlow<FeedUiState>(FeedUiState.Loading)
   val state: StateFlow<FeedUiState> = _state.asStateFlow()
 
-  // Auth
+  // 认证
   private val _userInfo = MutableStateFlow(UserInfo(mid = 0, name = "", face = "", isLogin = false))
   val userInfo: StateFlow<UserInfo> = _userInfo.asStateFlow()
 
@@ -38,10 +62,23 @@ class FeedViewModel : ViewModel() {
     loadJob?.cancel()
     freshIndex++
     noMore = false
+    allItems.clear()
+    _state.value =
+      FeedUiState.Loading
+    loadPage(refresh = true, expectedGeneration = generation)
+  }
+
+  /** 按当前网格列数刷新四行，并把新结果放到现有内容前面。 */
+  fun refreshPreserving(itemCount: Int) {
+    generation++
+    loadJob?.cancel()
+    freshIndex++
+    noMore = false
+    val count = itemCount.coerceIn(1, 40)
     _state.value =
       if (allItems.isEmpty()) FeedUiState.Loading
       else FeedUiState.Content(items = allItems.toList(), isRefreshing = true)
-    loadPage(refresh = true, expectedGeneration = generation)
+    loadPreservingRefresh(targetCount = count, expectedGeneration = generation)
   }
 
   fun loadNextPage() {
@@ -52,7 +89,7 @@ class FeedViewModel : ViewModel() {
     loadPage(refresh = false, expectedGeneration = generation)
   }
 
-  /** Stops work that can be resumed once a root-page swipe has settled. */
+  /** 停止可恢复的工作，待根页面滑动稳定后由 resume 继续。 */
   fun cancelSupplementaryLoadingForPageSwitch() {
     val current = _state.value as? FeedUiState.Content ?: return
     if (loadJob?.isActive != true) return
@@ -91,7 +128,10 @@ class FeedViewModel : ViewModel() {
     loadJob = viewModelScope.launch {
       try {
         val requestIndex = freshIndex++
-        val response = withContext(Dispatchers.IO) { BiliApi.getPersonalizedFeed(requestIndex) }
+        val response =
+          withContext(Dispatchers.IO) {
+            BiliFeedApi.getPersonalizedFeed(requestIndex)
+          }
         if (expectedGeneration != generation) return@launch
         if (response.cards.isEmpty() && refresh) {
           _state.value =
@@ -118,14 +158,14 @@ class FeedViewModel : ViewModel() {
               uploader = card.uploaderName,
               playCount = formatCount(card.playCount),
               duration = formatDuration(card.durationSeconds),
-              // extra metadata for the video screen
+              // 视频页需要的补充元数据
               uploaderFace = card.uploaderFace,
               uploaderMid = card.uploaderMid,
               danmakuCount = card.danmakuCount,
               publishedAt = card.pubdate,
               description = card.description,
             )
-          }
+        }
 
         if (refresh) allItems = newItems.toMutableList()
         else {
@@ -152,6 +192,7 @@ class FeedViewModel : ViewModel() {
             _state.value =
               current.copy(
                 isLoadingMore = false,
+                isRefreshing = false,
                 refreshMessage = "加载失败：${e.message}",
               )
           }
@@ -159,6 +200,77 @@ class FeedViewModel : ViewModel() {
       }
     }
   }
+
+  /** 先在内存中收集完整刷新批次，避免分页结果逐批插入网格。 */
+  private fun loadPreservingRefresh(targetCount: Int, expectedGeneration: Long) {
+    loadJob =
+      viewModelScope.launch {
+        val pendingItems = mutableListOf<FeedItem>()
+        try {
+          for (attempt in 0 until MAX_REFRESH_REQUESTS) {
+            if (pendingItems.size >= targetCount) break
+            val requestIndex = freshIndex++
+            val remainingCount = (targetCount - pendingItems.size).coerceAtLeast(1)
+            val response =
+              withContext(Dispatchers.IO) {
+                BiliFeedApi.getPersonalizedFeed(requestIndex, remainingCount)
+              }
+            if (expectedGeneration != generation) return@launch
+            if (response.cards.isEmpty()) break
+            val incomingItems = response.cards.map(::feedItemFromCard)
+            val mergedPending = appendUniqueRefreshedFeedItems(allItems, pendingItems, incomingItems)
+            if (mergedPending.size == pendingItems.size) break
+            pendingItems.clear()
+            pendingItems.addAll(mergedPending)
+          }
+
+          if (expectedGeneration != generation) return@launch
+          val mergedItems = mergeRefreshedFeedItems(allItems, pendingItems)
+          allItems = mergedItems.toMutableList()
+          _state.value =
+            if (allItems.isEmpty()) {
+              FeedUiState.Empty()
+            } else if (pendingItems.isEmpty()) {
+              FeedUiState.Content(
+                items = allItems.toList(),
+                refreshMessage = "刷新结果为空，已保留原内容",
+              )
+            } else {
+              FeedUiState.Content(items = allItems.toList())
+            }
+        } catch (e: Exception) {
+          if (e is kotlinx.coroutines.CancellationException) throw e
+          if (expectedGeneration != generation) return@launch
+          android.util.Log.e("FeedVM", "preserving refresh failed", e)
+          if (allItems.isEmpty()) {
+            _state.value = FeedUiState.NetworkError(e.message ?: "加载失败")
+          } else {
+            _state.value =
+              FeedUiState.Content(
+                items = allItems.toList(),
+                isRefreshing = false,
+                refreshMessage = "刷新失败：${e.message ?: "请稍后重试"}",
+              )
+          }
+        }
+      }
+  }
+
+  private fun feedItemFromCard(card: dev.openbili.webdemo.api.FeedCard): FeedItem =
+    FeedItem(
+      id = card.bvid.ifBlank { card.aid.toString() },
+      title = card.title,
+      videoUrl = "https://www.bilibili.com/video/${card.bvid.ifBlank { "av${card.aid}" }}",
+      coverUrl = card.coverUrl,
+      uploader = card.uploaderName,
+      playCount = formatCount(card.playCount),
+      duration = formatDuration(card.durationSeconds),
+      uploaderFace = card.uploaderFace,
+      uploaderMid = card.uploaderMid,
+      danmakuCount = card.danmakuCount,
+      publishedAt = card.pubdate,
+      description = card.description,
+    )
 
   override fun onCleared() {
     loadJob?.cancel()
@@ -171,6 +283,8 @@ class FeedViewModel : ViewModel() {
   }
 
   companion object {
+    private const val MAX_REFRESH_REQUESTS = 4
+
     fun formatCount(n: Long): String =
       when {
         n >= 10_000_0000L -> "${n / 100_000_000}.${(n % 100_000_000) / 10_000_000}亿"

@@ -1,9 +1,10 @@
 package dev.openbili.webdemo.live
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -54,12 +55,18 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -81,6 +88,8 @@ import dev.openbili.webdemo.ui.PullRefreshContainer
 import dev.openbili.webdemo.ui.VideoCardReveal
 import dev.openbili.webdemo.ui.VideoShapeTokens
 import dev.openbili.webdemo.ui.createTexturePlayerView
+import dev.openbili.webdemo.ui.controlFocusOutline
+import dev.openbili.webdemo.ui.LocalControlMode
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 
@@ -97,15 +106,25 @@ fun LiveHomeScreen(
   onTransitionActiveChanged: (Boolean) -> Unit,
   onConsumeRefreshMessage: () -> Unit,
   onHorizontalRailInteractionChanged: (Boolean) -> Unit = {},
+  onAreaIndex: (Rect) -> Unit,
   gridState: LazyGridState = rememberLazyGridState(),
   hiddenCoverItemId: String? = null,
   backgroundWorkAllowed: Boolean = true,
   detailActive: Boolean = false,
   topContentPadding: Dp = 10.dp,
+  initialFocusRequester: FocusRequester? = null,
+  liveAreaIndexFocusRestoreRequest: Int = 0,
 ) {
+  val controlMode = LocalControlMode.current
   val previewViewModel: LivePreviewPlayerViewModel = viewModel()
   val previewState by previewViewModel.state.collectAsState()
-  var areaIndexVisible by remember { mutableStateOf(false) }
+  val areaIndexEntryFocusRequester = remember { FocusRequester() }
+  LaunchedEffect(liveAreaIndexFocusRestoreRequest) {
+    if (liveAreaIndexFocusRestoreRequest > 0 && controlMode) {
+      withFrameNanos {}
+      runCatching { areaIndexEntryFocusRequester.requestFocus() }
+    }
+  }
 
   LaunchedEffect(backgroundWorkAllowed) {
     if (backgroundWorkAllowed) onVisible() else previewViewModel.pauseForInactivePage()
@@ -140,21 +159,6 @@ fun LiveHomeScreen(
     if (!refreshMessage.isNullOrBlank()) onConsumeRefreshMessage()
   }
 
-  if (areaIndexVisible && state is LiveHomeUiState.Content) {
-    BackHandler { areaIndexVisible = false }
-    LiveAreaIndexScreen(
-      groups = state.areaGroups,
-      selectedArea = state.selectedArea,
-      onBack = { areaIndexVisible = false },
-      onAreaSelected = {
-        areaIndexVisible = false
-        onAreaSelected(it)
-      },
-      onHorizontalRailInteractionChanged = onHorizontalRailInteractionChanged,
-    )
-    return
-  }
-
   PullRefreshContainer(
     refreshing = state.isRefreshing,
     onRefresh = onRefresh,
@@ -186,9 +190,11 @@ fun LiveHomeScreen(
             },
             onRoomBoundsChanged = onRoomBoundsChanged,
             onTransitionActiveChanged = onTransitionActiveChanged,
-            onAreaIndex = { areaIndexVisible = true },
+            onAreaIndex = onAreaIndex,
             onHorizontalRailInteractionChanged = onHorizontalRailInteractionChanged,
+            areaIndexEntryFocusRequester = areaIndexEntryFocusRequester,
             topContentPadding = topContentPadding,
+            initialFocusRequester = initialFocusRequester,
           )
         }
     }
@@ -209,10 +215,13 @@ private fun LiveHomeGrid(
   onRoomClick: (LiveSearchRoom, LiveHomeSourceAnchor, Rect) -> Unit,
   onRoomBoundsChanged: (LiveHomeSourceAnchor, Rect) -> Unit,
   onTransitionActiveChanged: (Boolean) -> Unit,
-  onAreaIndex: () -> Unit,
+  onAreaIndex: (Rect) -> Unit,
   onHorizontalRailInteractionChanged: (Boolean) -> Unit,
+  areaIndexEntryFocusRequester: FocusRequester,
   topContentPadding: Dp,
+  initialFocusRequester: FocusRequester? = null,
 ) {
+  val controlMode = LocalControlMode.current
   val selectedHero =
     state.heroRooms.firstOrNull { it.roomId == state.selectedHeroRoomId }
       ?: state.heroRooms.firstOrNull()
@@ -224,12 +233,30 @@ private fun LiveHomeGrid(
     }
   }
   var gridViewportBounds by remember { mutableStateOf(Rect.Zero) }
+  val topClearancePx = with(LocalDensity.current) { topContentPadding.toPx() }
 
   LazyVerticalGrid(
     columns = GridCells.Fixed(3),
     state = gridState,
     modifier =
       Modifier.fillMaxSize()
+        .then(
+          // 最近且与时机无关的护栏：控制器激活期间，左/右焦点搜索绝不离开直播信息流
+          // 容器，因此它永远到不了相邻的二级页面（后者在触摸驱动的分页稳定后可能仍
+          // 处于组合状态）。
+          if (controlMode) {
+            Modifier.focusProperties {
+              onExit = {
+                if (
+                  requestedFocusDirection == FocusDirection.Left ||
+                    requestedFocusDirection == FocusDirection.Right
+                ) {
+                  cancelFocusChange()
+                }
+              }
+            }
+          } else Modifier
+        )
         .onGloballyPositioned { gridViewportBounds = it.boundsInRoot() }
         .testTag("live_home_grid"),
     contentPadding =
@@ -256,10 +283,12 @@ private fun LiveHomeGrid(
           selectedHero?.let { LiveHomeSourceAnchor.hero(it.roomId).stableId } != hiddenCoverItemId,
         gridState = gridState,
         viewportBounds = gridViewportBounds,
+        viewportTopClearancePx = topClearancePx,
         onSelect = onHeroRoomSelected,
         onRoomClick = onRoomClick,
         onRoomBoundsChanged = onRoomBoundsChanged,
         onTransitionActiveChanged = onTransitionActiveChanged,
+        initialFocusRequester = initialFocusRequester,
       )
     }
     item(key = "live-following", span = { GridItemSpan(maxLineSpan) }) {
@@ -282,7 +311,10 @@ private fun LiveHomeGrid(
           fontWeight = FontWeight.Bold,
         )
         Spacer(Modifier.weight(1f))
-        TextButton(onClick = onAreaIndex) { Text("所有分区") }
+        LiveAreaIndexEntryButton(
+          onClick = onAreaIndex,
+          focusRequester = areaIndexEntryFocusRequester,
+        )
       }
     }
     when {
@@ -311,6 +343,9 @@ private fun LiveHomeGrid(
             hiddenCoverItemId = hiddenCoverItemId,
             onRoomClick = onRoomClick,
             onRoomBoundsChanged = onRoomBoundsChanged,
+            focusRequester = initialFocusRequester.takeIf {
+              index == 0 && state.heroRooms.isEmpty()
+            },
           )
         }
         if (state.isLoadingMore) {
@@ -338,16 +373,19 @@ private fun LiveHeroSection(
   coverVisible: Boolean,
   gridState: LazyGridState,
   viewportBounds: Rect,
+  viewportTopClearancePx: Float,
   onSelect: (LiveSearchRoom) -> Unit,
   onRoomClick: (LiveSearchRoom, LiveHomeSourceAnchor, Rect) -> Unit,
   onRoomBoundsChanged: (LiveHomeSourceAnchor, Rect) -> Unit,
   onTransitionActiveChanged: (Boolean) -> Unit,
+  initialFocusRequester: FocusRequester? = null,
 ) {
   val titleAlpha = remember { Animatable(1f) }
   val navigationCoverAlpha = remember { Animatable(0f) }
   val scope = rememberCoroutineScope()
   var previewBounds by remember { mutableStateOf(Rect.Zero) }
   var navigationPending by remember { mutableStateOf(false) }
+  var focusScrollPending by remember { mutableStateOf(false) }
   val heroRoom = selectedRoom ?: rooms.firstOrNull()
 
   LaunchedEffect(detailActive) {
@@ -366,11 +404,17 @@ private fun LiveHeroSection(
   fun openRoom(room: LiveSearchRoom) {
     if (navigationPending) return
     navigationPending = true
-    onTransitionActiveChanged(true)
     scope.launch {
+      var transitionActivated = false
       try {
         val sourceAnchor = LiveHomeSourceAnchor.hero(room.roomId)
-        if (!isLiveHeroPreviewFullyVisible(previewBounds, viewportBounds)) {
+        if (
+          !isLiveHeroPreviewFullyVisible(
+            previewBounds = previewBounds,
+            viewportBounds = viewportBounds,
+            topClearancePx = viewportTopClearancePx,
+          )
+        ) {
           gridState.animateScrollToItem(0)
           withFrameNanos {}
           withFrameNanos {}
@@ -380,6 +424,8 @@ private fun LiveHeroSection(
           withFrameNanos {}
           withFrameNanos {}
         }
+        onTransitionActiveChanged(true)
+        transitionActivated = true
         if (previewBounds.width > 0f && previewBounds.height > 0f) {
           onRoomBoundsChanged(sourceAnchor, previewBounds)
         }
@@ -403,18 +449,42 @@ private fun LiveHeroSection(
         onRoomClick(room, sourceAnchor, previewBounds)
       } finally {
         navigationPending = false
-        onTransitionActiveChanged(false)
+        if (transitionActivated) onTransitionActiveChanged(false)
+      }
+    }
+  }
+
+  fun keepHeroFocusInSafeViewport() {
+    if (
+      navigationPending ||
+        focusScrollPending ||
+        isLiveHeroPreviewFullyVisible(
+          previewBounds = previewBounds,
+          viewportBounds = viewportBounds,
+          topClearancePx = viewportTopClearancePx,
+        )
+    ) {
+      return
+    }
+    focusScrollPending = true
+    scope.launch {
+      try {
+        gridState.animateScrollToItem(0)
+        withFrameNanos {}
+        withFrameNanos {}
+      } finally {
+        focusScrollPending = false
       }
     }
   }
 
   Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-    Text(
-      "推荐直播",
-      modifier = Modifier.graphicsLayer { alpha = titleAlpha.value },
-      style = MaterialTheme.typography.titleLarge,
-      fontWeight = FontWeight.Bold,
-    )
+    // 头图区不再显示标题行，但保留等高的占位，让预览播放器与顶栏的距离和之前
+    // 完全一致。
+    val titleLineHeight = with(LocalDensity.current) {
+      MaterialTheme.typography.titleLarge.lineHeight.toDp()
+    }
+    Spacer(Modifier.height(titleLineHeight))
     if (rooms.isEmpty()) {
       Box(
         Modifier.fillMaxWidth().height(220.dp),
@@ -448,7 +518,9 @@ private fun LiveHeroSection(
               onRoomBoundsChanged(LiveHomeSourceAnchor.hero(room.roomId), bounds)
             },
             navigationCoverAlpha = { navigationCoverAlpha.value },
+            onFocused = ::keepHeroFocusInSafeViewport,
             onClick = { openRoom(room) },
+            initialFocusRequester = initialFocusRequester,
             modifier = Modifier.weight(leftWeight).fillMaxHeight().aspectRatio(16f / 9f),
           )
         }
@@ -460,6 +532,7 @@ private fun LiveHeroSection(
             LiveHeroRecommendationCard(
               room = room,
               selected = room.stableId == selectedRoom?.stableId,
+              onFocused = ::keepHeroFocusInSafeViewport,
               onClick = { openRoom(room) },
               modifier = Modifier.weight(1f),
             )
@@ -473,6 +546,7 @@ private fun LiveHeroSection(
 internal fun isLiveHeroPreviewFullyVisible(
   previewBounds: Rect,
   viewportBounds: Rect,
+  topClearancePx: Float = 0f,
   tolerancePx: Float = 1f,
 ): Boolean =
   previewBounds.width > 0f &&
@@ -480,7 +554,8 @@ internal fun isLiveHeroPreviewFullyVisible(
     viewportBounds.width > 0f &&
     viewportBounds.height > 0f &&
     previewBounds.left >= viewportBounds.left - tolerancePx &&
-    previewBounds.top >= viewportBounds.top - tolerancePx &&
+    previewBounds.top >=
+      viewportBounds.top + topClearancePx.coerceAtLeast(0f) - tolerancePx &&
     previewBounds.right <= viewportBounds.right + tolerancePx &&
     previewBounds.bottom <= viewportBounds.bottom + tolerancePx
 
@@ -494,13 +569,32 @@ private fun LivePreviewPanel(
   titleAlpha: Float,
   onBoundsChanged: (Rect) -> Unit,
   navigationCoverAlpha: () -> Float,
+  onFocused: () -> Unit,
   onClick: () -> Unit,
+  initialFocusRequester: FocusRequester? = null,
   modifier: Modifier = Modifier,
 ) {
   val ready = (previewState as? LivePreviewPlayerState.Ready)?.roomId == room.roomId
+  val previewCoverAlpha by
+    animateFloatAsState(
+      targetValue = if (!active || !ready) 1f else navigationCoverAlpha(),
+      animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+      label = "livePreviewFirstFrameCover",
+    )
   Surface(
     modifier =
       modifier
+        .then(
+          if (initialFocusRequester != null) {
+            Modifier.focusRequester(initialFocusRequester)
+          } else Modifier
+        )
+        .onFocusChanged { if (it.hasFocus) onFocused() }
+        .controlFocusOutline(
+          shape = VideoShapeTokens.Player,
+          color = MaterialTheme.colorScheme.primary,
+          width = 3.dp,
+        )
         .clip(VideoShapeTokens.Player)
         .onGloballyPositioned { onBoundsChanged(it.boundsInRoot()) }
         .clickable(onClick = onClick),
@@ -526,7 +620,7 @@ private fun LivePreviewPanel(
         contentDescription = room.title,
         modifier =
           Modifier.fillMaxSize().graphicsLayer {
-            alpha = if (!active || !ready) 1f else navigationCoverAlpha()
+            alpha = previewCoverAlpha
           },
         shape = VideoShapeTokens.Player,
         enforceAspectRatio = false,
@@ -585,14 +679,22 @@ private fun LivePreviewPanel(
 private fun LiveHeroRecommendationCard(
   room: LiveSearchRoom,
   selected: Boolean,
+  onFocused: () -> Unit,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
+  val shape = RoundedCornerShape(10.dp)
   Row(
     modifier =
       modifier
         .fillMaxWidth()
-        .clip(RoundedCornerShape(10.dp))
+        .onFocusChanged { if (it.hasFocus) onFocused() }
+        .controlFocusOutline(
+          shape = shape,
+          color = MaterialTheme.colorScheme.primary,
+          width = 3.dp,
+        )
+        .clip(shape)
         .background(
           if (selected) MaterialTheme.colorScheme.primaryContainer
           else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .58f)
@@ -627,6 +729,37 @@ private fun LiveHeroRecommendationCard(
         overflow = TextOverflow.Ellipsis,
       )
     }
+  }
+}
+
+@Composable
+private fun LiveAreaIndexEntryButton(
+  onClick: (Rect) -> Unit,
+  focusRequester: FocusRequester,
+) {
+  var bounds by remember { mutableStateOf(Rect.Zero) }
+  Surface(
+    modifier =
+      Modifier.focusRequester(focusRequester)
+        .focusProperties { canFocus = true }
+        .controlFocusOutline(
+          shape = RoundedCornerShape(17.dp),
+          color = MaterialTheme.colorScheme.primary,
+          width = 3.dp,
+        )
+        .onGloballyPositioned { bounds = it.boundsInRoot() }
+        .clickable { onClick(bounds) },
+    shape = RoundedCornerShape(17.dp),
+    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .72f),
+    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+  ) {
+    Text(
+      "所有分区",
+      modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+      style = MaterialTheme.typography.labelLarge,
+      fontWeight = FontWeight.Medium,
+    )
   }
 }
 
@@ -759,6 +892,7 @@ private fun LiveRoomCard(
   hiddenCoverItemId: String?,
   onRoomClick: (LiveSearchRoom, LiveHomeSourceAnchor, Rect) -> Unit,
   onRoomBoundsChanged: (LiveHomeSourceAnchor, Rect) -> Unit,
+  focusRequester: FocusRequester? = null,
 ) {
   var coverBounds by remember(room.roomId) { mutableStateOf(Rect.Zero) }
   val sourceAnchor = LiveHomeSourceAnchor.feed(room.roomId, selectedArea.stableId)
@@ -784,6 +918,7 @@ private fun LiveRoomCard(
     PressableVideoCard(
       onClick = { onRoomClick(room, sourceAnchor, coverBounds) },
       onLongClick = {},
+      focusRequester = focusRequester,
     ) {
       FeedCardContent(
         item = card,
@@ -804,12 +939,13 @@ private fun LiveRoomCard(
 }
 
 @Composable
-private fun LiveAreaIndexScreen(
+internal fun LiveAreaIndexScreen(
   groups: List<LiveAreaGroup>,
   selectedArea: LiveAreaFilter,
   onBack: () -> Unit,
   onAreaSelected: (LiveAreaFilter) -> Unit,
   onHorizontalRailInteractionChanged: (Boolean) -> Unit,
+  initialFocusRequester: FocusRequester? = null,
 ) {
   var selectedParentId by
     remember(groups, selectedArea.parentAreaId) {
@@ -823,7 +959,20 @@ private fun LiveAreaIndexScreen(
       Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
-      TextButton(onClick = onBack) { Text("返回") }
+      TextButton(
+        onClick = onBack,
+        modifier =
+          Modifier.then(
+              if (initialFocusRequester != null) {
+                Modifier.focusRequester(initialFocusRequester)
+              } else Modifier
+            )
+            .controlFocusOutline(
+              shape = RoundedCornerShape(8.dp),
+              color = MaterialTheme.colorScheme.primary,
+              width = 3.dp,
+            ),
+      ) { Text("返回") }
       Text(
         "所有分区",
         style = MaterialTheme.typography.titleLarge,
@@ -903,7 +1052,15 @@ private fun LiveAreaIndexScreen(
 @Composable
 private fun LiveAreaIndexCard(area: LiveAreaFilter, selected: Boolean, onClick: () -> Unit) {
   Surface(
-    modifier = Modifier.fillMaxWidth().height(92.dp).clickable(onClick = onClick),
+    modifier =
+      Modifier.fillMaxWidth()
+        .height(92.dp)
+        .controlFocusOutline(
+          shape = RoundedCornerShape(14.dp),
+          color = MaterialTheme.colorScheme.primary,
+          width = 3.dp,
+        )
+        .clickable(onClick = onClick),
     shape = RoundedCornerShape(14.dp),
     color =
       if (selected) MaterialTheme.colorScheme.primaryContainer
@@ -945,7 +1102,14 @@ private fun LiveAreaIndexCard(area: LiveAreaFilter, selected: Boolean, onClick: 
 @Composable
 private fun LiveAreaChip(area: LiveAreaFilter, selected: Boolean, onClick: () -> Unit) {
   Surface(
-    modifier = Modifier.height(34.dp).clickable(onClick = onClick),
+    modifier =
+      Modifier.height(34.dp)
+        .controlFocusOutline(
+          shape = CircleShape,
+          color = MaterialTheme.colorScheme.primary,
+          width = 3.dp,
+        )
+        .clickable(onClick = onClick),
     shape = CircleShape,
     color =
       if (selected) MaterialTheme.colorScheme.primaryContainer

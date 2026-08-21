@@ -1,17 +1,24 @@
 package dev.openbili.webdemo.feed
 
+/**
+ * 热门页：综合热门/每周必看/入站必刷/排行榜/全站音乐榜五个分类。
+ */
+
+import android.view.KeyEvent
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -38,7 +45,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
-import androidx.compose.foundation.lazy.items as lazyRowItems
+import androidx.compose.foundation.lazy.itemsIndexed as lazyRowItemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -55,6 +62,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
@@ -70,6 +78,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -78,6 +89,9 @@ import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -95,6 +109,8 @@ import coil3.request.ImageRequest
 import dev.openbili.webdemo.api.PopularPeriod
 import dev.openbili.webdemo.ui.BackdropGlassSurface
 import dev.openbili.webdemo.ui.HomeGlassTokens
+import dev.openbili.webdemo.ui.LocalControlMode
+import dev.openbili.webdemo.ui.LocalControlFocusVisible
 import dev.openbili.webdemo.ui.NavigationCardBottomClearance
 import dev.openbili.webdemo.ui.PullRefreshContainer
 import dev.openbili.webdemo.ui.VideoCardGradient
@@ -106,6 +122,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
+/** 热门页组合体。 */
 @Composable
 fun PopularFeedScreen(
   state: PopularFeedUiState,
@@ -128,12 +145,16 @@ fun PopularFeedScreen(
   underlayLayer: GraphicsLayer,
   underlayBounds: Rect,
   topContentPadding: Dp,
+  pageControlsEnabled: Boolean = false,
+  onControlEnterContent: () -> Unit = {},
+  onControlReturnToPageControls: () -> Unit = {},
+  initialFocusRequester: FocusRequester? = null,
 ) {
   val content = state.content
   val context = LocalContext.current
   val prefetchedCovers = remember { mutableSetOf<String>() }
-  // Keep the same Fast Path as recommendation. The two-column layout changes only the number of
-  // visible keys retained during slow movement; fast flings still pause every new image request.
+  // 与推荐保持同一 Fast Path：两列布局只改变慢速移动时保留的可见键数量，
+  // 快速滑动仍然暂停所有新图请求。
   val imageLoadPolicy = rememberGridFeedImageLoadPolicy(gridState, columns = 2)
   val shouldLoadMore by
     remember(state.section, gridState) {
@@ -179,8 +200,8 @@ fun PopularFeedScreen(
         if (!backgroundWorkAllowed) return@collect
         if (isScrolling) {
           if (imageLoadPolicy.mode == FeedImageLoadMode.THROTTLED) {
-            // Match recommendation: movement below the fast-fling threshold gets a small,
-            // serial look-ahead window; a fast fling starts no new work at all.
+            // 与推荐一致：低于快滑阈值的移动获得一个小而串行的预看窗口；
+            // 快速滑动则完全不开启新工作。
             contentItems.drop(lastVisible + 1).take(3).forEach { item ->
               val url = item.coverUrl
               if (prefetchedCovers.add(url)) {
@@ -199,7 +220,7 @@ fun PopularFeedScreen(
           }
           return@collect
         }
-        // Do not compete with the visible card decodes immediately after a fling settles.
+        // 滑动刚停时不要与可见卡片的解码竞争。
         delay(350)
         if (!backgroundWorkAllowed || gridState.isScrollInProgress) return@collect
         val effectivePrefetchCount =
@@ -235,6 +256,14 @@ fun PopularFeedScreen(
   var chromeHeightPx by remember { mutableIntStateOf(0) }
   val density = LocalDensity.current
   val chromeHeight = with(density) { chromeHeightPx.toDp() }
+  val sectionFocusRequesters = remember { PopularSection.entries.map { FocusRequester() } }
+  val contextEntryFocusRequester = remember { FocusRequester() }
+  LaunchedEffect(pageControlsEnabled, state.section) {
+    if (pageControlsEnabled) {
+      withFrameNanos {}
+      runCatching { sectionFocusRequesters[state.section.ordinal].requestFocus() }
+    }
+  }
   val darkTheme = MaterialTheme.colorScheme.background.luminance() < .5f
   Box(Modifier.fillMaxSize()) {
     Box(
@@ -272,6 +301,8 @@ fun PopularFeedScreen(
                 onItemLongClick = onItemLongClick,
                 hiddenCoverItemId = hiddenCoverItemId,
                 topContentPadding = gridTopPadding,
+                onControlExitUp = onControlReturnToPageControls,
+                initialFocusRequester = initialFocusRequester,
               )
             }
           is FeedUiState.Empty -> PopularFeedMessage(content.message)
@@ -309,13 +340,25 @@ fun PopularFeedScreen(
       shadowElevation = 0.dp,
     ) {
       Column(Modifier.fillMaxWidth()) {
-        PopularSectionBar(selected = state.section, onSection = onSection)
+        PopularSectionBar(
+          selected = state.section,
+          onSection = onSection,
+          controlEnabled = pageControlsEnabled,
+          focusRequesters = sectionFocusRequesters,
+          contextFocusRequester = contextEntryFocusRequester,
+          hasContextControl = popularHasContextControl(state),
+          onControlEnterContent = onControlEnterContent,
+        )
         PopularContextBar(
           state = state,
           onWeeklyPeriod = onWeeklyPeriod,
           onRankCategory = onRankCategory,
           onMusicPeriod = onMusicPeriod,
           onHorizontalRailInteractionChanged = onHorizontalRailInteractionChanged,
+          controlEnabled = pageControlsEnabled,
+          sectionFocusRequester = sectionFocusRequesters[state.section.ordinal],
+          entryFocusRequester = contextEntryFocusRequester,
+          onControlEnterContent = onControlEnterContent,
         )
       }
     }
@@ -326,7 +369,13 @@ fun PopularFeedScreen(
 private fun PopularSectionBar(
   selected: PopularSection,
   onSection: (PopularSection) -> Unit,
+  controlEnabled: Boolean,
+  focusRequesters: List<FocusRequester>,
+  contextFocusRequester: FocusRequester,
+  hasContextControl: Boolean,
+  onControlEnterContent: () -> Unit,
 ) {
+  val controlFocusVisible = LocalControlFocusVisible.current
   Surface(
     modifier = Modifier.fillMaxWidth(),
     color = Color.Transparent,
@@ -339,11 +388,61 @@ private fun PopularSectionBar(
       PopularSection.entries.forEach { section ->
         val isSelected = section == selected
         val visual = popularSectionVisual(section)
+        val interactionSource = remember(section) { MutableInteractionSource() }
+        val focused by interactionSource.collectIsFocusedAsState()
         Column(
           modifier =
             Modifier.widthIn(min = 108.dp)
+              .focusRequester(focusRequesters[section.ordinal])
+              .focusProperties {
+                canFocus = controlEnabled
+                left = FocusRequester.Cancel
+                right = FocusRequester.Cancel
+                up = FocusRequester.Cancel
+                down = FocusRequester.Cancel
+              }
+              .onPreviewKeyEvent { event ->
+                val direction =
+                  popularControlDirection(event.nativeKeyEvent.keyCode)
+                    ?: return@onPreviewKeyEvent false
+                if (
+                  event.type == KeyEventType.KeyDown &&
+                    event.nativeKeyEvent.repeatCount == 0
+                ) {
+                  when (direction) {
+                    FeedGridControlDirection.LEFT ->
+                      focusRequesters.getOrNull(section.ordinal - 1)?.let {
+                        runCatching { it.requestFocus() }
+                      }
+                    FeedGridControlDirection.RIGHT ->
+                      focusRequesters.getOrNull(section.ordinal + 1)?.let {
+                        runCatching { it.requestFocus() }
+                      }
+                    FeedGridControlDirection.DOWN ->
+                      if (isSelected && hasContextControl) {
+                        runCatching { contextFocusRequester.requestFocus() }
+                      } else {
+                        onControlEnterContent()
+                      }
+                    FeedGridControlDirection.UP -> Unit
+                  }
+                }
+                true
+              }
               .clip(MaterialTheme.shapes.large)
-              .clickable { onSection(section) }
+              .border(
+                width = if (focused && controlFocusVisible) 3.dp else 0.dp,
+                color =
+                  if (focused && controlFocusVisible) MaterialTheme.colorScheme.primary
+                  else Color.Transparent,
+                shape = MaterialTheme.shapes.large,
+              )
+              .clickable(
+                interactionSource = interactionSource,
+                indication = LocalIndication.current,
+              ) {
+                onSection(section)
+              }
               .padding(horizontal = 8.dp, vertical = 4.dp),
           horizontalAlignment = Alignment.CenterHorizontally,
           verticalArrangement = Arrangement.spacedBy(5.dp),
@@ -400,6 +499,24 @@ private fun popularSectionVisual(section: PopularSection): PopularSectionVisual 
     PopularSection.MUSIC -> PopularSectionVisual(Icons.Default.Headset, Color(0xFF4098F8))
   }
 
+private fun popularHasContextControl(state: PopularFeedUiState): Boolean =
+  when (state.section) {
+    PopularSection.WEEKLY -> state.weeklyPeriods.isNotEmpty()
+    PopularSection.RANKING -> true
+    PopularSection.MUSIC -> state.musicPeriods.isNotEmpty()
+    PopularSection.ALL,
+    PopularSection.PRECIOUS -> false
+  }
+
+private fun popularControlDirection(keyCode: Int): FeedGridControlDirection? =
+  when (keyCode) {
+    KeyEvent.KEYCODE_DPAD_LEFT -> FeedGridControlDirection.LEFT
+    KeyEvent.KEYCODE_DPAD_RIGHT -> FeedGridControlDirection.RIGHT
+    KeyEvent.KEYCODE_DPAD_UP -> FeedGridControlDirection.UP
+    KeyEvent.KEYCODE_DPAD_DOWN -> FeedGridControlDirection.DOWN
+    else -> null
+  }
+
 @Composable
 private fun PopularContextBar(
   state: PopularFeedUiState,
@@ -407,6 +524,10 @@ private fun PopularContextBar(
   onRankCategory: (PopularRankCategory) -> Unit,
   onMusicPeriod: (PopularPeriod) -> Unit,
   onHorizontalRailInteractionChanged: (Boolean) -> Unit,
+  controlEnabled: Boolean,
+  sectionFocusRequester: FocusRequester,
+  entryFocusRequester: FocusRequester,
+  onControlEnterContent: () -> Unit,
 ) {
   Column(
     Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 8.dp),
@@ -424,12 +545,20 @@ private fun PopularContextBar(
           selectedPeriodId = state.selectedWeeklyNumber,
           onPeriod = onWeeklyPeriod,
           onHorizontalRailInteractionChanged = onHorizontalRailInteractionChanged,
+          controlEnabled = controlEnabled,
+          sectionFocusRequester = sectionFocusRequester,
+          entryFocusRequester = entryFocusRequester,
+          onControlEnterContent = onControlEnterContent,
         )
       PopularSection.RANKING ->
         PopularRankRail(
           selected = state.rankCategory,
           onCategory = onRankCategory,
           onHorizontalRailInteractionChanged = onHorizontalRailInteractionChanged,
+          controlEnabled = controlEnabled,
+          sectionFocusRequester = sectionFocusRequester,
+          entryFocusRequester = entryFocusRequester,
+          onControlEnterContent = onControlEnterContent,
         )
       PopularSection.MUSIC ->
         PopularPeriodRail(
@@ -437,6 +566,10 @@ private fun PopularContextBar(
           selectedPeriodId = state.selectedMusicListId,
           onPeriod = onMusicPeriod,
           onHorizontalRailInteractionChanged = onHorizontalRailInteractionChanged,
+          controlEnabled = controlEnabled,
+          sectionFocusRequester = sectionFocusRequester,
+          entryFocusRequester = entryFocusRequester,
+          onControlEnterContent = onControlEnterContent,
         )
       PopularSection.ALL,
       PopularSection.PRECIOUS -> Unit
@@ -450,13 +583,29 @@ private fun PopularPeriodRail(
   selectedPeriodId: Int?,
   onPeriod: (PopularPeriod) -> Unit,
   onHorizontalRailInteractionChanged: (Boolean) -> Unit,
+  controlEnabled: Boolean,
+  sectionFocusRequester: FocusRequester,
+  entryFocusRequester: FocusRequester,
+  onControlEnterContent: () -> Unit,
 ) {
+  val focusRequesters =
+    remember(periods, entryFocusRequester) {
+      periods.indices.map { index ->
+        if (index == 0) entryFocusRequester else FocusRequester()
+      }
+    }
   PopularInteractiveRail(onHorizontalRailInteractionChanged) {
-    lazyRowItems(periods, key = PopularPeriod::id) { period ->
+    lazyRowItemsIndexed(periods, key = { _, period -> period.id }) { index, period ->
       PopularFilterChip(
         text = period.label,
         selected = selectedPeriodId == period.id,
         onClick = { onPeriod(period) },
+        controlEnabled = controlEnabled,
+        focusRequester = focusRequesters[index],
+        controlLeftFocusRequester = focusRequesters.getOrNull(index - 1),
+        controlRightFocusRequester = focusRequesters.getOrNull(index + 1),
+        controlUpFocusRequester = sectionFocusRequester,
+        onControlDown = onControlEnterContent,
       )
     }
   }
@@ -467,13 +616,30 @@ private fun PopularRankRail(
   selected: PopularRankCategory,
   onCategory: (PopularRankCategory) -> Unit,
   onHorizontalRailInteractionChanged: (Boolean) -> Unit,
+  controlEnabled: Boolean,
+  sectionFocusRequester: FocusRequester,
+  entryFocusRequester: FocusRequester,
+  onControlEnterContent: () -> Unit,
 ) {
+  val categories = PopularRankCategory.entries
+  val focusRequesters =
+    remember(entryFocusRequester) {
+      categories.indices.map { index ->
+        if (index == 0) entryFocusRequester else FocusRequester()
+      }
+    }
   PopularInteractiveRail(onHorizontalRailInteractionChanged) {
-    lazyRowItems(PopularRankCategory.entries, key = PopularRankCategory::rid) { category ->
+    lazyRowItemsIndexed(categories, key = { _, category -> category.rid }) { index, category ->
       PopularFilterChip(
         text = category.title,
         selected = selected == category,
         onClick = { onCategory(category) },
+        controlEnabled = controlEnabled,
+        focusRequester = focusRequesters[index],
+        controlLeftFocusRequester = focusRequesters.getOrNull(index - 1),
+        controlRightFocusRequester = focusRequesters.getOrNull(index + 1),
+        controlUpFocusRequester = sectionFocusRequester,
+        onControlDown = onControlEnterContent,
       )
     }
   }
@@ -514,13 +680,57 @@ private fun PopularFilterChip(
   text: String,
   selected: Boolean,
   onClick: () -> Unit,
+  controlEnabled: Boolean,
+  focusRequester: FocusRequester,
+  controlLeftFocusRequester: FocusRequester?,
+  controlRightFocusRequester: FocusRequester?,
+  controlUpFocusRequester: FocusRequester,
+  onControlDown: () -> Unit,
 ) {
+  val controlFocusVisible = LocalControlFocusVisible.current
+  val interactionSource = remember { MutableInteractionSource() }
+  val focused by interactionSource.collectIsFocusedAsState()
   Surface(
-    modifier = Modifier.height(32.dp).clickable(onClick = onClick),
+    modifier =
+      Modifier.height(32.dp)
+        .focusRequester(focusRequester)
+        .focusProperties {
+          canFocus = controlEnabled
+          left = FocusRequester.Cancel
+          right = FocusRequester.Cancel
+          up = FocusRequester.Cancel
+          down = FocusRequester.Cancel
+        }
+        .onPreviewKeyEvent { event ->
+          val direction =
+            popularControlDirection(event.nativeKeyEvent.keyCode)
+              ?: return@onPreviewKeyEvent false
+          if (event.type == KeyEventType.KeyDown && event.nativeKeyEvent.repeatCount == 0) {
+            when (direction) {
+              FeedGridControlDirection.LEFT ->
+                controlLeftFocusRequester?.let { runCatching { it.requestFocus() } }
+              FeedGridControlDirection.RIGHT ->
+                controlRightFocusRequester?.let { runCatching { it.requestFocus() } }
+              FeedGridControlDirection.UP ->
+                runCatching { controlUpFocusRequester.requestFocus() }
+              FeedGridControlDirection.DOWN -> onControlDown()
+            }
+          }
+          true
+        }
+        .clickable(
+          interactionSource = interactionSource,
+          indication = LocalIndication.current,
+          onClick = onClick,
+        ),
     shape = CircleShape,
     color =
       if (selected) MaterialTheme.colorScheme.primaryContainer
       else MaterialTheme.colorScheme.surfaceVariant,
+    border =
+      if (focused && controlFocusVisible)
+        BorderStroke(3.dp, MaterialTheme.colorScheme.primary)
+      else null,
   ) {
     Box(Modifier.padding(horizontal = 14.dp), contentAlignment = Alignment.Center) {
       Text(
@@ -545,8 +755,11 @@ private fun PopularVideoGrid(
   onItemLongClick: (FeedItem) -> Unit,
   hiddenCoverItemId: String?,
   topContentPadding: Dp,
+  onControlExitUp: () -> Unit,
+  initialFocusRequester: FocusRequester? = null,
 ) {
   val flingTracker = remember(gridState) { FeedNavigationFlingTracker() }
+  val controlFocusRequesters = remember { mutableMapOf<String, FocusRequester>() }
   val dynamicPaletteAllowed =
     remember(gridState) {
       derivedStateOf {
@@ -584,6 +797,17 @@ private fun PopularVideoGrid(
             Int.MAX_VALUE
           },
       ) {
+        val itemFocusRequester =
+          initialFocusRequester.takeIf { index == 0 }
+            ?: remember(itemKey) { FocusRequester() }
+        DisposableEffect(itemKey, itemFocusRequester) {
+          controlFocusRequesters[itemKey] = itemFocusRequester
+          onDispose {
+            if (controlFocusRequesters[itemKey] === itemFocusRequester) {
+              controlFocusRequesters.remove(itemKey)
+            }
+          }
+        }
         PopularVideoCard(
           item = item,
           itemKey = itemKey,
@@ -594,6 +818,15 @@ private fun PopularVideoGrid(
           dynamicPaletteAllowed = dynamicPaletteAllowed,
           navigationTopClearance = topContentPadding,
           coverVisible = item.id != hiddenCoverItemId,
+          focusRequester = itemFocusRequester,
+          controlIndex = index,
+          controlItemCount = items.size,
+          controlFocusRequesterAt = { targetIndex ->
+            items.getOrNull(targetIndex)?.let { target ->
+              controlFocusRequesters["${section.name}:${target.id}"]
+            }
+          },
+          onControlExitUp = onControlExitUp,
           onClick = { bounds, anchor -> onItemClick(item, bounds, anchor) },
           onLongClick = { onItemLongClick(item) },
         )
@@ -624,6 +857,11 @@ private fun PopularVideoCard(
   dynamicPaletteAllowed: State<Boolean>,
   navigationTopClearance: Dp,
   coverVisible: Boolean,
+  focusRequester: FocusRequester? = null,
+  controlIndex: Int,
+  controlItemCount: Int,
+  controlFocusRequesterAt: (Int) -> FocusRequester?,
+  onControlExitUp: () -> Unit,
   onClick: (Rect, FeedScrollAnchor) -> Unit,
   onLongClick: () -> Unit,
 ) {
@@ -631,17 +869,65 @@ private fun PopularVideoCard(
   val bringIntoViewRequester =
     rememberNavigationBringIntoViewRequester(topClearance = navigationTopClearance)
   val scope = rememberCoroutineScope()
+  val controlMode = LocalControlMode.current
+  val controlFocusVisible = LocalControlFocusVisible.current
   val interactionSource = remember { MutableInteractionSource() }
   val pressed by interactionSource.collectIsPressedAsState()
+  val focused by interactionSource.collectIsFocusedAsState()
+  LaunchedEffect(focused) {
+    if (focused) bringIntoViewRequester.bringIntoView()
+  }
   val scale by
     animateFloatAsState(
-      targetValue = if (pressed) .98f else 1f,
+      targetValue = if (pressed) .98f else if (focused) 1.025f else 1f,
       animationSpec = spring(dampingRatio = .82f, stiffness = 700f),
       label = "popularCardPress",
     )
   Surface(
     modifier =
       Modifier.fillMaxWidth()
+        .then(
+          if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier
+        )
+        .then(
+          if (controlMode) {
+            Modifier.onPreviewKeyEvent { event ->
+              val direction =
+                popularControlDirection(event.nativeKeyEvent.keyCode)
+                  ?: return@onPreviewKeyEvent false
+              if (event.type == KeyEventType.KeyDown && event.nativeKeyEvent.repeatCount == 0) {
+                if (direction == FeedGridControlDirection.UP && controlIndex < 2) {
+                  onControlExitUp()
+                } else {
+                  val targetIndex =
+                    feedGridControlTargetIndex(
+                      currentIndex = controlIndex,
+                      itemCount = controlItemCount,
+                      columns = 2,
+                      direction = direction,
+                    )
+                  if (targetIndex != null) {
+                    scope.launch {
+                      var targetRequester = controlFocusRequesterAt(targetIndex)
+                      val targetFocused =
+                        targetRequester?.let {
+                          runCatching { it.requestFocus() }.getOrDefault(false)
+                        } == true
+                      if (!targetFocused) {
+                        gridState.animateScrollToItem(targetIndex)
+                        withFrameNanos {}
+                        withFrameNanos {}
+                        targetRequester = controlFocusRequesterAt(targetIndex)
+                        targetRequester?.let { runCatching { it.requestFocus() } }
+                      }
+                    }
+                  }
+                }
+              }
+              true
+            }
+          } else Modifier
+        )
         .navigationBringIntoViewTarget(bringIntoViewRequester)
         .graphicsLayer {
           scaleX = scale
@@ -671,6 +957,10 @@ private fun PopularVideoCard(
     color = Color.Transparent,
     tonalElevation = 1.dp,
     shadowElevation = 0.dp,
+    border =
+      if (focused && controlFocusVisible)
+        BorderStroke(3.dp, MaterialTheme.colorScheme.primary)
+      else null,
   ) {
     VideoCardGradient(
       coverUrl = item.coverUrl,
@@ -692,8 +982,7 @@ private fun PopularVideoCard(
               Modifier.width(coverWidth)
                 .aspectRatio(16f / 9f)
                 .onGloballyPositioned { coverBounds = it.boundsInRoot() }
-                // Match recommendation cards: the source image is hidden as soon as the shared
-                // cover takes ownership, while the palette background stays in place.
+                // 与推荐卡一致：共享封面接管后源图立即隐藏，取色渐变背景保持原位。
                 .then(if (coverVisible) Modifier else Modifier.graphicsLayer { alpha = 0f })
             ) {
               CoverImage(

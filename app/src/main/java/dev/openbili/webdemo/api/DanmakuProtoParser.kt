@@ -1,12 +1,13 @@
 package dev.openbili.webdemo.api
 
 /**
- * Minimal reader for bilibili.community.service.dm.v1.DmSegMobileReply.
+ * bilibili.community.service.dm.v1.DmSegMobileReply 的最小读取器。
  *
- * Keeping this parser local avoids shipping the full protobuf runtime for one small wire format.
- * Unknown fields are skipped so newer server fields remain forward-compatible.
+ * 就地实现解析是为了避免只为一种小型线上格式引入完整 protobuf 运行时。未知字段会被
+ * 跳过，因此服务端新增字段仍然向前兼容。
  */
 internal object DanmakuProtoParser {
+  /** 解析一个弹幕分段（protobuf 消息），返回其中的弹幕条目列表。 */
   fun parseSegment(bytes: ByteArray): List<DanmakuItem> {
     if (bytes.isEmpty()) return emptyList()
     val reader = ProtoReader(bytes)
@@ -24,6 +25,7 @@ internal object DanmakuProtoParser {
     }
   }
 
+  /** 解析单条弹幕元素消息；content 为空时视为无效条目。 */
   private fun parseElement(reader: ProtoReader): DanmakuItem? {
     var id = 0L
     var idString = ""
@@ -63,6 +65,7 @@ internal object DanmakuProtoParser {
     )
   }
 
+  /** 极简 protobuf 线格式读取器：变长整数、定长与子消息。 */
   private class ProtoReader(
     private val bytes: ByteArray,
     private var position: Int = 0,

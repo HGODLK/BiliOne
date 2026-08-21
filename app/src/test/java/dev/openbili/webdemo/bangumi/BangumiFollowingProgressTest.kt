@@ -88,11 +88,14 @@ class BangumiFollowingProgressTest {
     assertEquals(BangumiWatchProgressState.RESOLVED, card.watchProgressState)
     assertEquals(456L, card.episodeId)
     assertEquals("https://www.bilibili.com/bangumi/play/ep456", card.videoUrl)
-    assertEquals("看到第8话 · 25%", buildFollowingSubtitle(
-      progress = card.watchProgress,
-      progressState = card.watchProgressState,
-      hasHistory = card.hasHistory,
-      historicalOnly = card.historicalOnly,
-    ))
+    assertEquals(
+      "看到第8话 · 25%",
+      buildFollowingSubtitle(
+        progress = card.watchProgress,
+        progressState = card.watchProgressState,
+        hasHistory = card.hasHistory,
+        historicalOnly = card.historicalOnly,
+      ),
+    )
   }
 }

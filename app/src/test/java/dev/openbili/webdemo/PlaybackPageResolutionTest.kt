@@ -34,4 +34,30 @@ class PlaybackPageResolutionTest {
     assertEquals(102L, selected?.cid)
     assertEquals("第二集", selected?.part)
   }
+
+  @Test
+  fun currentPageDurationWinsOverAggregateVideoDuration() {
+    val selected = resolvePlaybackPage(requestedPage = null, defaultCid = 101L, pages = pages)
+
+    val duration =
+      resolvePlaybackDurationSeconds(
+        selectedPage = selected,
+        totalDurationSeconds = 62L + 75L,
+      )
+
+    assertEquals(62L, duration)
+  }
+
+  @Test
+  fun aggregateDurationIsFallbackWhenCurrentPageDurationIsMissing() {
+    val pageWithoutDuration = pages.first().copy(durationSeconds = 0L)
+
+    val duration =
+      resolvePlaybackDurationSeconds(
+        selectedPage = pageWithoutDuration,
+        totalDurationSeconds = 137L,
+      )
+
+    assertEquals(137L, duration)
+  }
 }

@@ -10,14 +10,14 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewOutlineProvider
 import androidx.annotation.OptIn
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.SubtitleView
-import androidx.core.view.ViewCompat
-import androidx.core.view.WindowInsetsCompat
 import dev.openbili.webdemo.R
 import dev.openbili.webdemo.settings.SubtitleHorizontalPosition
 import dev.openbili.webdemo.settings.SubtitleStyle
@@ -30,11 +30,10 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * Waiting for an idle message must only yield the frame budget; it must never gate playback.
+ * 等待空闲消息只能让出帧预算；它绝不能成为播放的门槛。
  *
- * A continuous stream of animation/layout work can legitimately keep the main queue non-idle.
- * In that case a bounded wait lets the entry pipeline continue instead of leaving its loading
- * state visible until a later touch happens to create an idle gap.
+ * 连续的动画/布局工作流可能合理地让主队列保持非空闲。这种情况下，有界的等待让进入
+ * 管线继续，而不是让加载状态一直可见到之后的某次触摸恰好制造出空闲间隙。
  */
 internal const val MAIN_QUEUE_IDLE_WAIT_TIMEOUT_MS = 48L
 
@@ -58,21 +57,20 @@ internal fun createPlayerView(
   ctx: android.content.Context,
   initialPlayer: Player? = null,
 ): PlayerView =
-  (LayoutInflater.from(ctx)
-      .inflate(R.layout.player_view_surface, null, false) as PlayerView)
+  (LayoutInflater.from(ctx).inflate(R.layout.player_view_surface, null, false) as PlayerView)
     .apply {
       player = initialPlayer
       useController = false
       setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
-      // This is the single app-root SurfaceView. Compose changes its real layout bounds for the
-      // embedded/fullscreen animation; no surface target handoff is involved.
+      // 这是唯一的应用根 SurfaceView。Compose 为内嵌/全屏动画改变其真实布局边界；
+      // 不涉及表面目标交接。
       setEnableComposeSurfaceSyncWorkaround(true)
       val roundedOutline =
         MutableRoundedOutlineProvider(PLAYER_CORNER_RADIUS_DP * resources.displayMetrics.density)
       outlineProvider = roundedOutline
       playerOutlineProviders[this] = roundedOutline
       clipToOutline = true
-      // PlayerView binds this view to Media3 text tracks during inflation.
+      // PlayerView 在充气期间把此视图绑定到 Media3 文本轨道。
       findViewById<SubtitleView>(androidx.media3.ui.R.id.exo_subtitles)?.apply {
         setUserDefaultStyle()
         setUserDefaultTextSize()
@@ -80,16 +78,15 @@ internal fun createPlayerView(
     }
 
 /**
- * The Bangumi recommendation preview lives inside a moving Compose page. TextureView is composed
- * with that page, unlike the detail player's SurfaceView which has its own SurfaceControl layer.
+ * 番剧推荐预览位于移动中的 Compose 页内。TextureView 与该页一起组合，不同于拥有自己
+ * SurfaceControl 图层的详情播放器 SurfaceView。
  */
 @OptIn(UnstableApi::class)
 internal fun createTexturePlayerView(
   ctx: android.content.Context,
   initialPlayer: Player? = null,
 ): PlayerView =
-  (LayoutInflater.from(ctx)
-      .inflate(R.layout.player_view_texture, null, false) as PlayerView)
+  (LayoutInflater.from(ctx).inflate(R.layout.player_view_texture, null, false) as PlayerView)
     .apply {
       player = initialPlayer
       useController = false
@@ -106,8 +103,7 @@ internal fun PlayerView.updateSubtitlePresentation(
   visible: Boolean,
   style: SubtitleStyle,
 ) {
-  val subtitleView =
-    findViewById<SubtitleView>(androidx.media3.ui.R.id.exo_subtitles) ?: return
+  val subtitleView = findViewById<SubtitleView>(androidx.media3.ui.R.id.exo_subtitles) ?: return
   subtitleView.visibility = if (visible) View.VISIBLE else View.INVISIBLE
   val foregroundColor = colorWithOpacity(style.textColor, style.textOpacity.coerceIn(.1f, 1f))
   val edgeColor = if (isDarkSubtitleColor(style.textColor)) Color.WHITE else Color.BLACK
@@ -193,8 +189,7 @@ private fun View.safeInsetsInsideView(): SubtitleSafeInsets {
     left = (safeLeft - unshiftedLeft).coerceIn(0, width).toFloat(),
     top = (safeTop - unshiftedTop).coerceIn(0, height).toFloat(),
     right = (unshiftedLeft + width - (rootWidth - safeRight)).coerceIn(0, width).toFloat(),
-    bottom =
-      (unshiftedTop + height - (rootHeight - safeBottom)).coerceIn(0, height).toFloat(),
+    bottom = (unshiftedTop + height - (rootHeight - safeBottom)).coerceIn(0, height).toFloat(),
   )
 }
 
@@ -218,7 +213,7 @@ private data class DanmakuViewportBinding(
 @OptIn(UnstableApi::class)
 private val danmakuViewportBindings = WeakHashMap<PlayerView, DanmakuViewportBinding>()
 
-/** Maps Media3's real video frame into the sibling full-player danmaku surface. */
+/** 把 Media3 的真实视频帧映射到兄弟的全播放器弹幕表面中。 */
 @OptIn(UnstableApi::class)
 internal fun PlayerView.bindDanmakuVideoViewport(overlay: DanmakuOverlayView) {
   val contentFrame =
@@ -234,9 +229,7 @@ internal fun PlayerView.bindDanmakuVideoViewport(overlay: DanmakuOverlayView) {
     contentFrame.getLocationInWindow(contentLocation)
     val left = (contentLocation[0] - overlayLocation[0]).toFloat()
     val top = (contentLocation[1] - overlayLocation[1]).toFloat()
-    overlay.setVideoViewport(
-      RectF(left, top, left + contentFrame.width, top + contentFrame.height)
-    )
+    overlay.setVideoViewport(RectF(left, top, left + contentFrame.width, top + contentFrame.height))
   }
   val listener = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> updateViewport() }
   contentFrame.addOnLayoutChangeListener(listener)
@@ -244,17 +237,16 @@ internal fun PlayerView.bindDanmakuVideoViewport(overlay: DanmakuOverlayView) {
   contentFrame.post(::updateViewport)
 }
 
-/** Hides the transparent Surface immediately so a Compose transition can own the top layer. */
+/** 立即隐藏透明 Surface，让 Compose 转场能够拥有顶层。 */
 internal fun PlayerView.hideDanmakuForTransition() {
   danmakuViewportBindings[this]?.overlay?.hideForTransition()
 }
 
 /**
- * Controls the actual video SurfaceView rather than PlayerView's parent hierarchy.
+ * 控制实际的视频 SurfaceView，而不是 PlayerView 的父层级。
  *
- * SurfaceView is promoted to a separate SurfaceControl layer on the target tablets, so changing
- * PlayerView alpha alone does not reliably prevent an old decoder buffer from appearing above a
- * Compose cover while Media3 replaces the source.
+ * 在目标平板上 SurfaceView 被提升到独立的 SurfaceControl 图层，因此单独改变 PlayerView
+ * 的 alpha 不能可靠地阻止旧解码器缓冲在 Media3 替换源时出现在 Compose 封面之上。
  */
 @OptIn(UnstableApi::class)
 internal fun PlayerView.updateVideoSurfaceAlpha(alpha: Float) {

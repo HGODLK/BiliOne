@@ -16,7 +16,7 @@ class CommentMentionParsingTest {
 
     assertEquals(
       listOf(CommentMention(mid = 474833573L, name = "一只小艾拉")),
-      BiliApi.parseCommentMentions(content),
+      BiliCommentApi.parseCommentMentions(content),
     )
   }
 
@@ -27,6 +27,6 @@ class CommentMentionParsingTest {
         """{"members":[{"mid":"0","uname":"无效"},{"mid":"12","uname":""},{"mid":"7","uname":"用户"},{"mid":"7","uname":"用户"}]}"""
       )
 
-    assertEquals(listOf(CommentMention(7L, "用户")), BiliApi.parseCommentMentions(content))
+    assertEquals(listOf(CommentMention(7L, "用户")), BiliCommentApi.parseCommentMentions(content))
   }
 }

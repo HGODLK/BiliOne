@@ -35,6 +35,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
@@ -59,6 +62,15 @@ fun RiskControlDialog(
   var attempt by remember(challenge.voucher) { mutableIntStateOf(0) }
   var validating by remember(challenge.voucher) { mutableStateOf(false) }
   val scope = rememberCoroutineScope()
+  val controlMode = LocalControlMode.current
+  val dismissFocusRequester = remember { FocusRequester() }
+
+  LaunchedEffect(controlMode, challenge.voucher) {
+    if (controlMode) {
+      androidx.compose.runtime.withFrameNanos {}
+      runCatching { dismissFocusRequester.requestFocus() }
+    }
+  }
 
   LaunchedEffect(challenge.voucher, attempt) {
     config = null
@@ -88,6 +100,13 @@ fun RiskControlDialog(
           "完成下面的哔哩哔哩验证后，刚才没有加载出的内容会自动重试。",
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        if (controlMode) {
+          Text(
+            "请在手机或电脑上完成验证码；若在当前设备操作，请使用触控或鼠标。此情况极少出现。",
+            color = MaterialTheme.colorScheme.primary,
+            style = MaterialTheme.typography.bodySmall,
+          )
+        }
         Box(
           modifier =
             Modifier.weight(1f)
@@ -102,6 +121,7 @@ fun RiskControlDialog(
                 CaptchaWebView(
                   config = config!!,
                   enabled = !validating,
+                  allowFocus = !controlMode,
                   onSolved = { validate, seccode ->
                     if (validating) return@CaptchaWebView
                     validating = true
@@ -141,7 +161,16 @@ fun RiskControlDialog(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
               ) {
                 Text(error.orEmpty(), color = MaterialTheme.colorScheme.error)
-                Button(onClick = { attempt++ }) { Text("重新加载") }
+                Button(
+                  onClick = { attempt++ },
+                  modifier =
+                    Modifier.controlFocusOutline(
+                      shape = RoundedCornerShape(20.dp),
+                      color = MaterialTheme.colorScheme.primary,
+                    ),
+                ) {
+                  Text("重新加载")
+                }
               }
             }
             else -> CircularProgressIndicator(Modifier.size(30.dp), strokeWidth = 3.dp)
@@ -160,7 +189,17 @@ fun RiskControlDialog(
           modifier = Modifier.fillMaxWidth(),
           horizontalArrangement = Arrangement.End,
         ) {
-          OutlinedButton(onClick = { RiskControlManager.dismiss(challenge) }) { Text("稍后再说") }
+          OutlinedButton(
+            onClick = { RiskControlManager.dismiss(challenge) },
+            modifier =
+              Modifier.focusRequester(dismissFocusRequester)
+                .controlFocusOutline(
+                  shape = RoundedCornerShape(20.dp),
+                  color = MaterialTheme.colorScheme.primary,
+                ),
+          ) {
+            Text("稍后再说")
+          }
         }
       }
     }
@@ -172,6 +211,7 @@ fun RiskControlDialog(
 private fun CaptchaWebView(
   config: GeetestChallenge,
   enabled: Boolean,
+  allowFocus: Boolean,
   onSolved: (validate: String, seccode: String) -> Unit,
   onError: (String) -> Unit,
 ) {
@@ -184,7 +224,7 @@ private fun CaptchaWebView(
       )
     }
   AndroidView(
-    modifier = Modifier.fillMaxSize(),
+    modifier = Modifier.fillMaxSize().focusProperties { canFocus = allowFocus },
     factory = { context ->
       WebView(context).apply {
         WebViewConfigurator.configure(this, BuildConfig.DEBUG)

@@ -1,5 +1,9 @@
 package dev.openbili.webdemo.my
 
+/**
+ * 缓存视频面板：应用私有离线缓存的任务管理、进度与空间统计。
+ */
+
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
@@ -45,7 +49,6 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -71,16 +74,16 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.zIndex
 import dev.openbili.webdemo.api.SpaceContentCard
 import dev.openbili.webdemo.api.SpaceContentKind
@@ -99,6 +102,7 @@ import dev.openbili.webdemo.offline.OfflineStorageMigrationProgress
 import dev.openbili.webdemo.offline.OfflineTransferState
 import dev.openbili.webdemo.ui.NavigationCardBottomClearance
 import dev.openbili.webdemo.ui.VideoShapeTokens
+import dev.openbili.webdemo.ui.controlFocusOutline
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -106,6 +110,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/** 缓存视频面板组合体。 */
 @Composable
 internal fun CachedVideosPane(
   user: UserInfo,
@@ -310,82 +315,93 @@ internal fun CachedVideosPane(
     }
 
     displayedGroupId?.let { id ->
-      groups.firstOrNull { it.id == id }?.let { group ->
-        val collectionGridState = rememberLazyGridState()
-        val collectionFlingTracker = remember(collectionGridState) { FeedNavigationFlingTracker() }
-        BoxWithConstraints(Modifier.fillMaxSize().zIndex(10f)) {
-          Box(
-            Modifier.offset(12.dp, 12.dp)
-              .size(
-                width = (maxWidth - 24.dp).coerceAtLeast(1.dp),
-                height = (maxHeight - 24.dp).coerceAtLeast(1.dp),
-              )
-              .onGloballyPositioned { detailTargetBounds = it.boundsInRoot() }
-          ) {
-            OfflineCollectionTransition(
-              sourceBounds = detailSourceBounds,
-              targetBounds = detailTargetBounds,
-              progress = detailProgress.value,
-              contentReady = detailContentReady,
+      groups
+        .firstOrNull { it.id == id }
+        ?.let { group ->
+          val collectionGridState = rememberLazyGridState()
+          val collectionFlingTracker =
+            remember(collectionGridState) { FeedNavigationFlingTracker() }
+          BoxWithConstraints(Modifier.fillMaxSize().zIndex(10f)) {
+            Box(
+              Modifier.offset(12.dp, 12.dp)
+                .size(
+                  width = (maxWidth - 24.dp).coerceAtLeast(1.dp),
+                  height = (maxHeight - 24.dp).coerceAtLeast(1.dp),
+                )
+                .onGloballyPositioned { detailTargetBounds = it.boundsInRoot() }
             ) {
-              Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Row(
-                  modifier = Modifier.fillMaxWidth(),
-                  verticalAlignment = Alignment.CenterVertically,
-                ) {
-                  Column(Modifier.weight(1f)) {
-                    Text(group.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                    Text(
-                      "${group.snapshots.size} 个${if (group.kind == OfflineMediaKind.BANGUMI) "剧集" else "分 P"}",
-                      color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                  }
-                  IconButton(onClick = { selectedGroupId = null }) {
-                    Icon(Icons.Default.Close, contentDescription = "收起合集")
-                  }
-                }
-                LazyVerticalGrid(
-                  columns = GridCells.Fixed(columns.coerceIn(3, 6)),
-                  state = collectionGridState,
-                  modifier = Modifier.fillMaxSize().nestedScroll(collectionFlingTracker),
-                  contentPadding = PaddingValues(bottom = NavigationCardBottomClearance),
-                  horizontalArrangement = Arrangement.spacedBy(12.dp),
+              OfflineCollectionTransition(
+                sourceBounds = detailSourceBounds,
+                targetBounds = detailTargetBounds,
+                progress = detailProgress.value,
+                contentReady = detailContentReady,
+              ) {
+                Column(
+                  Modifier.fillMaxSize().padding(16.dp),
                   verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                  items(group.snapshots, key = { it.entry.id }) { snapshot ->
-                    val item = remember(snapshot.entry, manager.rootDirectory) {
-                      snapshot.entry.toExpandedFeedItem(manager.rootDirectory)
+                  Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                  ) {
+                    Column(Modifier.weight(1f)) {
+                      Text(
+                        group.title,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                      )
+                      Text(
+                        "${group.snapshots.size} 个${if (group.kind == OfflineMediaKind.BANGUMI) "剧集" else "分 P"}",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                      )
                     }
-                    OfflineFeedCard(
-                      snapshot = snapshot,
-                      item = item,
-                      coverVisible = item.id != hiddenCoverItemId,
-                      canPlay = manager.canPlay(snapshot.entry, user.mid, user.vipActive),
-                      collectionCount = 1,
-                      navigationKey = snapshot.entry.id,
-                      gridState = collectionGridState,
-                      flingTracker = collectionFlingTracker,
-                      onClick = { coverBounds, _ ->
-                        openCachedEntry(
-                          snapshot,
-                          manager,
-                          onVideo,
-                          onBangumi,
-                          coverBounds,
-                          displayItem = item,
-                        )
-                      },
-                      onPause = { manager.pause(snapshot.entry.id) },
-                      onResume = { manager.resume(snapshot.entry.id) },
-                      onDelete = { deleteCandidate = snapshot },
-                    )
+                    IconButton(onClick = { selectedGroupId = null }) {
+                      Icon(Icons.Default.Close, contentDescription = "收起合集")
+                    }
+                  }
+                  LazyVerticalGrid(
+                    columns = GridCells.Fixed(columns.coerceIn(3, 6)),
+                    state = collectionGridState,
+                    modifier = Modifier.fillMaxSize().nestedScroll(collectionFlingTracker),
+                    contentPadding = PaddingValues(bottom = NavigationCardBottomClearance),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                  ) {
+                    items(group.snapshots, key = { it.entry.id }) { snapshot ->
+                      val item =
+                        remember(snapshot.entry, manager.rootDirectory) {
+                          snapshot.entry.toExpandedFeedItem(manager.rootDirectory)
+                        }
+                      OfflineFeedCard(
+                        snapshot = snapshot,
+                        item = item,
+                        coverVisible = item.id != hiddenCoverItemId,
+                        canPlay = manager.canPlay(snapshot.entry, user.mid, user.vipActive),
+                        collectionCount = 1,
+                        navigationKey = snapshot.entry.id,
+                        gridState = collectionGridState,
+                        flingTracker = collectionFlingTracker,
+                        onClick = { coverBounds, _ ->
+                          openCachedEntry(
+                            snapshot,
+                            manager,
+                            onVideo,
+                            onBangumi,
+                            coverBounds,
+                            displayItem = item,
+                          )
+                        },
+                        onPause = { manager.pause(snapshot.entry.id) },
+                        onResume = { manager.resume(snapshot.entry.id) },
+                        onDelete = { deleteCandidate = snapshot },
+                      )
+                    }
                   }
                 }
               }
             }
           }
         }
-      }
     }
   }
 
@@ -416,8 +432,13 @@ internal fun CachedVideosPane(
       title = { Text("正在迁移缓存") },
       text = {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-          LinearProgressIndicator(progress = { progress.fraction }, modifier = Modifier.fillMaxWidth())
-          Text("${formatOfflineBytes(progress.copiedBytes)} / ${formatOfflineBytes(progress.totalBytes)}")
+          LinearProgressIndicator(
+            progress = { progress.fraction },
+            modifier = Modifier.fillMaxWidth(),
+          )
+          Text(
+            "${formatOfflineBytes(progress.copiedBytes)} / ${formatOfflineBytes(progress.totalBytes)}"
+          )
           Text("校验完成前不会删除原缓存。", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
       },
@@ -486,7 +507,8 @@ private fun OfflineFeedCard(
   var cardBounds by remember(item.id) { mutableStateOf(Rect.Zero) }
   var menuExpanded by remember(item.id) { mutableStateOf(false) }
   val unavailable = snapshot.state == OfflineTransferState.UNAVAILABLE || !canPlay
-  val clickEnabled = collectionCount > 1 || (snapshot.state == OfflineTransferState.COMPLETED && canPlay)
+  val clickEnabled =
+    collectionCount > 1 || (snapshot.state == OfflineTransferState.COMPLETED && canPlay)
   val scope = rememberCoroutineScope()
   val bottomClearancePx = with(LocalDensity.current) { NavigationCardBottomClearance.roundToPx() }
   val interactionSource = remember { MutableInteractionSource() }
@@ -500,6 +522,11 @@ private fun OfflineFeedCard(
   Surface(
     modifier =
       Modifier.fillMaxWidth()
+        .controlFocusOutline(
+          shape = VideoShapeTokens.Card,
+          color = MaterialTheme.colorScheme.primary,
+          width = 3.dp,
+        )
         .then(
           if (pressed || scale != 1f) {
             Modifier.graphicsLayer {
@@ -553,11 +580,15 @@ private fun OfflineFeedCard(
           onCoverBoundsChanged = { coverBounds = it },
           statsTextOverride = offlineStateLabel(snapshot, unavailable),
           publishDateTextOverride =
-            if (collectionCount > 1) "$collectionCount 项 · ${formatOfflineBytes(snapshot.bytesDownloaded)}"
+            if (collectionCount > 1)
+              "$collectionCount 项 · ${formatOfflineBytes(snapshot.bytesDownloaded)}"
             else "${snapshot.entry.qualityLabel} · ${formatOfflineBytes(snapshot.bytesDownloaded)}",
           durationTextOverride = item.duration,
           coverOverlay = {
-            if (snapshot.state !in setOf(OfflineTransferState.COMPLETED, OfflineTransferState.UNAVAILABLE)) {
+            if (
+              snapshot.state !in
+                setOf(OfflineTransferState.COMPLETED, OfflineTransferState.UNAVAILABLE)
+            ) {
               LinearProgressIndicator(
                 progress = { snapshot.progressPercent / 100f },
                 modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(4.dp),
@@ -699,7 +730,8 @@ private fun BatchDeleteDialog(
                   subtitle = snapshot.entry.partTitle,
                   onChecked = { checked ->
                     selectedIds =
-                      if (checked) selectedIds + snapshot.entry.id else selectedIds - snapshot.entry.id
+                      if (checked) selectedIds + snapshot.entry.id
+                      else selectedIds - snapshot.entry.id
                   },
                 )
               } else {
@@ -721,14 +753,15 @@ private fun BatchDeleteDialog(
                     },
                   )
                   Column(
-                    Modifier.weight(1f).combinedClickable(
-                      onClick = {
-                        expandedIds =
-                          if (group.id in expandedIds) expandedIds - group.id
-                          else expandedIds + group.id
-                      },
-                      onLongClick = {},
-                    )
+                    Modifier.weight(1f)
+                      .combinedClickable(
+                        onClick = {
+                          expandedIds =
+                            if (group.id in expandedIds) expandedIds - group.id
+                            else expandedIds + group.id
+                        },
+                        onLongClick = {},
+                      )
                   ) {
                     Text(group.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(
@@ -752,7 +785,8 @@ private fun BatchDeleteDialog(
                       indent = true,
                       onChecked = { checked ->
                         selectedIds =
-                          if (checked) selectedIds + snapshot.entry.id else selectedIds - snapshot.entry.id
+                          if (checked) selectedIds + snapshot.entry.id
+                          else selectedIds - snapshot.entry.id
                       },
                     )
                   }
@@ -788,7 +822,9 @@ private fun DeleteSelectionRow(
   onChecked: (Boolean) -> Unit,
 ) {
   Row(
-    modifier = Modifier.fillMaxWidth().padding(start = if (indent) 30.dp else 0.dp, top = 3.dp, bottom = 3.dp),
+    modifier =
+      Modifier.fillMaxWidth()
+        .padding(start = if (indent) 30.dp else 0.dp, top = 3.dp, bottom = 3.dp),
     verticalAlignment = Alignment.CenterVertically,
   ) {
     Checkbox(checked = checked, onCheckedChange = onChecked)
@@ -815,8 +851,7 @@ private data class OfflineMediaGroup(
   val snapshots: List<OfflineMediaSnapshot>,
 ) {
   val expandable: Boolean
-    get() =
-      snapshots.size > 1 || kind == OfflineMediaKind.BANGUMI || collectionId > 0L
+    get() = snapshots.size > 1 || kind == OfflineMediaKind.BANGUMI || collectionId > 0L
 
   fun toFeedItem(root: File): FeedItem {
     val representative = snapshots.first().entry.toFeedItem(root)
@@ -824,7 +859,8 @@ private data class OfflineMediaGroup(
       id = "offline-group:$id",
       title = title,
       uploader =
-        if (snapshots.size > 1) "${snapshots.size} 个${if (kind == OfflineMediaKind.BANGUMI) "剧集" else "分 P"}"
+        if (snapshots.size > 1)
+          "${snapshots.size} 个${if (kind == OfflineMediaKind.BANGUMI) "剧集" else "分 P"}"
         else representative.uploader,
     )
   }
@@ -834,16 +870,21 @@ private data class OfflineMediaGroup(
     val total = snapshots.sumOf(OfflineMediaSnapshot::totalBytes)
     val progress =
       if (total > 0L) bytes.toFloat() / total.toFloat() * 100f
-      else snapshots.map(OfflineMediaSnapshot::progressPercent).average().toFloat().coerceAtLeast(0f)
+      else
+        snapshots.map(OfflineMediaSnapshot::progressPercent).average().toFloat().coerceAtLeast(0f)
     val state =
       when {
-        snapshots.all { it.state == OfflineTransferState.COMPLETED } -> OfflineTransferState.COMPLETED
-        snapshots.any { it.state == OfflineTransferState.DOWNLOADING } -> OfflineTransferState.DOWNLOADING
-        snapshots.any { it.state == OfflineTransferState.PREPARING } -> OfflineTransferState.PREPARING
+        snapshots.all { it.state == OfflineTransferState.COMPLETED } ->
+          OfflineTransferState.COMPLETED
+        snapshots.any { it.state == OfflineTransferState.DOWNLOADING } ->
+          OfflineTransferState.DOWNLOADING
+        snapshots.any { it.state == OfflineTransferState.PREPARING } ->
+          OfflineTransferState.PREPARING
         snapshots.any { it.state == OfflineTransferState.QUEUED } -> OfflineTransferState.QUEUED
         snapshots.any { it.state == OfflineTransferState.FAILED } -> OfflineTransferState.FAILED
         snapshots.any { it.state == OfflineTransferState.PAUSED } -> OfflineTransferState.PAUSED
-        snapshots.any { it.state == OfflineTransferState.UNAVAILABLE } -> OfflineTransferState.UNAVAILABLE
+        snapshots.any { it.state == OfflineTransferState.UNAVAILABLE } ->
+          OfflineTransferState.UNAVAILABLE
         else -> snapshots.first().state
       }
     return OfflineMediaSnapshot(
@@ -852,7 +893,8 @@ private data class OfflineMediaGroup(
       progressPercent = progress.coerceIn(0f, 100f),
       bytesDownloaded = bytes,
       totalBytes = total,
-      failureReason = snapshots.firstOrNull { it.failureReason.isNotBlank() }?.failureReason.orEmpty(),
+      failureReason =
+        snapshots.firstOrNull { it.failureReason.isNotBlank() }?.failureReason.orEmpty(),
     )
   }
 }
@@ -869,7 +911,10 @@ private fun List<OfflineMediaSnapshot>.toOfflineGroups(): List<OfflineMediaGroup
       }
     }
     .map { (id, entries) ->
-      val sorted = entries.sortedWith(compareBy<OfflineMediaSnapshot> { it.entry.pageNumber }.thenBy { it.entry.createdAtMs })
+      val sorted =
+        entries.sortedWith(
+          compareBy<OfflineMediaSnapshot> { it.entry.pageNumber }.thenBy { it.entry.createdAtMs }
+        )
       OfflineMediaGroup(
         id = id,
         title = sorted.first().entry.title,
@@ -946,5 +991,5 @@ internal fun formatOfflineBytes(bytes: Long): String =
 private fun Rect.hasUsableSize(): Boolean = width > 1f && height > 1f
 
 private suspend fun withFrameNanosCompat() {
-  androidx.compose.runtime.withFrameNanos { }
+  androidx.compose.runtime.withFrameNanos {}
 }

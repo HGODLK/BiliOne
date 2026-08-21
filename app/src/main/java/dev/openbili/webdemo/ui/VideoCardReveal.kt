@@ -16,8 +16,8 @@ import dev.openbili.webdemo.feed.LocalFeedImageLoadPolicy
 import kotlinx.coroutines.delay
 
 /**
- * A short reveal for video-card feeds. Reveal state is saved by stable item key, so every newly
- * loaded card fades in once without replaying the animation after lazy-list recycling.
+ * 视频卡片信息流的短展示动画。展示状态按稳定条目键保存，因此每张新加载的卡片淡入
+ * 一次，而不会在惰性列表回收后重放动画。
  */
 @Composable
 fun VideoCardReveal(

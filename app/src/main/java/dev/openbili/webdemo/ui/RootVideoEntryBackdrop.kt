@@ -18,11 +18,11 @@ import androidx.compose.ui.platform.LocalDensity
 import dev.openbili.webdemo.settings.AppSettings
 
 /**
- * Draws only the playback-page backdrop while a root card flies into its destination.
+ * 在根卡片飞向其目的地时只绘制播放页背景。
  *
- * Keeping the complete [dev.openbili.webdemo.video.VideoScreen] transparent during that flight
- * avoids cross-fading its full device-sized render tree. Alpha is applied directly to the three
- * backdrop primitives so this layer does not need another full-screen offscreen buffer.
+ * 让完整的 [dev.openbili.webdemo.video.VideoScreen] 在该飞行期间保持透明，
+ * 避免交叉淡入其整个设备尺寸的渲染树。alpha 直接应用到三个背景原语上，
+ * 因此该图层无需另一个全屏离屏缓冲。
  */
 @Composable
 internal fun RootVideoEntryBackdrop(

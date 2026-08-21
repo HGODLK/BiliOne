@@ -8,20 +8,21 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.PlaybackException
 import androidx.media3.datasource.HttpDataSource
-import dev.openbili.webdemo.api.BiliApi
+import dev.openbili.webdemo.api.BiliFollowApi
+import dev.openbili.webdemo.api.BiliPrivateMessageApi
 import dev.openbili.webdemo.api.UserInfo
 import java.util.LinkedHashMap
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -149,12 +150,13 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
             keyframeUrl = entry.keyframeUrl,
             areaName = entry.areaName,
             parentAreaName = entry.parentAreaName,
+            parentAreaId = entry.parentAreaId,
+            areaId = entry.areaId,
             liveStatus = entry.liveStatus,
             online = 0L,
           ),
         anchorInfo = LiveAnchorInfo(entry.uid, entry.uname, entry.faceUrl),
       )
-    loadRecommendations(nextGeneration, entry.roomId)
     LiveHistoryStore.record(getApplication(), entry)
     roomJob = viewModelScope.launch {
       try {
@@ -168,6 +170,7 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
             error = null,
           )
         }
+        loadRecommendations(nextGeneration, room)
         LiveHistoryStore.record(
           getApplication(),
           entry.copy(
@@ -313,6 +316,33 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
       },
     )
 
+    recoverPlayback(sourceIndex, "error")
+  }
+
+  /** 播放器持续缓冲时复用与错误恢复相同的备用源策略。 */
+  fun onPlaybackStall(sourceIndex: Int) {
+    val current = _state.value
+    if (sourceIndex != current.activeSourceIndex) {
+      Log.d(
+        TAG,
+        "ignored stale playback stall room=${current.roomInfo?.roomId} " +
+          "source=$sourceIndex active=${current.activeSourceIndex}",
+      )
+      return
+    }
+    Log.w(
+      TAG,
+      "playback stalled room=${current.roomInfo?.roomId} " +
+        "qn=${current.playback?.currentQn} source=$sourceIndex/${current.playback?.sources?.size ?: 0}",
+    )
+    recoverPlayback(sourceIndex, "stall")
+  }
+
+  private fun recoverPlayback(sourceIndex: Int, reason: String) {
+    val current = _state.value
+    val sources = current.playback?.sources.orEmpty()
+    if (sourceIndex != current.activeSourceIndex) return
+
     when (
       val action =
         playbackRecovery.onFailure(
@@ -343,7 +373,7 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
         playbackRetryJob = viewModelScope.launch {
           delay(action.delayMs)
           if (!isCurrent(requestGeneration)) return@launch
-          requestPlayback(qn, reason = "recovery-${action.round}")
+          requestPlayback(qn, reason = "recovery-$reason-${action.round}")
         }
       }
       LivePlaybackRecoveryAction.Stop -> {
@@ -466,10 +496,7 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
     if (current.composer.sending) return
     if (!emoji.available) {
       _state.update {
-        it.copy(
-          composer =
-            it.composer.copy(error = emoji.unavailableReason ?: "该表情暂不可用")
-        )
+        it.copy(composer = it.composer.copy(error = emoji.unavailableReason ?: "该表情暂不可用"))
       }
       return
     }
@@ -548,7 +575,10 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
   fun joinInteractiveLottery() {
     val current = _state.value
     val lottery = current.interactiveLottery ?: return
-    if (lottery.status != LiveLotteryStatus.ACTIVE || lottery.endAtEpochMs <= System.currentTimeMillis()) {
+    if (
+      lottery.status != LiveLotteryStatus.ACTIVE ||
+        lottery.endAtEpochMs <= System.currentTimeMillis()
+    ) {
       _state.update {
         it.copy(
           interactiveLottery =
@@ -562,21 +592,13 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
     }
     if (lottery.requiresPayment) {
       _state.update {
-        it.copy(
-          interactiveLottery =
-            it.interactiveLottery?.copy(
-              error = "该抽奖包含付费条件，本应用不提供付费参与",
-            )
-        )
+        it.copy(interactiveLottery = it.interactiveLottery?.copy(error = "该抽奖包含付费条件，本应用不提供付费参与"))
       }
       return
     }
     if (!account.isLogin) {
       _state.update {
-        it.copy(
-          interactiveLottery =
-            it.interactiveLottery?.copy(error = "请先登录后再参与互动抽奖")
-        )
+        it.copy(interactiveLottery = it.interactiveLottery?.copy(error = "请先登录后再参与互动抽奖"))
       }
       return
     }
@@ -588,37 +610,35 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
       )
     }
     lotteryJob?.cancel()
-    lotteryJob =
-      viewModelScope.launch {
-        try {
-          withContext(Dispatchers.IO) { BiliLiveApi.joinInteractiveLottery(lottery.id) }
-          if (!isCurrent(requestGeneration)) return@launch
-          _state.update {
-            val active = it.interactiveLottery
-            if (active?.id != lottery.id) it
-            else
-              it.copy(
-                interactiveLottery =
-                  active.copy(status = LiveLotteryStatus.JOINED, error = null)
-              )
-          }
-        } catch (error: Exception) {
-          if (error is CancellationException) throw error
-          if (!isCurrent(requestGeneration)) return@launch
-          _state.update {
-            val active = it.interactiveLottery
-            if (active?.id != lottery.id) it
-            else
-              it.copy(
-                interactiveLottery =
-                  active.copy(
-                    status = LiveLotteryStatus.ACTIVE,
-                    error = error.message ?: "参与互动抽奖失败",
-                  )
-              )
-          }
+    lotteryJob = viewModelScope.launch {
+      try {
+        withContext(Dispatchers.IO) { BiliLiveApi.joinInteractiveLottery(lottery.id) }
+        if (!isCurrent(requestGeneration)) return@launch
+        _state.update {
+          val active = it.interactiveLottery
+          if (active?.id != lottery.id) it
+          else
+            it.copy(
+              interactiveLottery = active.copy(status = LiveLotteryStatus.JOINED, error = null)
+            )
+        }
+      } catch (error: Exception) {
+        if (error is CancellationException) throw error
+        if (!isCurrent(requestGeneration)) return@launch
+        _state.update {
+          val active = it.interactiveLottery
+          if (active?.id != lottery.id) it
+          else
+            it.copy(
+              interactiveLottery =
+                active.copy(
+                  status = LiveLotteryStatus.ACTIVE,
+                  error = error.message ?: "参与互动抽奖失败",
+                )
+            )
         }
       }
+    }
   }
 
   fun selectRankTab(tab: LiveRankTab) {
@@ -645,9 +665,9 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
 
   fun retryRecommendations() {
     val current = _state.value
-    val roomId = current.roomInfo?.roomId ?: current.entryRoomId
-    if (roomId > 0L && !current.recommendationsLoading) {
-      loadRecommendations(current.generation, roomId)
+    val room = current.roomInfo
+    if (room != null && !current.recommendationsLoading) {
+      loadRecommendations(current.generation, room)
     }
   }
 
@@ -729,7 +749,7 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
     viewModelScope.launch {
       val groups =
         withContext(Dispatchers.IO) {
-          runCatching { BiliApi.getFollowingGroups() }.getOrDefault(emptyList())
+          runCatching { BiliFollowApi.getFollowingGroups() }.getOrDefault(emptyList())
         }
       if (!isCurrent(requestGeneration)) return@launch
       _state.update { it.copy(followingGroups = groups, followingGroupsLoading = false) }
@@ -753,8 +773,8 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
       val result =
         withContext(Dispatchers.IO) {
           runCatching {
-            BiliApi.setFollowing(uid, follow)
-            if (follow && groupId != null) BiliApi.setFollowingGroup(uid, groupId)
+            BiliFollowApi.setFollowing(uid, follow)
+            if (follow && groupId != null) BiliFollowApi.setFollowingGroup(uid, groupId)
           }
         }
       if (!isCurrent(requestGeneration)) return@launch
@@ -804,7 +824,7 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
     loadInteractiveLottery(requestGeneration)
   }
 
-  private fun loadRecommendations(requestGeneration: Long, roomId: Long) {
+  private fun loadRecommendations(requestGeneration: Long, room: LiveRoomInfo) {
     recommendationsJob?.cancel()
     _state.update {
       it.copy(recommendationsLoading = true, recommendationsError = null)
@@ -813,10 +833,7 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
       try {
         val rooms =
           withContext(Dispatchers.IO) {
-            BiliLiveApi.getHomeRecommendations(limit = 14)
-              .filterNot { it.roomId == roomId }
-              .distinctBy(LiveSearchRoom::roomId)
-              .take(12)
+            LiveRoomRecommendationLoader.load(room)
           }
         if (!isCurrent(requestGeneration)) return@launch
         _state.update {
@@ -997,8 +1014,7 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
         }
       if (!isCurrent(requestGeneration)) return@launch
       _state.update {
-        val restored =
-          lottery?.takeIf { value -> value.endAtEpochMs > System.currentTimeMillis() }
+        val restored = lottery?.takeIf { value -> value.endAtEpochMs > System.currentTimeMillis() }
         val current = it.interactiveLottery
         when {
           restored == null -> it
@@ -1026,14 +1042,13 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
 
   private fun scheduleLotteryClear(requestGeneration: Long, id: Long, delayMs: Long) {
     lotteryJob?.cancel()
-    lotteryJob =
-      viewModelScope.launch {
-        delay(delayMs)
-        if (!isCurrent(requestGeneration)) return@launch
-        _state.update {
-          if (it.interactiveLottery?.id == id) it.copy(interactiveLottery = null) else it
-        }
+    lotteryJob = viewModelScope.launch {
+      delay(delayMs)
+      if (!isCurrent(requestGeneration)) return@launch
+      _state.update {
+        if (it.interactiveLottery?.id == id) it.copy(interactiveLottery = null) else it
       }
+    }
   }
 
   private fun loadEmojiPacks(requestGeneration: Long, room: LiveRoomInfo) {
@@ -1127,7 +1142,7 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
       val followed =
         if (account.isLogin && room.anchorUid > 0L) {
           withContext(Dispatchers.IO) {
-            runCatching { BiliApi.isFollowing(room.anchorUid) }.getOrDefault(false)
+            runCatching { BiliFollowApi.isFollowing(room.anchorUid) }.getOrDefault(false)
           }
         } else {
           false
@@ -1198,34 +1213,32 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
   }
 
   private fun mergeIncomingMessages(messages: List<LiveChatMessage>) {
-    val enriched =
-      messages.map { message ->
-        val uid = message.uid
-        val cached = uid?.let(avatarCache::get)
-        when {
-          cached != null ->
-            message.copy(
-              uname = message.uname ?: cached.first,
-              faceUrl = message.faceUrl ?: cached.second.takeIf(String::isNotBlank),
-            )
-          uid == account.mid && account.isLogin ->
-            message.copy(
-              uname = message.uname ?: account.name,
-              faceUrl = message.faceUrl ?: account.face,
-            )
-          else -> message
-        }
+    val enriched = messages.map { message ->
+      val uid = message.uid
+      val cached = uid?.let(avatarCache::get)
+      when {
+        cached != null ->
+          message.copy(
+            uname = message.uname ?: cached.first,
+            faceUrl = message.faceUrl ?: cached.second.takeIf(String::isNotBlank),
+          )
+        uid == account.mid && account.isLogin ->
+          message.copy(
+            uname = message.uname ?: account.name,
+            faceUrl = message.faceUrl ?: account.face,
+          )
+        else -> message
       }
+    }
     _state.update { current ->
       val next = current.messages.toMutableList()
       enriched.forEach { message ->
-        val pendingIndex =
-          next.indexOfLast {
-            it.delivery is LiveMessageDelivery.Pending &&
-              it.uid == message.uid &&
-              kotlin.math.abs(it.receivedAtMs - message.receivedAtMs) <= 5_000L &&
-              contentKey(it.content) == contentKey(message.content)
-          }
+        val pendingIndex = next.indexOfLast {
+          it.delivery is LiveMessageDelivery.Pending &&
+            it.uid == message.uid &&
+            kotlin.math.abs(it.receivedAtMs - message.receivedAtMs) <= 5_000L &&
+            contentKey(it.content) == contentKey(message.content)
+        }
         when {
           pendingIndex >= 0 -> {
             val pending = next[pendingIndex]
@@ -1261,42 +1274,41 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
       }
     }
     if (pendingAvatarUids.isEmpty() || avatarJob?.isActive == true) return
-    avatarJob =
-      viewModelScope.launch {
-        delay(AVATAR_BATCH_DELAY_MS)
-        while (pendingAvatarUids.isNotEmpty() && isCurrent(requestGeneration)) {
-          val batch = pendingAvatarUids.take(50)
-          pendingAvatarUids.removeAll(batch.toSet())
-          val profiles =
-            withContext(Dispatchers.IO) {
-              runCatching { BiliApi.getMessageUsers(batch) }.getOrDefault(emptyMap())
-            }
-          if (!isCurrent(requestGeneration)) return@launch
-          val failed = batch.filterNot(profiles::containsKey)
-          val retryAt = System.currentTimeMillis() + AVATAR_FAILURE_BACKOFF_MS
-          failed.forEach { avatarRetryAfter[it] = retryAt }
-          profiles.forEach { (uid, profile) ->
-            avatarCache[uid] = profile
-            avatarRetryAfter.remove(uid)
+    avatarJob = viewModelScope.launch {
+      delay(AVATAR_BATCH_DELAY_MS)
+      while (pendingAvatarUids.isNotEmpty() && isCurrent(requestGeneration)) {
+        val batch = pendingAvatarUids.take(50)
+        pendingAvatarUids.removeAll(batch.toSet())
+        val profiles =
+          withContext(Dispatchers.IO) {
+            runCatching { BiliPrivateMessageApi.getMessageUsers(batch) }.getOrDefault(emptyMap())
           }
-          if (profiles.isNotEmpty()) {
-            _state.update { state ->
-              state.copy(
-                messages =
-                  state.messages.map { message ->
-                    val profile = message.uid?.let(profiles::get)
-                    if (profile == null) message
-                    else
-                      message.copy(
-                        uname = message.uname ?: profile.first,
-                        faceUrl = message.faceUrl ?: profile.second.takeIf(String::isNotBlank),
-                      )
-                  }
-              )
-            }
+        if (!isCurrent(requestGeneration)) return@launch
+        val failed = batch.filterNot(profiles::containsKey)
+        val retryAt = System.currentTimeMillis() + AVATAR_FAILURE_BACKOFF_MS
+        failed.forEach { avatarRetryAfter[it] = retryAt }
+        profiles.forEach { (uid, profile) ->
+          avatarCache[uid] = profile
+          avatarRetryAfter.remove(uid)
+        }
+        if (profiles.isNotEmpty()) {
+          _state.update { state ->
+            state.copy(
+              messages =
+                state.messages.map { message ->
+                  val profile = message.uid?.let(profiles::get)
+                  if (profile == null) message
+                  else
+                    message.copy(
+                      uname = message.uname ?: profile.first,
+                      faceUrl = message.faceUrl ?: profile.second.takeIf(String::isNotBlank),
+                    )
+                }
+            )
           }
         }
       }
+    }
   }
 
   private fun richTextContent(text: String): LiveChatContent.Text {

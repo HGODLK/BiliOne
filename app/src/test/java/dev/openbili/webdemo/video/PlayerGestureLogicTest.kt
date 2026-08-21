@@ -23,11 +23,21 @@ class PlayerGestureLogicTest {
   fun outwardMotionEntersAndInwardMotionExitsFullscreen() {
     assertEquals(
       true,
-      fullscreenTargetForSpan(false, initialSpan = 400f, currentSpan = 420f, minimumMovementPx = 12f),
+      fullscreenTargetForSpan(
+        false,
+        initialSpan = 400f,
+        currentSpan = 420f,
+        minimumMovementPx = 12f,
+      ),
     )
     assertEquals(
       false,
-      fullscreenTargetForSpan(true, initialSpan = 400f, currentSpan = 380f, minimumMovementPx = 12f),
+      fullscreenTargetForSpan(
+        true,
+        initialSpan = 400f,
+        currentSpan = 380f,
+        minimumMovementPx = 12f,
+      ),
     )
   }
 

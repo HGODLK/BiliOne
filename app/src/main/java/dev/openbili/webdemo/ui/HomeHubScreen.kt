@@ -1,5 +1,7 @@
 package dev.openbili.webdemo.ui
 
+import android.os.SystemClock
+import android.view.KeyEvent as AndroidKeyEvent
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateDpAsState
@@ -14,8 +16,13 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -40,6 +47,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -68,10 +76,16 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -86,12 +100,18 @@ import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -99,6 +119,7 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.Lifecycle
@@ -113,10 +134,10 @@ import dev.openbili.webdemo.api.UserInfo
 import dev.openbili.webdemo.dynamic.HomeDynamicScreen
 import dev.openbili.webdemo.dynamic.HomeDynamicViewModel
 import dev.openbili.webdemo.feed.FeedItem
-import dev.openbili.webdemo.feed.LocalCoverImageLoadingEnabled
 import dev.openbili.webdemo.feed.FeedScreen
 import dev.openbili.webdemo.feed.FeedScrollAnchor
 import dev.openbili.webdemo.feed.FeedUiState
+import dev.openbili.webdemo.feed.LocalCoverImageLoadingEnabled
 import dev.openbili.webdemo.feed.PopularFeedScreen
 import dev.openbili.webdemo.feed.PopularFeedViewModel
 import dev.openbili.webdemo.live.LiveHomeScreen
@@ -129,14 +150,83 @@ import dev.openbili.webdemo.video.CommentProfileAnchor
 import kotlin.math.floor
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-private enum class HomeHubTab(val label: String) {
+internal enum class HomeHubTab(val label: String) {
   RECOMMENDATION("推荐"),
   DYNAMIC("动态"),
   POPULAR("热门"),
   LIVE("直播"),
+}
+
+internal enum class HomeSecondLevelAction {
+  IMMERSIVE,
+  MUSIC,
+  SCROLL_TOP,
+  REFRESH,
+}
+
+internal fun homeSecondLevelActionBelowTab(tabIndex: Int): HomeSecondLevelAction =
+  if (tabIndex <= 1) HomeSecondLevelAction.IMMERSIVE else HomeSecondLevelAction.SCROLL_TOP
+
+private enum class HomeControlDirection {
+  LEFT,
+  RIGHT,
+  UP,
+  DOWN,
+}
+
+private fun homeControlDirection(keyCode: Int): HomeControlDirection? =
+  when (keyCode) {
+    AndroidKeyEvent.KEYCODE_DPAD_LEFT -> HomeControlDirection.LEFT
+    AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> HomeControlDirection.RIGHT
+    AndroidKeyEvent.KEYCODE_DPAD_UP -> HomeControlDirection.UP
+    AndroidKeyEvent.KEYCODE_DPAD_DOWN -> HomeControlDirection.DOWN
+    else -> null
+  }
+
+enum class HomeControlLevel {
+  ROOT,
+  TABS,
+  PAGE_CONTROLS,
+  CONTENT,
+}
+
+internal fun homeTabEntryLevel(tab: HomeHubTab): HomeControlLevel =
+  if (tab == HomeHubTab.DYNAMIC || tab == HomeHubTab.POPULAR) {
+    HomeControlLevel.PAGE_CONTROLS
+  } else {
+    HomeControlLevel.CONTENT
+  }
+
+internal fun homeContentParentLevel(tab: HomeHubTab): HomeControlLevel =
+  if (tab == HomeHubTab.DYNAMIC || tab == HomeHubTab.POPULAR) {
+    HomeControlLevel.PAGE_CONTROLS
+  } else {
+    HomeControlLevel.TABS
+  }
+
+internal fun homeControlBackTarget(
+  tab: HomeHubTab,
+  level: HomeControlLevel,
+): HomeControlLevel =
+  when (level) {
+    HomeControlLevel.CONTENT -> homeContentParentLevel(tab)
+    HomeControlLevel.PAGE_CONTROLS -> HomeControlLevel.TABS
+    HomeControlLevel.TABS -> HomeControlLevel.ROOT
+    HomeControlLevel.ROOT -> HomeControlLevel.ROOT
+  }
+
+internal fun canShowControlHomeExit(level: HomeControlLevel): Boolean =
+  level == HomeControlLevel.ROOT
+
+private enum class HomeSecondLevelFocusRegion {
+  ACCOUNT,
+  SEARCH,
+  TAB,
+  ACTION,
 }
 
 private const val MUSIC_ENTRY_INPUT_LOCK_TIMEOUT_MS = 5_000L
@@ -156,21 +246,33 @@ internal fun shouldLockHomeHubPager(
   recommendationMode != HomeRecommendationMode.NORMAL ||
     (dynamicPageSelected && (selectedDynamicId != null || dynamicOverlayActive))
 
+internal fun shouldEnableHomeHubPagerUserScroll(
+  horizontalRailTouched: Boolean,
+  navigationLocked: Boolean,
+  recommendationMode: HomeRecommendationMode,
+): Boolean =
+  !horizontalRailTouched &&
+    !navigationLocked &&
+    recommendationMode == HomeRecommendationMode.NORMAL
+
 /**
- * Home's secondary pager. The root pager remains responsible for HOME/BANGUMI/MY; this component
- * owns only the four content modes inside HOME.
+ * 首页的二级分页器。根分页器仍负责 HOME/BANGUMI/MY；本组件只拥有 HOME 内部的
+ * 四个内容模式。
  */
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
 @Composable
 fun HomeHubScreen(
   feedState: FeedUiState,
   userInfo: UserInfo,
   onRecommendationRefresh: () -> Unit,
+  onRecommendationPullRefresh: (Int) -> Unit,
   onRecommendationLoadNextPage: () -> Unit,
   onRecommendationItemClick: (FeedItem, Rect, FeedScrollAnchor) -> Unit,
   onPopularItemClick: (FeedItem, Rect, FeedScrollAnchor) -> Unit,
   onDynamicItemClick: (SpaceDynamicItem, FeedItem, Rect) -> Unit,
+  onDynamicLiveClick: (LiveSearchRoom, Rect) -> Unit,
   onDynamicItemBoundsChanged: (String, Rect) -> Unit,
+  onDynamicLiveBoundsChanged: (LiveSearchRoom, Rect) -> Unit,
   onDynamicArticleClick: (ArticleItem, Rect) -> Unit,
   onDynamicArticleBoundsChanged: (ArticleItem, Rect) -> Unit,
   onDynamicCommentProfileClick: (Long, CommentItem, CommentProfileAnchor) -> Unit,
@@ -178,10 +280,8 @@ fun HomeHubScreen(
   onRecommendationItemLongClick: (FeedItem) -> Unit,
   onRecommendationProfileClick: (FeedItem, Rect) -> Unit,
   onRecommendationLoginClick: (Rect) -> Unit,
-  onSearch: () -> Unit,
+  onSearch: (fromController: Boolean) -> Unit,
   searchQuery: String,
-  onSearchQueryChange: (String) -> Unit,
-  onSearchSubmit: (String) -> Unit,
   onConsumeRecommendationRefreshMessage: () -> Unit,
   onSearchBoundsChanged: (Rect) -> Unit,
   coverPrefetchCount: Int,
@@ -190,6 +290,7 @@ fun HomeHubScreen(
   hiddenRecommendationCoverItemId: String?,
   hiddenPopularCoverItemId: String?,
   hiddenDynamicCoverItemId: String?,
+  hiddenDynamicLiveCoverItemId: String? = null,
   hiddenDynamicArticleItemId: String?,
   hiddenDynamicCommentAvatarRpid: Long?,
   hiddenDynamicAvatarSourceBounds: Rect?,
@@ -205,9 +306,16 @@ fun HomeHubScreen(
   onDynamicDetailActiveChanged: (Boolean) -> Unit,
   recommendationMode: HomeRecommendationMode,
   onRecommendationModeChanged: (HomeRecommendationMode) -> Unit,
+  onLiveAreaIndex: (Rect) -> Unit,
+  liveAreaIndexFocusRestoreRequest: Int = 0,
   onMusicFavoriteFolderSelected: (Long) -> Unit,
   onMusicEntryInputLockChanged: (Boolean) -> Unit,
   settings: AppSettings,
+  controlSecondLevelRequest: Int = 0,
+  controlSearchFocusRequest: Int = 0,
+  controlFocusRestoreRequest: Int = 0,
+  controlLevel: HomeControlLevel,
+  onControlLevelChanged: (HomeControlLevel) -> Unit = {},
 ) {
   val popularViewModel: PopularFeedViewModel = viewModel()
   val popularState by popularViewModel.state.collectAsState()
@@ -218,10 +326,31 @@ fun HomeHubScreen(
   val musicPlayerViewModel =
     (LocalContext.current.applicationContext as BiliApplication).homeMusicPlayerViewModel
   val musicPlayerState by musicPlayerViewModel.screenState.collectAsState()
-  val pagerState = rememberPagerState(pageCount = { HomeHubTab.entries.size })
+  val homeDefaultTabIndex = settings.homeDefaultTab.coerceIn(0, HomeHubTab.entries.lastIndex)
+  val pagerState =
+    rememberPagerState(
+      initialPage = homeDefaultTabIndex,
+      pageCount = { HomeHubTab.entries.size },
+    )
   val popularGridState = rememberLazyGridState()
   val liveGridState = rememberLazyGridState()
   val scope = rememberCoroutineScope()
+  val controlMode = LocalControlMode.current
+  val controlTabFocusRequesters = remember { HomeHubTab.entries.map { FocusRequester() } }
+  val controlContentFocusRequesters = remember { HomeHubTab.entries.map { FocusRequester() } }
+  val controlAccountFocusRequester = remember { FocusRequester() }
+  val controlSearchFocusRequester = remember { FocusRequester() }
+  val controlActionFocusRequesters =
+    remember { HomeSecondLevelAction.entries.associateWith { FocusRequester() } }
+  val controlFocusMemoryRequester = remember { FocusRequester() }
+  var lastControlTabIndex by remember { mutableIntStateOf(homeDefaultTabIndex) }
+  var controlSelectedTabIndex by remember { mutableIntStateOf(homeDefaultTabIndex) }
+  var lastControlAction by remember { mutableStateOf<HomeSecondLevelAction?>(null) }
+  var lastSecondLevelFocusRegion by remember { mutableStateOf(HomeSecondLevelFocusRegion.TAB) }
+  var pendingControlContentTab by remember { mutableStateOf<HomeHubTab?>(null) }
+  var controlFocusRestorePending by remember { mutableStateOf(false) }
+  var controlInputFromController by remember { mutableStateOf(true) }
+  var controlTabNavigationJob by remember { mutableStateOf<Job?>(null) }
   var horizontalRailTouched by remember { mutableStateOf(false) }
   var dynamicOverlayActive by remember { mutableStateOf(false) }
   var musicLaunchPending by remember { mutableStateOf(false) }
@@ -232,6 +361,22 @@ fun HomeHubScreen(
   val dynamicPageVisible = dynamicPageSelected && rootPageVisible
   val activeTab = HomeHubTab.entries[pagerState.currentPage]
   val recommendationSelected = activeTab == HomeHubTab.RECOMMENDATION
+  DisposableEffect(Unit) {
+    onDispose { onControlLevelChanged(HomeControlLevel.ROOT) }
+  }
+  val controlContentReadyMarker =
+    when (val tab = pendingControlContentTab) {
+      HomeHubTab.RECOMMENDATION ->
+        (feedState as? FeedUiState.Content)?.items?.firstOrNull()?.id
+      HomeHubTab.DYNAMIC -> dynamicState.items.firstOrNull()?.id
+      HomeHubTab.POPULAR ->
+        (popularState.content as? FeedUiState.Content)?.items?.firstOrNull()?.id
+      HomeHubTab.LIVE ->
+        (liveState as? dev.openbili.webdemo.live.LiveHomeUiState.Content)
+          ?.let { content -> content.heroRooms.firstOrNull() ?: content.rooms.firstOrNull() }
+          ?.stableId
+      null -> null
+    }
   val dynamicNavigationLocked =
     shouldLockHomeHubPager(
       dynamicPageSelected = dynamicPageSelected,
@@ -242,6 +387,127 @@ fun HomeHubScreen(
   val dynamicDetailActive = dynamicPageVisible && dynamicOverlayActive
   val musicOverlayActive = musicLaunchPending || recommendationMode == HomeRecommendationMode.MUSIC
   val homeContentBackgroundWorkAllowed = backgroundWorkAllowed && !musicOverlayActive
+  LaunchedEffect(controlSecondLevelRequest, controlMode, rootPageVisible) {
+    if (controlMode && rootPageVisible && controlSecondLevelRequest > 0) {
+      controlTabNavigationJob?.cancel()
+      controlInputFromController = true
+      onControlLevelChanged(HomeControlLevel.TABS)
+      pendingControlContentTab = null
+      lastControlTabIndex = activeTab.ordinal
+      controlSelectedTabIndex = activeTab.ordinal
+      lastControlAction = null
+      lastSecondLevelFocusRegion = HomeSecondLevelFocusRegion.TAB
+      withFrameNanos {}
+      runCatching { controlTabFocusRequesters[activeTab.ordinal].requestFocus() }
+    }
+  }
+  LaunchedEffect(controlSearchFocusRequest, controlMode, rootPageVisible) {
+    if (controlMode && rootPageVisible && controlSearchFocusRequest > 0) {
+      controlTabNavigationJob?.cancel()
+      controlInputFromController = true
+      onControlLevelChanged(HomeControlLevel.TABS)
+      pendingControlContentTab = null
+      lastControlAction = null
+      lastSecondLevelFocusRegion = HomeSecondLevelFocusRegion.SEARCH
+      withFrameNanos {}
+      withFrameNanos {}
+      runCatching { controlSearchFocusRequester.requestFocus() }
+    }
+  }
+  LaunchedEffect(controlFocusRestoreRequest, controlMode, rootPageVisible) {
+    if (controlMode && rootPageVisible && controlFocusRestoreRequest > 0) {
+      withFrameNanos {}
+      withFrameNanos {}
+      val restored =
+        runCatching { controlFocusMemoryRequester.restoreFocusedChild() }.getOrDefault(false)
+      if (!restored) {
+        val fallback =
+          when (controlLevel) {
+            HomeControlLevel.TABS ->
+              when (lastSecondLevelFocusRegion) {
+                HomeSecondLevelFocusRegion.ACCOUNT -> controlAccountFocusRequester
+                HomeSecondLevelFocusRegion.SEARCH -> controlSearchFocusRequester
+                HomeSecondLevelFocusRegion.TAB -> controlTabFocusRequesters[lastControlTabIndex]
+                HomeSecondLevelFocusRegion.ACTION ->
+                  lastControlAction?.let(controlActionFocusRequesters::get)
+                    ?: controlTabFocusRequesters[lastControlTabIndex]
+              }
+            HomeControlLevel.PAGE_CONTROLS ->
+              lastControlAction?.let(controlActionFocusRequesters::get)
+                ?: controlTabFocusRequesters[lastControlTabIndex]
+            HomeControlLevel.CONTENT ->
+              controlContentFocusRequesters[controlSelectedTabIndex]
+            HomeControlLevel.ROOT -> null
+          }
+        fallback?.let { runCatching { it.requestFocus() } }
+      }
+      controlFocusRestorePending = false
+    }
+  }
+  LaunchedEffect(rootPageVisible, controlMode) {
+    if (!controlMode || !rootPageVisible) {
+      controlTabNavigationJob?.cancel()
+      onControlLevelChanged(HomeControlLevel.ROOT)
+      pendingControlContentTab = null
+      controlFocusRestorePending = false
+    }
+  }
+  LaunchedEffect(
+    pendingControlContentTab,
+    controlContentReadyMarker,
+    pagerState.currentPage,
+  ) {
+    val target = pendingControlContentTab ?: return@LaunchedEffect
+    if (!controlMode || pagerState.currentPage != target.ordinal) return@LaunchedEffect
+    if (controlContentReadyMarker == null) return@LaunchedEffect
+    // 第一项的焦点请求器可能在就绪标记出现若干帧之后才挂载（惰性组合、头图数据
+    // 迟到）。在有界窗口内重试，让数据在标签切换后才加载完成的页面仍能自动获得焦点。
+    val deadline = SystemClock.uptimeMillis() + 3000
+    while (
+      pendingControlContentTab == target &&
+        controlMode &&
+        pagerState.currentPage == target.ordinal &&
+        SystemClock.uptimeMillis() < deadline
+    ) {
+      withFrameNanos {}
+      val focused =
+        runCatching { controlContentFocusRequesters[target.ordinal].requestFocus() }
+          .getOrDefault(false)
+      if (focused) {
+        pendingControlContentTab = null
+        return@LaunchedEffect
+      }
+      delay(50)
+    }
+  }
+  LaunchedEffect(recommendationMode, controlMode, rootPageVisible) {
+    if (
+      controlMode &&
+        rootPageVisible &&
+        recommendationSelected &&
+        recommendationMode == HomeRecommendationMode.IMMERSIVE
+    ) {
+      controlInputFromController = true
+      onControlLevelChanged(HomeControlLevel.CONTENT)
+      // 在请求第一张卡片焦点之前，等待浮动操作组完成其退出动画，
+      // 让离开的按钮不会在转场途中把焦点抢回去。
+      delay(if (settings.reduceMotion) 120 else 260)
+      pendingControlContentTab = HomeHubTab.RECOMMENDATION
+    }
+  }
+  LaunchedEffect(recommendationMode, controlLevel, recommendationSelected, lastControlAction) {
+    val action = lastControlAction ?: return@LaunchedEffect
+    if (
+      controlMode &&
+        rootPageVisible &&
+        controlLevel == HomeControlLevel.TABS &&
+        recommendationSelected &&
+        recommendationMode == HomeRecommendationMode.NORMAL
+    ) {
+      withFrameNanos {}
+      runCatching { controlActionFocusRequesters.getValue(action).requestFocus() }
+    }
+  }
   val stagedMusicBackgroundSource =
     when {
       !musicLaunchPending -> ""
@@ -251,7 +517,12 @@ fun HomeHubScreen(
     }
   val stagedMusicBackgroundModel =
     if (stagedMusicBackgroundSource.isNotBlank()) {
-      rememberStaticBackgroundModel(source = stagedMusicBackgroundSource, blurred = true)
+      val useCustomMusicBackground =
+        settings.useHomeBackgroundForMusic && settings.homeBackgroundUri.isNotBlank()
+      rememberStaticBackgroundModel(
+        source = stagedMusicBackgroundSource,
+        blurred = !useCustomMusicBackground || settings.homeBackgroundMusicBlur,
+      )
     } else {
       null
     }
@@ -280,9 +551,8 @@ fun HomeHubScreen(
       onRecommendationModeChanged(HomeRecommendationMode.MUSIC)
     }
   }
-  // The music page must not accept touches while it is still loading and sliding in. The lock is
-  // released by onEntrySettled once the page has fully entered, and by this timeout as a hard cap
-  // so a stalled load can never keep the screen locked.
+  // 音乐页在加载和滑入期间绝不能接受触摸。该锁由 onEntrySettled 在页面完全进入后
+  // 释放，同时以这个超时作为硬上限，让卡住的加载永远无法锁死屏幕。
   LaunchedEffect(musicEntryInputLocked) {
     if (musicEntryInputLocked) {
       delay(MUSIC_ENTRY_INPUT_LOCK_TIMEOUT_MS)
@@ -334,7 +604,9 @@ fun HomeHubScreen(
   val immersiveMode = recommendationMode == HomeRecommendationMode.IMMERSIVE
   val recommendationTopPadding by
     animateDpAsState(
-      targetValue = if (immersiveMode) 12.dp else headerClearance + 12.dp,
+      targetValue =
+        if (immersiveMode) 12.dp
+        else headerClearance + if (controlMode) 20.dp else 12.dp,
       animationSpec = tween(if (settings.reduceMotion) 90 else 220),
       label = "recommendationTopPadding",
     )
@@ -346,12 +618,52 @@ fun HomeHubScreen(
     )
   BackHandler(
     enabled =
+      controlMode &&
+        rootPageVisible &&
+        backgroundWorkAllowed &&
+        !dynamicOverlayActive &&
+        recommendationMode == HomeRecommendationMode.NORMAL &&
+        controlLevel != HomeControlLevel.ROOT
+  ) {
+    controlTabNavigationJob?.cancel()
+    controlInputFromController = true
+    controlFocusRestorePending = false
+    val controlTab = HomeHubTab.entries[controlSelectedTabIndex]
+    val targetLevel = homeControlBackTarget(controlTab, controlLevel)
+    if (pagerState.currentPage != controlTab.ordinal) {
+      pagerState.requestScrollToPage(controlTab.ordinal)
+    }
+    pendingControlContentTab = null
+    onControlLevelChanged(targetLevel)
+    when (targetLevel) {
+      HomeControlLevel.TABS -> {
+        lastControlTabIndex = controlTab.ordinal
+        lastControlAction = null
+        lastSecondLevelFocusRegion = HomeSecondLevelFocusRegion.TAB
+        scope.launch {
+          withFrameNanos {}
+          runCatching { controlTabFocusRequesters[controlTab.ordinal].requestFocus() }
+        }
+      }
+      HomeControlLevel.PAGE_CONTROLS -> Unit
+      HomeControlLevel.CONTENT -> pendingControlContentTab = controlTab
+      HomeControlLevel.ROOT -> Unit
+    }
+  }
+  BackHandler(
+    enabled =
       rootPageVisible &&
         backgroundWorkAllowed &&
         recommendationSelected &&
         recommendationMode == HomeRecommendationMode.IMMERSIVE
   ) {
     onRecommendationModeChanged(HomeRecommendationMode.NORMAL)
+    if (controlMode && controlLevel == HomeControlLevel.CONTENT) {
+      controlInputFromController = true
+      lastControlAction = HomeSecondLevelAction.IMMERSIVE
+      lastSecondLevelFocusRegion = HomeSecondLevelFocusRegion.ACTION
+      onControlLevelChanged(HomeControlLevel.TABS)
+    }
   }
   val activeBackdropLayer =
     when (activeTab) {
@@ -368,374 +680,619 @@ fun HomeHubScreen(
       HomeHubTab.LIVE -> liveBackdropBounds
     }
   CompositionLocalProvider(
-    LocalCoverImageLoadingEnabled provides homeContentBackgroundWorkAllowed,
+    LocalCoverImageLoadingEnabled provides homeContentBackgroundWorkAllowed
   ) {
-    Box(Modifier.fillMaxSize()) {
     Box(
       Modifier.fillMaxSize()
-        .onGloballyPositioned { backgroundBackdropBounds = it.boundsInRoot() }
-        .drawWithContent {
-          if (homeContentBackgroundWorkAllowed) {
-            backgroundBackdropLayer.record { this@drawWithContent.drawContent() }
-            drawLayer(backgroundBackdropLayer)
-          } else {
-            drawContent()
+        .focusRequester(controlFocusMemoryRequester)
+        .focusGroup()
+        .pointerInput(controlMode) {
+          if (!controlMode) return@pointerInput
+          awaitPointerEventScope {
+            while (true) {
+              val event = awaitPointerEvent(PointerEventPass.Initial)
+              if (
+                !controlFocusRestorePending &&
+                  event.changes.any { it.pressed && !it.previousPressed }
+              ) {
+                controlInputFromController = false
+                controlFocusRestorePending =
+                  runCatching { controlFocusMemoryRequester.saveFocusedChild() }
+                    .getOrDefault(false)
+              }
+            }
           }
         }
-        .background(MaterialTheme.colorScheme.background)
-    ) {
-      if (settings.homeBackgroundUri.isNotBlank()) {
-        val backgroundModel =
-          rememberStaticBackgroundModel(
-            source = settings.homeBackgroundUri,
-            blurred = settings.homeBackgroundBlur,
-          )
-        CrossfadeBackgroundImage(
-          model = backgroundModel,
-          modifier =
-            Modifier.fillMaxSize().graphicsLayer {
-              alpha =
-                if (settings.homeBackgroundBlur || musicExitInProgress) 1f
-                else 1f - settings.homeBackgroundTransparency.coerceIn(0f, 1f)
-            },
-          contentScale = ContentScale.Crop,
-          transitionMillis = if (settings.reduceMotion) 90 else 300,
-        )
-      }
-    }
-    HorizontalPager(
-      state = pagerState,
-      // The secondary navigation intentionally floats over the feed rather than reserving a
-      // toolbar-sized strip. Keeping the pager edge-to-edge also leaves the notch-safe offset
-      // to the capsule itself instead of baking it into every child page.
-      modifier = Modifier.fillMaxSize(),
-      beyondViewportPageCount = 1,
-      // Period/category rails own a horizontal drag from its first down event. This prevents a
-      // long history swipe from also moving the recommendation/popular/live pager.
-      userScrollEnabled =
-        !horizontalRailTouched &&
-          !dynamicNavigationLocked &&
-          recommendationMode == HomeRecommendationMode.NORMAL,
-      key = { HomeHubTab.entries[it] },
-    ) { page ->
-      when (HomeHubTab.entries[page]) {
-        HomeHubTab.RECOMMENDATION ->
-          CapturedHomePageContent(
-            layer = recommendationBackdropLayer,
-            captureEnabled = homeContentBackgroundWorkAllowed,
-            onBoundsChanged = { recommendationBackdropBounds = it },
-          ) {
-            FeedScreen(
-              state = feedState,
-              onRefresh = onRecommendationRefresh,
-              onLoadNextPage = onRecommendationLoadNextPage,
-              onItemClick = onRecommendationItemClick,
-              onItemLongClick = onRecommendationItemLongClick,
-              onProfileClick = onRecommendationProfileClick,
-              onConsumeRefreshMessage = onConsumeRecommendationRefreshMessage,
-              coverPrefetchCount = coverPrefetchCount,
-              backgroundWorkAllowed =
-                homeContentBackgroundWorkAllowed &&
-                  pagerState.currentPage == HomeHubTab.RECOMMENDATION.ordinal,
-              gridState = recommendationGridState,
-              hiddenCoverItemId = hiddenRecommendationCoverItemId,
-              dismissedItemIds = dismissedRecommendationItemIds,
-              onRestoreDismissedItem = onRestoreDismissedRecommendationItem,
-              onItemBoundsChanged = onRecommendationItemBoundsChanged,
-              columns = settings.homeGridColumns,
-              topContentPadding = recommendationTopPadding,
-              bottomContentPadding = recommendationBottomPadding,
-              chromeVisible = !immersiveMode,
-              onBackgroundClick = {
-                if (immersiveMode) onRecommendationModeChanged(HomeRecommendationMode.NORMAL)
-              },
-            )
+        .onPreviewKeyEvent { event ->
+          if (!controlMode) return@onPreviewKeyEvent false
+          val keyCode = event.nativeKeyEvent.keyCode
+          val controlKey =
+            homeControlDirection(keyCode) != null || isControlConfirmKey(keyCode)
+          if (!controlKey) return@onPreviewKeyEvent false
+          if (event.type == KeyEventType.KeyDown && event.nativeKeyEvent.repeatCount == 0) {
+            controlInputFromController = true
+            if (controlFocusRestorePending) {
+              controlFocusRestorePending = false
+              val rememberedTab = HomeHubTab.entries[controlSelectedTabIndex]
+              if (
+                controlLevel != HomeControlLevel.ROOT &&
+                  pagerState.currentPage != rememberedTab.ordinal
+              ) {
+                controlTabNavigationJob?.cancel()
+                pagerState.requestScrollToPage(rememberedTab.ordinal)
+                if (controlLevel == HomeControlLevel.CONTENT) {
+                  pendingControlContentTab = rememberedTab
+                }
+                scope.launch {
+                  withFrameNanos {}
+                  withFrameNanos {}
+                  when (controlLevel) {
+                    HomeControlLevel.TABS ->
+                      runCatching { controlTabFocusRequesters[lastControlTabIndex].requestFocus() }
+                    HomeControlLevel.CONTENT ->
+                      runCatching {
+                        controlContentFocusRequesters[rememberedTab.ordinal].requestFocus()
+                      }
+                    HomeControlLevel.PAGE_CONTROLS,
+                    HomeControlLevel.ROOT -> Unit
+                  }
+                }
+                return@onPreviewKeyEvent true
+              }
+              val restored =
+                runCatching { controlFocusMemoryRequester.restoreFocusedChild() }
+                  .getOrDefault(false)
+              if (!restored && controlLevel == HomeControlLevel.TABS) {
+                val fallback =
+                  when (lastSecondLevelFocusRegion) {
+                    HomeSecondLevelFocusRegion.ACCOUNT -> controlAccountFocusRequester
+                    HomeSecondLevelFocusRegion.SEARCH -> controlSearchFocusRequester
+                    HomeSecondLevelFocusRegion.TAB ->
+                      controlTabFocusRequesters[lastControlTabIndex]
+                    HomeSecondLevelFocusRegion.ACTION ->
+                      lastControlAction?.let(controlActionFocusRequesters::get)
+                        ?: controlTabFocusRequesters[lastControlTabIndex]
+                  }
+                runCatching { fallback.requestFocus() }
+              }
+            }
           }
-        HomeHubTab.DYNAMIC ->
-          HomeDynamicScreen(
-            state = dynamicState,
-            accountMid = userInfo.mid,
-            settings = settings,
-            onSelectUploader = dynamicViewModel::selectUploader,
-            onVideoOnlyChange = dynamicViewModel::setVideoOnly,
-            onSelectDynamic = dynamicViewModel::selectDynamic,
-            onRefresh = dynamicViewModel::refresh,
-            onLoadMore = dynamicViewModel::loadMore,
-            onLoadMoreUploaders = dynamicViewModel::loadMoreUploaders,
-            onLike = dynamicViewModel::toggleLike,
-            onVideoClick = onDynamicItemClick,
-            onVideoLongClick = onRecommendationItemLongClick,
-            hiddenDynamicId = hiddenDynamicCoverItemId,
-            onVideoBoundsChanged = onDynamicItemBoundsChanged,
-            onArticleClick = onDynamicArticleClick,
-            hiddenArticleItemId = hiddenDynamicArticleItemId,
-            onArticleBoundsChanged = onDynamicArticleBoundsChanged,
-            onCommentProfileClick = onDynamicCommentProfileClick,
-            onAvatarProfileClick = onDynamicAvatarProfileClick,
-            hiddenCommentAvatarRpid = hiddenDynamicCommentAvatarRpid,
-            hiddenAvatarSourceBounds = hiddenDynamicAvatarSourceBounds,
-            backHandlingEnabled = homeContentBackgroundWorkAllowed,
-            backdropCaptureEnabled = homeContentBackgroundWorkAllowed,
-            backdropLayer = dynamicBackdropLayer,
-            onBackdropBoundsChanged = { dynamicBackdropBounds = it },
-            underlayLayer = backgroundBackdropLayer,
-            underlayBounds = backgroundBackdropBounds,
-            topContentPadding = headerClearance,
-            onDetailOverlayActiveChanged = { active ->
-              dynamicOverlayActive = active
-              dynamicViewModel.setDetailOverlayActive(active)
-            },
+          false
+        }
+    ) {
+      Box(
+        Modifier.fillMaxSize()
+          .onGloballyPositioned { backgroundBackdropBounds = it.boundsInRoot() }
+          .drawWithContent {
+            if (homeContentBackgroundWorkAllowed) {
+              backgroundBackdropLayer.record { this@drawWithContent.drawContent() }
+              drawLayer(backgroundBackdropLayer)
+            } else {
+              drawContent()
+            }
+          }
+          .background(MaterialTheme.colorScheme.background)
+      ) {
+        if (settings.homeBackgroundUri.isNotBlank()) {
+          val backgroundModel =
+            rememberStaticBackgroundModel(
+              source = settings.homeBackgroundUri,
+              blurred = settings.homeBackgroundBlur,
+            )
+          CrossfadeBackgroundImage(
+            model = backgroundModel,
+            modifier =
+              Modifier.fillMaxSize().graphicsLayer {
+                alpha =
+                  if (settings.homeBackgroundBlur || musicExitInProgress) 1f
+                  else 1f - settings.homeBackgroundTransparency.coerceIn(0f, 1f)
+              },
+            contentScale = ContentScale.Crop,
+            transitionMillis = if (settings.reduceMotion) 90 else 300,
           )
-        HomeHubTab.POPULAR ->
-          PopularFeedScreen(
-            state = popularState,
-            onSection = popularViewModel::selectSection,
-            onWeeklyPeriod = popularViewModel::selectWeeklyPeriod,
-            onRankCategory = popularViewModel::selectRankCategory,
-            onMusicPeriod = popularViewModel::selectMusicPeriod,
-            onRefresh = popularViewModel::refresh,
-            onLoadNextPage = popularViewModel::loadNextPage,
-            onItemClick = onPopularItemClick,
-            onItemLongClick = onRecommendationItemLongClick,
-            onConsumeRefreshMessage = popularViewModel::consumeRefreshMessage,
-            onHorizontalRailInteractionChanged = { horizontalRailTouched = it },
-            gridState = popularGridState,
-            hiddenCoverItemId = hiddenPopularCoverItemId,
-            backgroundWorkAllowed =
-              homeContentBackgroundWorkAllowed &&
-                pagerState.currentPage == HomeHubTab.POPULAR.ordinal,
-            backdropLayer = popularBackdropLayer,
-            onBackdropBoundsChanged = { popularBackdropBounds = it },
-            underlayLayer = backgroundBackdropLayer,
-            underlayBounds = backgroundBackdropBounds,
-            topContentPadding = headerClearance,
-          )
-        HomeHubTab.LIVE ->
-          CapturedHomePageContent(
-            layer = liveBackdropLayer,
-            captureEnabled = homeContentBackgroundWorkAllowed,
-            onBoundsChanged = { liveBackdropBounds = it },
-          ) {
-            CompositionLocalProvider(
-              LocalNavigationTopClearance provides (headerClearance + 10.dp)
+        }
+      }
+      HorizontalPager(
+        state = pagerState,
+        // 二级导航有意漂浮在信息流之上，而不是预留一条工具栏宽的条带。让分页器
+        // 保持边到边，也把避开刘海的安全偏移留给胶囊本身，而不是烘焙进每个子页。
+        modifier = Modifier.fillMaxSize(),
+        beyondViewportPageCount = if (controlMode) 0 else 1,
+        // 周期/分类轨道从首次按下事件起就拥有水平拖动。这防止一次很长的历史滑动
+        // 也同时移动推荐/热门/直播分页器。
+        userScrollEnabled =
+          shouldEnableHomeHubPagerUserScroll(
+            horizontalRailTouched = horizontalRailTouched,
+            navigationLocked = dynamicNavigationLocked,
+            recommendationMode = recommendationMode,
+          ),
+        key = { HomeHubTab.entries[it] },
+      ) { page ->
+        Box(
+          Modifier.fillMaxSize()
+            .then(
+              // 控制器的方向键导航绝不能跨入相邻的二级页面。仅以 controlMode 作护栏：
+              // 跟踪的控制层级可能落后于触摸驱动的页面切换，而按已稳定的页面索引做闸门
+              // 会在分页稳定后留下一帧窗口，让焦点搜索逃入仍在组合中的相邻页。
+              if (controlMode) {
+                Modifier.focusProperties {
+                    onExit = {
+                      if (
+                        requestedFocusDirection == FocusDirection.Left ||
+                          requestedFocusDirection == FocusDirection.Right
+                      ) {
+                        cancelFocusChange()
+                      }
+                    }
+                  }
+                  .focusGroup()
+              } else Modifier
+            )
+        ) {
+          when (HomeHubTab.entries[page]) {
+          HomeHubTab.RECOMMENDATION ->
+            CapturedHomePageContent(
+              layer = recommendationBackdropLayer,
+              captureEnabled = homeContentBackgroundWorkAllowed,
+              onBoundsChanged = { recommendationBackdropBounds = it },
             ) {
-              LiveHomeScreen(
-                state = liveState,
-                onVisible = liveViewModel::ensureLoaded,
-                onRefresh = liveViewModel::refresh,
-                onLoadNextPage = liveViewModel::loadNextPage,
-                onAreaSelected = liveViewModel::selectArea,
-                onHeroRoomSelected = liveViewModel::selectHeroRoom,
-                onRoomClick = onLiveRoomClick,
-                onRoomBoundsChanged = onLiveRoomBoundsChanged,
-                onTransitionActiveChanged = onLiveTransitionActiveChanged,
-                onConsumeRefreshMessage = liveViewModel::consumeRefreshMessage,
-                onHorizontalRailInteractionChanged = { horizontalRailTouched = it },
-                gridState = liveGridState,
-                hiddenCoverItemId = hiddenLiveCoverItemId,
+              FeedScreen(
+                state = feedState,
+                onRefresh = onRecommendationRefresh,
+                onPullRefresh = onRecommendationPullRefresh,
+                onLoadNextPage = onRecommendationLoadNextPage,
+                onItemClick = onRecommendationItemClick,
+                onItemLongClick = onRecommendationItemLongClick,
+                onProfileClick = onRecommendationProfileClick,
+                onConsumeRefreshMessage = onConsumeRecommendationRefreshMessage,
+                coverPrefetchCount = coverPrefetchCount,
                 backgroundWorkAllowed =
                   homeContentBackgroundWorkAllowed &&
-                    pagerState.currentPage == HomeHubTab.LIVE.ordinal,
-                detailActive = liveDetailActive,
-                topContentPadding = headerClearance + 10.dp,
+                    pagerState.currentPage == HomeHubTab.RECOMMENDATION.ordinal,
+                gridState = recommendationGridState,
+                hiddenCoverItemId = hiddenRecommendationCoverItemId,
+                dismissedItemIds = dismissedRecommendationItemIds,
+                onRestoreDismissedItem = onRestoreDismissedRecommendationItem,
+                onItemBoundsChanged = onRecommendationItemBoundsChanged,
+                columns = settings.homeGridColumns,
+                topContentPadding = recommendationTopPadding,
+                bottomContentPadding = recommendationBottomPadding,
+                chromeVisible = !immersiveMode,
+                onBackgroundClick = {
+                  if (immersiveMode) onRecommendationModeChanged(HomeRecommendationMode.NORMAL)
+                },
+                initialFocusRequester = controlContentFocusRequesters[page],
+                controlNavigationEnabled =
+                  controlMode && controlLevel == HomeControlLevel.CONTENT,
               )
             }
-          }
-      }
-    }
-
-    AnimatedVisibility(
-      visible = !immersiveMode,
-      modifier = Modifier.align(Alignment.TopCenter).zIndex(3f),
-      enter =
-        slideInVertically(tween(if (settings.reduceMotion) 90 else 220)) { -it } +
-          fadeIn(tween(if (settings.reduceMotion) 90 else 180)),
-      exit =
-        slideOutVertically(tween(if (settings.reduceMotion) 90 else 220)) { -it } +
-          fadeOut(tween(if (settings.reduceMotion) 90 else 180)),
-    ) {
-      HomeHubHeader(
-        userInfo = userInfo,
-        onLoginClick = onRecommendationLoginClick,
-        onSearch = onSearch,
-        searchQuery = searchQuery,
-        onSearchQueryChange = onSearchQueryChange,
-        onSearchSubmit = onSearchSubmit,
-        onSearchBoundsChanged = onSearchBoundsChanged,
-        refreshing =
-          when (activeTab) {
-            HomeHubTab.RECOMMENDATION -> feedState.isRefreshing
-            HomeHubTab.DYNAMIC -> dynamicState.loading
-            HomeHubTab.POPULAR -> popularState.isRefreshing
-            HomeHubTab.LIVE -> liveState.isRefreshing
-          },
-        backdropLayer = activeBackdropLayer,
-        backdropBounds = activeBackdropBounds,
-        underlayLayer = backgroundBackdropLayer,
-        underlayBounds = backgroundBackdropBounds,
-        modifier = Modifier.fillMaxWidth().onSizeChanged { headerHeightPx = it.height },
-      ) {
-        HomeHubTabCapsule(
-          pagerState = pagerState,
-          clickEnabled = true,
-          dragEnabled = !dynamicNavigationLocked,
-          onTab = { tab ->
-            scope.launch { pagerState.animateScrollToPage(tab.ordinal) }
-          },
-          onDragPosition = { position ->
-            val clamped = position.coerceIn(0f, HomeHubTab.entries.lastIndex.toFloat())
-            val lower = floor(clamped).toInt()
-            if (lower >= HomeHubTab.entries.lastIndex) {
-              pagerState.requestScrollToPage(HomeHubTab.entries.lastIndex)
-            } else {
-              val fraction = clamped - lower
-              if (fraction <= .5f) pagerState.requestScrollToPage(lower, fraction)
-              else pagerState.requestScrollToPage(lower + 1, fraction - 1f)
-            }
-          },
-          modifier =
-            Modifier.align(Alignment.TopCenter)
-              .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top))
-              .padding(top = 4.dp)
-              .height(32.dp)
-              .zIndex(1f),
-        )
-      }
-    }
-
-    AnimatedVisibility(
-      visible = recommendationSelected && recommendationMode == HomeRecommendationMode.NORMAL,
-      modifier =
-        Modifier.align(Alignment.BottomStart)
-          .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))
-          .padding(start = 20.dp, bottom = 18.dp)
-          .zIndex(4f),
-      enter =
-        slideInHorizontally(tween(if (settings.reduceMotion) 90 else 220)) { -it * 2 } +
-          fadeIn(tween(if (settings.reduceMotion) 90 else 180)),
-      exit =
-        slideOutHorizontally(tween(if (settings.reduceMotion) 90 else 220)) { -it * 2 } +
-          fadeOut(tween(if (settings.reduceMotion) 90 else 180)),
-    ) {
-      Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        HomeGlassIconButton(
-          contentDescription = "进入沉浸模式",
-          backdropLayer = recommendationBackdropLayer,
-          backdropBounds = recommendationBackdropBounds,
-          underlayLayer = backgroundBackdropLayer,
-          underlayBounds = backgroundBackdropBounds,
-          onClick = {
-            if (feedState is FeedUiState.Content) {
-              onRecommendationModeChanged(HomeRecommendationMode.IMMERSIVE)
-            }
-          },
-        ) {
-          ImmersiveFeedIcon()
-        }
-        HomeGlassIconButton(
-          contentDescription = "打开音乐播放器",
-          backdropLayer = recommendationBackdropLayer,
-          backdropBounds = recommendationBackdropBounds,
-          underlayLayer = backgroundBackdropLayer,
-          underlayBounds = backgroundBackdropBounds,
-          onClick = {
-            if (!musicLaunchPending) {
-              musicLaunchPending = true
-              musicEntryInputLocked = true
-              musicPlayerViewModel.configureVideoQuality(
-                mode = settings.musicPreferredResolutionMode,
-                vipActive = userInfo.vipActive,
-              )
-              musicPlayerViewModel.prepareOpen(
-                accountMid = userInfo.mid,
-                folderSelectionId = settings.musicFavoriteFolderId,
-                folderSelectionConfigured = settings.musicFavoriteFolderConfigured,
-              )
-            }
-          },
-        ) {
-          if (musicLaunchPending) {
-            CircularProgressIndicator(
-              modifier = Modifier.size(21.dp),
-              strokeWidth = 2.dp,
-              color = MaterialTheme.colorScheme.primary,
+          HomeHubTab.DYNAMIC ->
+            HomeDynamicScreen(
+              state = dynamicState,
+              accountMid = userInfo.mid,
+              settings = settings,
+              onSelectUploader = dynamicViewModel::selectUploader,
+              onVideoOnlyChange = dynamicViewModel::setVideoOnly,
+              onSelectDynamic = dynamicViewModel::selectDynamic,
+              onRefresh = dynamicViewModel::refresh,
+              onLoadMore = dynamicViewModel::loadMore,
+              onLoadMoreUploaders = dynamicViewModel::loadMoreUploaders,
+              onLike = dynamicViewModel::toggleLike,
+              onVideoClick = onDynamicItemClick,
+              onVideoLongClick = onRecommendationItemLongClick,
+              onLiveClick = onDynamicLiveClick,
+              hiddenDynamicId = hiddenDynamicCoverItemId,
+              hiddenLiveCoverItemId = hiddenDynamicLiveCoverItemId,
+              onVideoBoundsChanged = onDynamicItemBoundsChanged,
+              onLiveBoundsChanged = onDynamicLiveBoundsChanged,
+              onArticleClick = onDynamicArticleClick,
+              hiddenArticleItemId = hiddenDynamicArticleItemId,
+              onArticleBoundsChanged = onDynamicArticleBoundsChanged,
+              onCommentProfileClick = onDynamicCommentProfileClick,
+              onAvatarProfileClick = onDynamicAvatarProfileClick,
+              hiddenCommentAvatarRpid = hiddenDynamicCommentAvatarRpid,
+              hiddenAvatarSourceBounds = hiddenDynamicAvatarSourceBounds,
+              backHandlingEnabled = homeContentBackgroundWorkAllowed,
+              backdropCaptureEnabled = homeContentBackgroundWorkAllowed,
+              backdropLayer = dynamicBackdropLayer,
+              onBackdropBoundsChanged = { dynamicBackdropBounds = it },
+              underlayLayer = backgroundBackdropLayer,
+              underlayBounds = backgroundBackdropBounds,
+              topContentPadding = headerClearance,
+              onDetailOverlayActiveChanged = { active ->
+                dynamicOverlayActive = active
+                dynamicViewModel.setDetailOverlayActive(active)
+              },
+              pageControlsEnabled =
+                controlMode &&
+                  controlLevel == HomeControlLevel.PAGE_CONTROLS &&
+                  pagerState.currentPage == HomeHubTab.DYNAMIC.ordinal,
+              contentControlsEnabled =
+                controlMode &&
+                  controlLevel == HomeControlLevel.CONTENT &&
+                  pagerState.currentPage == HomeHubTab.DYNAMIC.ordinal,
+              onControlEnterContent = {
+                onControlLevelChanged(HomeControlLevel.CONTENT)
+                // 从左栏进入时，焦点目标必须继续指向信息流首项，不能让子页回退到“仅视频”。
+                pendingControlContentTab = HomeHubTab.DYNAMIC
+              },
+              onControlFocusFeed = {
+                pendingControlContentTab = HomeHubTab.DYNAMIC
+              },
+              initialFocusRequester = controlContentFocusRequesters[page],
             )
-          } else {
-            Icon(Icons.Default.MusicNote, contentDescription = null)
+          HomeHubTab.POPULAR ->
+            PopularFeedScreen(
+              state = popularState,
+              onSection = popularViewModel::selectSection,
+              onWeeklyPeriod = popularViewModel::selectWeeklyPeriod,
+              onRankCategory = popularViewModel::selectRankCategory,
+              onMusicPeriod = popularViewModel::selectMusicPeriod,
+              onRefresh = popularViewModel::refresh,
+              onLoadNextPage = popularViewModel::loadNextPage,
+              onItemClick = onPopularItemClick,
+              onItemLongClick = onRecommendationItemLongClick,
+              onConsumeRefreshMessage = popularViewModel::consumeRefreshMessage,
+              onHorizontalRailInteractionChanged = { horizontalRailTouched = it },
+              gridState = popularGridState,
+              hiddenCoverItemId = hiddenPopularCoverItemId,
+              backgroundWorkAllowed =
+                homeContentBackgroundWorkAllowed &&
+                  pagerState.currentPage == HomeHubTab.POPULAR.ordinal,
+              backdropLayer = popularBackdropLayer,
+              onBackdropBoundsChanged = { popularBackdropBounds = it },
+              underlayLayer = backgroundBackdropLayer,
+              underlayBounds = backgroundBackdropBounds,
+              topContentPadding = headerClearance,
+              pageControlsEnabled =
+                controlMode &&
+                  controlLevel == HomeControlLevel.PAGE_CONTROLS &&
+                  pagerState.currentPage == HomeHubTab.POPULAR.ordinal,
+              onControlEnterContent = {
+                onControlLevelChanged(HomeControlLevel.CONTENT)
+                pendingControlContentTab = HomeHubTab.POPULAR
+              },
+              onControlReturnToPageControls = {
+                onControlLevelChanged(HomeControlLevel.PAGE_CONTROLS)
+                pendingControlContentTab = null
+              },
+              initialFocusRequester = controlContentFocusRequesters[page],
+            )
+          HomeHubTab.LIVE ->
+            CapturedHomePageContent(
+              layer = liveBackdropLayer,
+              captureEnabled = homeContentBackgroundWorkAllowed,
+              onBoundsChanged = { liveBackdropBounds = it },
+            ) {
+              CompositionLocalProvider(
+                LocalNavigationTopClearance provides (headerClearance + 10.dp)
+              ) {
+                LiveHomeScreen(
+                  state = liveState,
+                  onVisible = liveViewModel::ensureLoaded,
+                  onRefresh = liveViewModel::refresh,
+                  onLoadNextPage = liveViewModel::loadNextPage,
+                  onAreaSelected = liveViewModel::selectArea,
+                  onAreaIndex = onLiveAreaIndex,
+                  liveAreaIndexFocusRestoreRequest = liveAreaIndexFocusRestoreRequest,
+                  onHeroRoomSelected = liveViewModel::selectHeroRoom,
+                  onRoomClick = onLiveRoomClick,
+                  onRoomBoundsChanged = onLiveRoomBoundsChanged,
+                  onTransitionActiveChanged = onLiveTransitionActiveChanged,
+                  onConsumeRefreshMessage = liveViewModel::consumeRefreshMessage,
+                  onHorizontalRailInteractionChanged = { horizontalRailTouched = it },
+                  gridState = liveGridState,
+                  hiddenCoverItemId = hiddenLiveCoverItemId,
+                  backgroundWorkAllowed =
+                    homeContentBackgroundWorkAllowed &&
+                      pagerState.currentPage == HomeHubTab.LIVE.ordinal,
+                  detailActive = liveDetailActive,
+                  topContentPadding = headerClearance + 10.dp,
+                  initialFocusRequester = controlContentFocusRequesters[page],
+                )
+              }
+            }
           }
         }
       }
-    }
 
-    AnimatedVisibility(
-      visible = recommendationSelected && recommendationMode == HomeRecommendationMode.NORMAL,
-      modifier =
-        Modifier.align(Alignment.BottomEnd)
-          .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))
-          .padding(end = 20.dp, bottom = 18.dp)
-          .zIndex(4f),
-      enter =
-        slideInHorizontally(tween(if (settings.reduceMotion) 90 else 220)) { it * 2 } +
-          fadeIn(tween(if (settings.reduceMotion) 90 else 180)),
-      exit =
-        slideOutHorizontally(tween(if (settings.reduceMotion) 90 else 220)) { it * 2 } +
-          fadeOut(tween(if (settings.reduceMotion) 90 else 180)),
-    ) {
-      Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        HomeGlassIconButton(
-          contentDescription = "回到顶部",
-          backdropLayer = recommendationBackdropLayer,
-          backdropBounds = recommendationBackdropBounds,
+      AnimatedVisibility(
+        visible = !immersiveMode,
+        modifier = Modifier.align(Alignment.TopCenter).zIndex(3f),
+        enter =
+          slideInVertically(tween(if (settings.reduceMotion) 90 else 220)) { -it } +
+            fadeIn(tween(if (settings.reduceMotion) 90 else 180)),
+        exit =
+          slideOutVertically(tween(if (settings.reduceMotion) 90 else 220)) { -it } +
+            fadeOut(tween(if (settings.reduceMotion) 90 else 180)),
+      ) {
+        HomeHubHeader(
+          userInfo = userInfo,
+          onLoginClick = onRecommendationLoginClick,
+          onSearch = { onSearch(controlInputFromController) },
+          searchQuery = searchQuery,
+          onSearchBoundsChanged = onSearchBoundsChanged,
+          refreshing =
+            when (activeTab) {
+              HomeHubTab.RECOMMENDATION -> feedState.isRefreshing
+              HomeHubTab.DYNAMIC -> dynamicState.loading
+              HomeHubTab.POPULAR -> popularState.isRefreshing
+              HomeHubTab.LIVE -> liveState.isRefreshing
+            },
+          backdropLayer = activeBackdropLayer,
+          backdropBounds = activeBackdropBounds,
           underlayLayer = backgroundBackdropLayer,
           underlayBounds = backgroundBackdropBounds,
-          onClick = { scope.launch { recommendationGridState.animateScrollToItem(0) } },
+          controlSecondLevelEnabled = controlLevel == HomeControlLevel.TABS,
+          controlAccountFocusRequester = controlAccountFocusRequester,
+          controlSearchFocusRequester = controlSearchFocusRequester,
+          controlFirstTabFocusRequester = controlTabFocusRequesters.first(),
+          controlLastTabFocusRequester = controlTabFocusRequesters.last(),
+          onControlAccountFocused = {
+            if (controlInputFromController) {
+              lastSecondLevelFocusRegion = HomeSecondLevelFocusRegion.ACCOUNT
+              lastControlAction = null
+            }
+          },
+          onControlSearchFocused = {
+            if (controlInputFromController) {
+              lastSecondLevelFocusRegion = HomeSecondLevelFocusRegion.SEARCH
+              lastControlAction = null
+            }
+          },
+          modifier = Modifier.fillMaxWidth().onSizeChanged { headerHeightPx = it.height },
         ) {
-          Icon(Icons.Default.KeyboardArrowUp, contentDescription = null)
+          HomeHubTabCapsule(
+            pagerState = pagerState,
+            clickEnabled = true,
+            dragEnabled = !dynamicNavigationLocked,
+            controlMode = controlMode,
+            controlTabsEnabled = controlLevel == HomeControlLevel.TABS,
+            controlFocusRequesters = controlTabFocusRequesters,
+            controlStartFocusRequester = controlAccountFocusRequester,
+            controlEndFocusRequester = controlSearchFocusRequester,
+            controlDownFocusRequester = { tab ->
+              if (recommendationSelected) {
+                controlActionFocusRequesters.getValue(
+                  homeSecondLevelActionBelowTab(tab.ordinal)
+                )
+              } else null
+            },
+            onControlFocused = { tab ->
+              if (controlInputFromController) {
+                lastControlTabIndex = tab.ordinal
+                lastControlAction = null
+                lastSecondLevelFocusRegion = HomeSecondLevelFocusRegion.TAB
+              }
+            },
+            onTab = { tab ->
+              controlTabNavigationJob?.cancel()
+              controlTabNavigationJob =
+                scope.launch { pagerState.animateScrollToPage(tab.ordinal) }
+            },
+            onControlTab = { tab ->
+              controlTabNavigationJob?.cancel()
+              controlInputFromController = true
+              controlSelectedTabIndex = tab.ordinal
+              controlTabNavigationJob = scope.launch {
+                pagerState.animateScrollToPage(tab.ordinal)
+                val entryLevel = homeTabEntryLevel(tab)
+                onControlLevelChanged(entryLevel)
+                if (entryLevel == HomeControlLevel.CONTENT) {
+                  pendingControlContentTab = tab
+                } else {
+                  pendingControlContentTab = null
+                }
+              }
+            },
+            onDragPosition = { position ->
+              val clamped = position.coerceIn(0f, HomeHubTab.entries.lastIndex.toFloat())
+              val lower = floor(clamped).toInt()
+              if (lower >= HomeHubTab.entries.lastIndex) {
+                pagerState.requestScrollToPage(HomeHubTab.entries.lastIndex)
+              } else {
+                val fraction = clamped - lower
+                if (fraction <= .5f) pagerState.requestScrollToPage(lower, fraction)
+                else pagerState.requestScrollToPage(lower + 1, fraction - 1f)
+              }
+            },
+            modifier =
+              Modifier.align(Alignment.TopCenter)
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top))
+                .padding(top = 4.dp)
+                .height(32.dp)
+                .zIndex(1f),
+          )
         }
-        HomeGlassIconButton(
-          contentDescription = "刷新推荐",
-          backdropLayer = recommendationBackdropLayer,
-          backdropBounds = recommendationBackdropBounds,
-          underlayLayer = backgroundBackdropLayer,
-          underlayBounds = backgroundBackdropBounds,
-          iconTint = MaterialTheme.colorScheme.primary,
-          onClick = {
-            if (feedState is FeedUiState.Content) {
-              scope.launch {
-                recommendationGridState.scrollToItem(0)
+      }
+
+      AnimatedVisibility(
+        visible = recommendationSelected && recommendationMode == HomeRecommendationMode.NORMAL,
+        modifier =
+          Modifier.align(Alignment.BottomStart)
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))
+            .padding(start = 20.dp, bottom = 18.dp)
+            .zIndex(4f),
+        enter =
+          slideInHorizontally(tween(if (settings.reduceMotion) 90 else 220)) { -it * 2 } +
+            fadeIn(tween(if (settings.reduceMotion) 90 else 180)),
+        exit =
+          slideOutHorizontally(tween(if (settings.reduceMotion) 90 else 220)) { -it * 2 } +
+            fadeOut(tween(if (settings.reduceMotion) 90 else 180)),
+      ) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+          HomeGlassIconButton(
+            contentDescription = "进入沉浸模式",
+            backdropLayer = recommendationBackdropLayer,
+            backdropBounds = recommendationBackdropBounds,
+            underlayLayer = backgroundBackdropLayer,
+            underlayBounds = backgroundBackdropBounds,
+            controlFocusRequester =
+              controlActionFocusRequesters.getValue(HomeSecondLevelAction.IMMERSIVE),
+            controlFocusEnabled = controlLevel == HomeControlLevel.TABS,
+            controlRightFocusRequester =
+              controlActionFocusRequesters.getValue(HomeSecondLevelAction.SCROLL_TOP),
+            controlUpFocusRequester = controlTabFocusRequesters[lastControlTabIndex],
+            controlDownFocusRequester =
+              controlActionFocusRequesters.getValue(HomeSecondLevelAction.MUSIC),
+            onControlFocused = {
+              if (controlInputFromController) {
+                lastControlAction = HomeSecondLevelAction.IMMERSIVE
+                lastSecondLevelFocusRegion = HomeSecondLevelFocusRegion.ACTION
+              }
+            },
+            onClick = {
+              if (feedState is FeedUiState.Content) {
+                onRecommendationModeChanged(HomeRecommendationMode.IMMERSIVE)
+              }
+            },
+          ) {
+            ImmersiveFeedIcon()
+          }
+          HomeGlassIconButton(
+            contentDescription = "打开音乐播放器",
+            backdropLayer = recommendationBackdropLayer,
+            backdropBounds = recommendationBackdropBounds,
+            underlayLayer = backgroundBackdropLayer,
+            underlayBounds = backgroundBackdropBounds,
+            controlFocusRequester =
+              controlActionFocusRequesters.getValue(HomeSecondLevelAction.MUSIC),
+            controlFocusEnabled = controlLevel == HomeControlLevel.TABS,
+            controlRightFocusRequester =
+              controlActionFocusRequesters.getValue(HomeSecondLevelAction.REFRESH),
+            controlUpFocusRequester =
+              controlActionFocusRequesters.getValue(HomeSecondLevelAction.IMMERSIVE),
+            onControlFocused = {
+              if (controlInputFromController) {
+                lastControlAction = HomeSecondLevelAction.MUSIC
+                lastSecondLevelFocusRegion = HomeSecondLevelFocusRegion.ACTION
+              }
+            },
+            onClick = {
+              if (!musicLaunchPending) {
+                musicLaunchPending = true
+                musicEntryInputLocked = true
+                musicPlayerViewModel.configureVideoQuality(
+                  mode = settings.musicPreferredResolutionMode,
+                  vipActive = userInfo.vipActive,
+                )
+                musicPlayerViewModel.prepareOpen(
+                  accountMid = userInfo.mid,
+                  folderSelectionId = settings.musicFavoriteFolderId,
+                  folderSelectionConfigured = settings.musicFavoriteFolderConfigured,
+                )
+              }
+            },
+          ) {
+            if (musicLaunchPending) {
+              CircularProgressIndicator(
+                modifier = Modifier.size(21.dp),
+                strokeWidth = 2.dp,
+                color = MaterialTheme.colorScheme.primary,
+              )
+            } else {
+              Icon(Icons.Default.MusicNote, contentDescription = null)
+            }
+          }
+        }
+      }
+
+      AnimatedVisibility(
+        visible = recommendationSelected && recommendationMode == HomeRecommendationMode.NORMAL,
+        modifier =
+          Modifier.align(Alignment.BottomEnd)
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))
+            .padding(end = 20.dp, bottom = 18.dp)
+            .zIndex(4f),
+        enter =
+          slideInHorizontally(tween(if (settings.reduceMotion) 90 else 220)) { it * 2 } +
+            fadeIn(tween(if (settings.reduceMotion) 90 else 180)),
+        exit =
+          slideOutHorizontally(tween(if (settings.reduceMotion) 90 else 220)) { it * 2 } +
+            fadeOut(tween(if (settings.reduceMotion) 90 else 180)),
+      ) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+          HomeGlassIconButton(
+            contentDescription = "回到顶部",
+            backdropLayer = recommendationBackdropLayer,
+            backdropBounds = recommendationBackdropBounds,
+            underlayLayer = backgroundBackdropLayer,
+            underlayBounds = backgroundBackdropBounds,
+            controlFocusRequester =
+              controlActionFocusRequesters.getValue(HomeSecondLevelAction.SCROLL_TOP),
+            controlFocusEnabled = controlLevel == HomeControlLevel.TABS,
+            controlLeftFocusRequester =
+              controlActionFocusRequesters.getValue(HomeSecondLevelAction.IMMERSIVE),
+            controlUpFocusRequester = controlTabFocusRequesters[lastControlTabIndex],
+            controlDownFocusRequester =
+              controlActionFocusRequesters.getValue(HomeSecondLevelAction.REFRESH),
+            onControlFocused = {
+              if (controlInputFromController) {
+                lastControlAction = HomeSecondLevelAction.SCROLL_TOP
+                lastSecondLevelFocusRegion = HomeSecondLevelFocusRegion.ACTION
+              }
+            },
+            onClick = { scope.launch { recommendationGridState.animateScrollToItem(0) } },
+          ) {
+            Icon(Icons.Default.KeyboardArrowUp, contentDescription = null)
+          }
+          HomeGlassIconButton(
+            contentDescription = "刷新推荐",
+            backdropLayer = recommendationBackdropLayer,
+            backdropBounds = recommendationBackdropBounds,
+            underlayLayer = backgroundBackdropLayer,
+            underlayBounds = backgroundBackdropBounds,
+            iconTint = MaterialTheme.colorScheme.primary,
+            controlFocusRequester =
+              controlActionFocusRequesters.getValue(HomeSecondLevelAction.REFRESH),
+            controlFocusEnabled = controlLevel == HomeControlLevel.TABS,
+            controlLeftFocusRequester =
+              controlActionFocusRequesters.getValue(HomeSecondLevelAction.MUSIC),
+            controlUpFocusRequester =
+              controlActionFocusRequesters.getValue(HomeSecondLevelAction.SCROLL_TOP),
+            onControlFocused = {
+              if (controlInputFromController) {
+                lastControlAction = HomeSecondLevelAction.REFRESH
+                lastSecondLevelFocusRegion = HomeSecondLevelFocusRegion.ACTION
+              }
+            },
+            onClick = {
+              if (feedState is FeedUiState.Content) {
+                scope.launch {
+                  recommendationGridState.scrollToItem(0)
+                  onRecommendationRefresh()
+                }
+              } else {
                 onRecommendationRefresh()
               }
-            } else {
-              onRecommendationRefresh()
-            }
-          },
-        ) {
-          Icon(Icons.Default.Refresh, contentDescription = null)
+            },
+          ) {
+            Icon(Icons.Default.Refresh, contentDescription = null)
+          }
         }
       }
-    }
 
-    if (recommendationMode == HomeRecommendationMode.MUSIC) {
-      HomeMusicPlayerScreen(
-        accountMid = userInfo.mid,
-        vipActive = userInfo.vipActive,
-        settings = settings,
-        viewModel = musicPlayerViewModel,
-        entryBackdropLayer = recommendationBackdropLayer,
-        entryBackdropBounds = recommendationBackdropBounds,
-        entryUnderlayLayer = backgroundBackdropLayer,
-        entryUnderlayBounds = backgroundBackdropBounds,
-        onExitStarted = { musicExitInProgress = true },
-        onDismissed = {
-          musicExitInProgress = false
-          onRecommendationModeChanged(HomeRecommendationMode.NORMAL)
-        },
-        onEntrySettled = { musicEntryInputLocked = false },
-        onLoginClick = onRecommendationLoginClick,
-        onFavoriteFolderSelected = onMusicFavoriteFolderSelected,
-        modifier = Modifier.fillMaxSize().zIndex(20f),
-      )
-    }
+      if (recommendationMode == HomeRecommendationMode.MUSIC) {
+        HomeMusicPlayerScreen(
+          accountMid = userInfo.mid,
+          vipActive = userInfo.vipActive,
+          settings = settings,
+          viewModel = musicPlayerViewModel,
+          entryBackdropLayer = recommendationBackdropLayer,
+          entryBackdropBounds = recommendationBackdropBounds,
+          entryUnderlayLayer = backgroundBackdropLayer,
+          entryUnderlayBounds = backgroundBackdropBounds,
+          onExitStarted = { musicExitInProgress = true },
+          onDismissed = {
+            musicExitInProgress = false
+            onRecommendationModeChanged(HomeRecommendationMode.NORMAL)
+          },
+          onEntrySettled = { musicEntryInputLocked = false },
+          onLoginClick = onRecommendationLoginClick,
+          onFavoriteFolderSelected = onMusicFavoriteFolderSelected,
+          modifier = Modifier.fillMaxSize().zIndex(20f),
+        )
+      }
     }
   }
 }
@@ -749,8 +1306,19 @@ private fun HomeGlassIconButton(
   underlayBounds: Rect,
   onClick: () -> Unit,
   iconTint: Color = MaterialTheme.colorScheme.onSurface,
+  controlFocusRequester: FocusRequester? = null,
+  controlFocusEnabled: Boolean = true,
+  controlLeftFocusRequester: FocusRequester? = null,
+  controlRightFocusRequester: FocusRequester? = null,
+  controlUpFocusRequester: FocusRequester? = null,
+  controlDownFocusRequester: FocusRequester? = null,
+  onControlFocused: () -> Unit = {},
   content: @Composable () -> Unit,
 ) {
+  val controlMode = LocalControlMode.current
+  val controlFocusVisible = LocalControlFocusVisible.current
+  val interactionSource = remember { MutableInteractionSource() }
+  val focused by interactionSource.collectIsFocusedAsState()
   BackdropGlassSurface(
     backdropLayer = backdropLayer,
     backdropBounds = backdropBounds,
@@ -758,17 +1326,58 @@ private fun HomeGlassIconButton(
     underlayBounds = underlayBounds,
     modifier =
       Modifier.size(48.dp)
+        .then(
+          if (controlMode) {
+            Modifier.then(
+                if (controlFocusRequester != null) {
+                  Modifier.focusRequester(controlFocusRequester)
+                } else Modifier
+              )
+              .focusProperties {
+                canFocus = controlFocusEnabled
+                left = FocusRequester.Cancel
+                right = FocusRequester.Cancel
+                up = FocusRequester.Cancel
+                down = FocusRequester.Cancel
+              }
+              .onFocusChanged { if (it.isFocused) onControlFocused() }
+              .onPreviewKeyEvent { event ->
+                if (!controlFocusEnabled) return@onPreviewKeyEvent false
+                val target =
+                  when (homeControlDirection(event.nativeKeyEvent.keyCode)) {
+                    HomeControlDirection.LEFT -> controlLeftFocusRequester
+                    HomeControlDirection.RIGHT -> controlRightFocusRequester
+                    HomeControlDirection.UP -> controlUpFocusRequester
+                    HomeControlDirection.DOWN -> controlDownFocusRequester
+                    null -> return@onPreviewKeyEvent false
+                  }
+                if (event.type == KeyEventType.KeyDown && event.nativeKeyEvent.repeatCount == 0) {
+                  target?.let { runCatching { it.requestFocus() } }
+                }
+                true
+              }
+          } else Modifier
+        )
         .clip(CircleShape)
         .semantics {
           this.contentDescription = contentDescription
           role = Role.Button
         }
-        .clickable(onClick = onClick)
+        .clickable(
+          interactionSource = interactionSource,
+          indication = null,
+          onClick = onClick,
+        )
         .testTag(contentDescription),
     shape = CircleShape,
     blurRadius = 14.dp,
     containerColor = MaterialTheme.colorScheme.surface.copy(alpha = .48f),
-    border = BorderStroke(.75.dp, Color.White.copy(alpha = .20f)),
+    border =
+      BorderStroke(
+        if (focused && controlFocusVisible) 2.dp else .75.dp,
+        if (focused && controlFocusVisible) MaterialTheme.colorScheme.primary
+        else Color.White.copy(alpha = .20f),
+      ),
   ) {
     CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides iconTint) {
       Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { content() }
@@ -841,18 +1450,25 @@ private fun HomeHubHeader(
   onLoginClick: (Rect) -> Unit,
   onSearch: () -> Unit,
   searchQuery: String,
-  onSearchQueryChange: (String) -> Unit,
-  onSearchSubmit: (String) -> Unit,
   onSearchBoundsChanged: (Rect) -> Unit,
   refreshing: Boolean,
   backdropLayer: GraphicsLayer,
   backdropBounds: Rect,
   underlayLayer: GraphicsLayer,
   underlayBounds: Rect,
+  controlSecondLevelEnabled: Boolean,
+  controlAccountFocusRequester: FocusRequester,
+  controlSearchFocusRequester: FocusRequester,
+  controlFirstTabFocusRequester: FocusRequester,
+  controlLastTabFocusRequester: FocusRequester,
+  onControlAccountFocused: () -> Unit,
+  onControlSearchFocused: () -> Unit,
   modifier: Modifier = Modifier,
   navigationContent: @Composable BoxScope.() -> Unit,
 ) {
   val darkTheme = MaterialTheme.colorScheme.background.luminance() < .5f
+  val controlMode = LocalControlMode.current
+  val searchInteractionSource = remember { MutableInteractionSource() }
   val borderAlpha =
     if (darkTheme) HomeGlassTokens.DarkBorderAlpha else HomeGlassTokens.LightBorderAlpha
   BackdropGlassSurface(
@@ -879,6 +1495,27 @@ private fun HomeHubHeader(
           onClick = onLoginClick,
           containerColor = Color.Transparent,
           showUid = false,
+          focusEnabled = !controlMode || controlSecondLevelEnabled,
+          clickIndicationEnabled = controlMode,
+          identityModifier =
+            if (controlMode) {
+              Modifier.focusRequester(controlAccountFocusRequester)
+                .focusProperties {
+                  canFocus = controlSecondLevelEnabled
+                  left = FocusRequester.Cancel
+                  right = controlFirstTabFocusRequester
+                  up = FocusRequester.Cancel
+                  down = controlFirstTabFocusRequester
+                }
+                .onFocusChanged {
+                  if (it.isFocused) onControlAccountFocused()
+                }
+                .controlFocusOutline(
+                  shape = RoundedCornerShape(12.dp),
+                  color = MaterialTheme.colorScheme.primary,
+                  enabled = controlSecondLevelEnabled,
+                )
+            } else Modifier,
           nameStyle = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold),
         ) {
           Spacer(Modifier.width(12.dp))
@@ -890,6 +1527,29 @@ private fun HomeHubHeader(
                 .height(44.dp)
                 .padding(end = 12.dp)
                 .onGloballyPositioned { onSearchBoundsChanged(it.boundsInRoot()) }
+                .then(
+                  if (controlMode) {
+                    Modifier.focusRequester(controlSearchFocusRequester)
+                      .focusProperties {
+                        canFocus = controlSecondLevelEnabled
+                        left = controlLastTabFocusRequester
+                        right = FocusRequester.Cancel
+                        up = FocusRequester.Cancel
+                        down = controlLastTabFocusRequester
+                      }
+                      .onFocusChanged { if (it.isFocused) onControlSearchFocused() }
+                      .controlFocusOutline(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.primary,
+                        enabled = controlSecondLevelEnabled,
+                      )
+                  } else Modifier
+                )
+                .clickable(
+                  interactionSource = searchInteractionSource,
+                  indication = null,
+                  onClick = onSearch,
+                )
                 .testTag("feed_search_button"),
             shape = CircleShape,
             color =
@@ -899,51 +1559,28 @@ private fun HomeHubHeader(
                   else HomeGlassTokens.LightControlAlpha
               ),
           ) {
-            BasicTextField(
-              value = searchQuery,
-              onValueChange = {
-                onSearchQueryChange(it)
-                onSearch()
-              },
-              modifier = Modifier.fillMaxSize().onFocusChanged { if (it.isFocused) onSearch() },
-              singleLine = true,
-              textStyle =
-                MaterialTheme.typography.bodyLarge.copy(
-                  color = MaterialTheme.colorScheme.onSurface
-                ),
-              cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-              keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-              keyboardActions = KeyboardActions(onSearch = { onSearchSubmit(searchQuery) }),
-              decorationBox = { innerField ->
-                Row(
-                  Modifier.fillMaxSize().padding(horizontal = 14.dp),
-                  verticalAlignment = Alignment.CenterVertically,
-                ) {
-                  Icon(Icons.Default.Search, null, modifier = Modifier.size(20.dp))
-                  Box(Modifier.weight(1f).padding(start = 8.dp)) {
-                    if (searchQuery.isBlank()) {
-                      Text("搜索视频", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    innerField()
-                  }
-                  if (searchQuery.isNotBlank()) {
-                    IconButton(
-                      onClick = {
-                        onSearchQueryChange("")
-                        onSearch()
-                      },
-                      modifier = Modifier.size(32.dp),
-                    ) {
-                      Icon(
-                        Icons.Default.Close,
-                        contentDescription = "清空搜索内容",
-                        modifier = Modifier.size(18.dp),
-                      )
-                    }
-                  }
-                }
-              },
-            )
+            Row(
+              Modifier.fillMaxSize().padding(horizontal = 14.dp),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Icon(Icons.Default.Search, null, modifier = Modifier.size(20.dp))
+              Text(
+                text = searchQuery.ifBlank { "搜索视频" },
+                modifier = Modifier.weight(1f).padding(start = 8.dp),
+                color =
+                  if (searchQuery.isBlank()) MaterialTheme.colorScheme.onSurfaceVariant
+                  else MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+              if (searchQuery.isNotBlank()) {
+                Icon(
+                  Icons.Default.Close,
+                  contentDescription = null,
+                  modifier = Modifier.size(18.dp),
+                )
+              }
+            }
           }
         }
         if (refreshing) {
@@ -961,9 +1598,18 @@ private fun HomeHubTabCapsule(
   clickEnabled: Boolean,
   dragEnabled: Boolean,
   onTab: (HomeHubTab) -> Unit,
+  onControlTab: (HomeHubTab) -> Unit,
   onDragPosition: (Float) -> Unit,
+  controlMode: Boolean,
+  controlTabsEnabled: Boolean,
+  controlFocusRequesters: List<FocusRequester>,
+  controlStartFocusRequester: FocusRequester,
+  controlEndFocusRequester: FocusRequester,
+  controlDownFocusRequester: (HomeHubTab) -> FocusRequester?,
+  onControlFocused: (HomeHubTab) -> Unit,
   modifier: Modifier = Modifier,
 ) {
+  val controlFocusVisible = LocalControlFocusVisible.current
   var dragPosition by remember { mutableStateOf<Float?>(null) }
   var selectionTravelPx by remember { mutableFloatStateOf(1f) }
   LaunchedEffect(dragEnabled) {
@@ -1046,10 +1692,56 @@ private fun HomeHubTabCapsule(
         ) {
           HomeHubTab.entries.forEach { tab ->
             val selected = tab.ordinal == currentPosition.roundToInt()
+            val interactionSource = remember(tab) { MutableInteractionSource() }
+            val focused by interactionSource.collectIsFocusedAsState()
             Box(
-              Modifier.weight(1f).fillMaxSize().clip(shape).clickable(enabled = clickEnabled) {
-                onTab(tab)
-              },
+              Modifier.weight(1f)
+                .fillMaxSize()
+                .then(
+                  if (controlMode) {
+                    Modifier.focusRequester(controlFocusRequesters[tab.ordinal])
+                      .focusProperties {
+                        canFocus = controlTabsEnabled
+                        left =
+                          controlFocusRequesters.getOrNull(tab.ordinal - 1)
+                            ?: controlStartFocusRequester
+                        right =
+                          controlFocusRequesters.getOrNull(tab.ordinal + 1)
+                            ?: controlEndFocusRequester
+                        up = FocusRequester.Cancel
+                        down = controlDownFocusRequester(tab) ?: FocusRequester.Cancel
+                      }
+                      .onFocusChanged { if (it.isFocused) onControlFocused(tab) }
+                      .onPreviewKeyEvent { event ->
+                        if (!controlTabsEnabled) return@onPreviewKeyEvent false
+                        if (isControlConfirmKey(event.nativeKeyEvent.keyCode)) {
+                          if (event.type == KeyEventType.KeyUp) onControlTab(tab)
+                          return@onPreviewKeyEvent true
+                        }
+                        false
+                      }
+                  } else Modifier
+                )
+                .clip(shape)
+                .background(
+                  if (focused && controlFocusVisible)
+                    MaterialTheme.colorScheme.primary.copy(alpha = .16f)
+                  else Color.Transparent
+                )
+                .border(
+                  width = if (focused && controlFocusVisible) 2.dp else 0.dp,
+                  color =
+                    if (focused && controlFocusVisible) MaterialTheme.colorScheme.primary
+                    else Color.Transparent,
+                  shape = shape,
+                )
+                .clickable(
+                  enabled = clickEnabled,
+                  interactionSource = interactionSource,
+                  indication = null,
+                ) {
+                  onTab(tab)
+                },
               contentAlignment = Alignment.Center,
             ) {
               androidx.compose.material3.Text(

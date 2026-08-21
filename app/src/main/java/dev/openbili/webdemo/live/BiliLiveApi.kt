@@ -1,18 +1,35 @@
 package dev.openbili.webdemo.live
 
+/**
+ * B 站直播区 HTTP 接口的封装层。
+ *
+ * 集中提供直播分区、首页推荐、关注列表、房间/主播信息、播放地址、弹幕消息配置、表情包、
+ * 粉丝勋章、互动抽奖、观众/大航海排行榜以及弹幕/表情发送等接口，并把服务端返回的 JSON
+ * 解析为本模块使用的数据类。协议细节（WBI 签名、字段兼容、来源优先级、人气格式化等）都在
+ * 这里内聚，供上层 UI 与 [LiveDanmakuClient] 直接调用，避免业务代码与接口细节耦合。
+ */
+
 import androidx.core.text.HtmlCompat
-import dev.openbili.webdemo.UrlPolicy
-import dev.openbili.webdemo.api.BiliApi
+import dev.openbili.webdemo.api.BiliApiCommon
 import dev.openbili.webdemo.api.BiliHttpClient
+import dev.openbili.webdemo.UrlPolicy
 import java.net.URLEncoder
 import org.json.JSONArray
 import org.json.JSONObject
 
+/**
+ * 直播区网络接口的单一入口（object 单例）。
+ *
+ * 所有方法都是无状态的静态调用，内部通过 [BiliHttpClient] 发出请求，并统一在 [getJson]
+ * 里校验返回的 code 字段；各 parse* 函数按 B 站实际返回结构做兼容解析，屏蔽字段名差异。
+ */
 object BiliLiveApi {
+  /** 返回全部直播分区（仅一级分区，不含子分区），用于分区筛选页。 */
   fun getLiveAreas(): List<LiveAreaFilter> {
     return getLiveAreaGroups().map { it.parent }
   }
 
+  /** 拉取直播分区树（一级分区 + 其子分区），并解析为分组结构。 */
   fun getLiveAreaGroups(): List<LiveAreaGroup> {
     val json =
       getJson(
@@ -22,30 +39,44 @@ object BiliLiveApi {
     return parseLiveAreaGroups(json)
   }
 
+  /**
+   * 获取直播首页推荐房间。
+   *
+   * 使用网页首屏首页接口返回的推荐位，而不是「更多推荐」接口。首页响应同时包含顶部
+   * Hero 的 recommend_room_list 和「我的关注」模块；这里明确只读取前者，避免首屏推荐
+   * 被当前账号的关注直播污染。结果只保留正在直播的房间，并裁剪到调用方要求的数量。
+   */
   fun getHomeRecommendations(limit: Int = 5): List<LiveSearchRoom> {
     val query =
-      buildQuery(
-        mapOf(
+      BiliApiCommon.signedQuery(
+        linkedMapOf(
           "platform" to "web",
-          "web_location" to "333.1007",
+          "web_location" to "444.7",
         )
       )
     val json =
       getJson(
-        "https://api.live.bilibili.com/xlive/web-interface/v1/webMain/getMoreRecList?$query",
+        "https://api.live.bilibili.com/xlive/web-interface/v1/index/getList?$query",
         "直播首页推荐",
       )
     return parseLiveHomeRecommendations(json).take(limit.coerceAtLeast(1))
   }
 
+  /**
+   * 获取当前账号正在直播的关注房间。
+   *
+   * 优先使用直播首页「我的关注」模块（接口只返回有限条数）；当在线数超过首页返回数量时，
+   * 再补拉完整关注列表并做去重合并。首页接口失败时退化为直接请求完整列表，保证已登录
+   * 用户仍能拿到关注数据。
+   */
   fun getFollowedLiveRooms(): LiveFollowingResponse {
     if (BiliHttpClient.cookieValue("SESSDATA").isNullOrBlank()) {
       return LiveFollowingResponse(isLoggedIn = false, rooms = emptyList())
     }
-    // The current live homepage loads the personalized follow module together with its other
-    // modules. The request interceptor adds the WBI signature used by the web page.
+    // 直播首页会把个性化「关注」模块和其余模块一起返回；请求拦截器会补上网页所用的
+    // WBI 签名，因此这里直接沿用首页接口的请求形态。
     val query =
-      BiliApi.signedQuery(
+      BiliApiCommon.signedQuery(
         linkedMapOf(
           "platform" to "web",
           "web_location" to "444.7",
@@ -84,6 +115,12 @@ object BiliLiveApi {
     )
   }
 
+  /**
+   * 合并首页关注房间与完整关注房间。
+   *
+   * 以首页顺序为准，用完整列表逐字段补全首页缺失的数据（短号/UID/头像/封面/分区等）；
+   * 完整列表里首页没有的房间追加到末尾，从而兼顾首页的展示顺序与列表的完整性。
+   */
   internal fun mergeFollowedLiveRooms(
     homepageRooms: List<LiveSearchRoom>,
     fullRooms: List<LiveSearchRoom>,
@@ -100,12 +137,20 @@ object BiliLiveApi {
         keyframeUrl = homepageRoom.keyframeUrl ?: fullRoom.keyframeUrl,
         areaName = homepageRoom.areaName ?: fullRoom.areaName,
         parentAreaName = homepageRoom.parentAreaName ?: fullRoom.parentAreaName,
+        parentAreaId = homepageRoom.parentAreaId.takeIf { it > 0 } ?: fullRoom.parentAreaId,
+        areaId = homepageRoom.areaId.takeIf { it > 0 } ?: fullRoom.areaId,
         watchedText = homepageRoom.watchedText ?: fullRoom.watchedText,
       )
     }
     return mergedHomepageRooms + fullRooms.filterNot { it.roomId in homepageRoomIds }
   }
 
+  /**
+   * 为缺失封面的关注房间逐间补拉 [getRoomInfo]，用接口数据填充封面与分区字段。
+   *
+   * 完整关注列表接口偶尔不返回封面，这里仅在封面确实为空时才额外请求一次，避免无谓的
+   * 网络开销；补拉失败则原样保留该房间。
+   */
   private fun enrichMissingFollowedCovers(rooms: List<LiveSearchRoom>): List<LiveSearchRoom> =
     rooms.map { room ->
       if (!room.coverUrl.isNullOrBlank()) return@map room
@@ -117,9 +162,17 @@ object BiliLiveApi {
         keyframeUrl = room.keyframeUrl ?: info.keyframeUrl,
         areaName = room.areaName ?: info.areaName,
         parentAreaName = room.parentAreaName ?: info.parentAreaName,
+        parentAreaId = room.parentAreaId.takeIf { it > 0 } ?: info.parentAreaId,
+        areaId = room.areaId.takeIf { it > 0 } ?: info.areaId,
       )
     }
 
+  /**
+   * 分页拉取完整关注直播列表。
+   *
+   * 以接口报告的在线数 reportedCount 作为主要停止条件：翻页直到收集满报告数量、遇到短页
+   * 或重复房间，最多翻 [MAX_FOLLOWING_PAGES] 页，防止接口数量口径不一致时无限翻页。
+   */
   private fun getAllFollowedLiveRooms(expectedCount: Int): List<LiveSearchRoom> {
     val rooms = mutableListOf<LiveSearchRoom>()
     val seenRoomIds = hashSetOf<Long>()
@@ -135,6 +188,7 @@ object BiliLiveApi {
       val pageRooms = parseFollowedLiveRooms(json)
       val added = pageRooms.filter { seenRoomIds.add(it.roomId) }
       rooms += added
+      // 报告数量已知时按数量收尾；未知时以「短页」判断是否已到最后一页。
       val reachedReportedEnd = reportedCount > 0 && rooms.size >= reportedCount
       val reachedShortPage = reportedCount <= 0 && pageRooms.size < FOLLOWING_PAGE_SIZE
       if (pageRooms.isEmpty() || added.isEmpty() || reachedReportedEnd || reachedShortPage) break
@@ -143,6 +197,11 @@ object BiliLiveApi {
     return rooms
   }
 
+  /**
+   * 按分区/页码获取直播间列表。
+   *
+   * 对入参做钳制（页码至少 1、每页 1~30），并按人气排序返回正在直播的房间。
+   */
   fun getLiveRooms(
     parentAreaId: Int = 0,
     areaId: Int = 0,
@@ -160,11 +219,10 @@ object BiliLiveApi {
         "page_size" to safePageSize.toString(),
         "sort_type" to "online",
       )
-    // `second/getList` currently returns -352 for this app's ordinary live-home session. The
-    // shared HTTP interceptor correctly opens a global Gaia challenge for that response, but the
-    // compatibility endpoint below already serves the same room-card contract. Do not probe the
-    // blocked endpoint first: otherwise cards load through the fallback while an unnecessary,
-    // and sometimes blank, challenge dialog remains on top of the page.
+    // `second/getList` 在本应用的普通直播首页会话里会返回 -352。共享 HTTP 拦截器会对该
+    // 响应正确弹出全局 Gaia 验证，但下面的兼容接口已经提供相同的房间卡片数据契约，因此
+    // 不要先探测被拦截的接口：否则卡片会经由回退接口加载，同时页面上还会残留一个多余、
+    // 有时甚至空白的验证弹窗。
     val query = buildQuery(parameters + ("tag_version" to "1"))
     val json =
       getJson(
@@ -176,7 +234,7 @@ object BiliLiveApi {
 
   fun searchRooms(keyword: String, page: Int = 1): LiveSearchResponse {
     val query =
-      BiliApi.signedQuery(
+      BiliApiCommon.signedQuery(
         linkedMapOf(
           "search_type" to "live_room",
           "keyword" to keyword,
@@ -225,6 +283,8 @@ object BiliLiveApi {
       keyframeUrl = imageUrl(data.optString("keyframe")).ifBlank { null },
       areaName = data.optString("area_name").takeIf(String::isNotBlank),
       parentAreaName = data.optString("parent_area_name").takeIf(String::isNotBlank),
+      parentAreaId = data.intValue("parent_area_id", "area_v2_parent_id"),
+      areaId = data.intValue("area_id", "area_v2_id"),
       liveStatus = data.optInt("live_status"),
       online = data.longValue("online"),
     )
@@ -247,11 +307,10 @@ object BiliLiveApi {
 
   fun getPlayInfo(roomId: Long, qn: Int = 10_000): LivePlayInfo {
     val safeQn = qn.takeIf { it > 0 }?.coerceAtMost(LIVE_ORIGINAL_QN) ?: LIVE_ORIGINAL_QN
-    // The official web live player signs the room play request with WBI. Besides making the
-    // request match the supported web contract, this lets the backend associate an authenticated
-    // playback session with the account; the former unsigned, reduced request only fetched a
-    // stream URL and did not reliably create the cloud live-history entry.
-    val query = BiliApi.signedQuery(playInfoRequestParameters(roomId, safeQn))
+    // 官方网页直播播放器用 WBI 为房间播放请求签名。除了让请求符合受支持的网页契约，
+    // 这还能让后端把认证过的播放会话与账号关联起来；此前未签名的精简请求只能取回
+    // 流地址，且无法可靠地生成云端直播历史记录。
+    val query = BiliApiCommon.signedQuery(playInfoRequestParameters(roomId, safeQn))
     val json =
       getJson(
         "https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?$query",
@@ -333,7 +392,7 @@ object BiliLiveApi {
       )
 
   fun getDanmuConfig(roomId: Long): LiveDanmuConfig {
-    val query = BiliApi.signedQuery(mapOf("id" to roomId.toString(), "type" to "0"))
+    val query = BiliApiCommon.signedQuery(mapOf("id" to roomId.toString(), "type" to "0"))
     val json =
       getJson(
         "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo?$query",
@@ -396,8 +455,8 @@ object BiliLiveApi {
           imageUrl = url,
           kind = kind,
           roomId = roomId.takeIf { kind == LiveEmojiKind.ROOM_EXCLUSIVE },
-          // Every entry returned by GetEmoticons is a real image emote. Inserting BASE entries
-          // into the composer routes them through dm_type=0 and sends their label as plain text.
+          // GetEmoticons 返回的每一项都是真实的图片表情。把 BASE 条目插入到发送面板
+          // 会走 dm_type=0 路径，并把其标签当作纯文本发送。
           directSend = true,
           isBulge = isBulge,
           available = permitted,
@@ -825,6 +884,8 @@ object BiliLiveApi {
         item
           .optString("area_v2_parent_name", item.optString("parent_area_name"))
           .takeIf(String::isNotBlank),
+      parentAreaId = item.intValue("area_v2_parent_id", "parent_area_id"),
+      areaId = item.intValue("area_v2_id", "area_id"),
       watchedText = watched,
       liveStatus = item.optInt("live_status", 1),
     )
@@ -987,6 +1048,9 @@ object BiliLiveApi {
     }
     return 0L
   }
+
+  private fun JSONObject.intValue(vararg names: String): Int =
+    longValue(*names).coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
 
   private fun JSONArray?.objects(): List<JSONObject> {
     if (this == null) return emptyList()

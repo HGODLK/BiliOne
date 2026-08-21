@@ -33,6 +33,48 @@ enum class PreferredResolutionMode(val title: String, val description: String) {
   LOW("低", "优先 480P，网络紧张时稳稳看 ( •̀ ω •́ )"),
 }
 
+enum class CdnRegionPreference(
+  val title: String,
+  val description: String,
+  val preferredHost: String,
+) {
+  MAINLAND_CHINA(
+    "中国大陆",
+    "优先使用国内线路",
+    "d1--cn-gotcha208.bilivideo.com",
+  ),
+  HONG_KONG_MACAO_TAIWAN(
+    "港澳台",
+    "优先使用港澳台及东亚线路",
+    "d1--ov-gotcha07.bilivideo.com",
+  ),
+  JAPAN_KOREA(
+    "日韩",
+    "优先使用日韩及东亚线路",
+    "d1--ov-gotcha07.bilivideo.com",
+  ),
+  NORTH_AMERICA(
+    "北美",
+    "优先使用北美线路",
+    "d1--ov-gotcha07.bilivideo.com",
+  ),
+  SOUTH_AMERICA(
+    "南美",
+    "优先使用南美线路",
+    "d1--ov-gotcha209.bilivideo.com",
+  ),
+  EUROPE(
+    "欧洲",
+    "优先使用欧洲线路",
+    "d1--ov-gotcha209.bilivideo.com",
+  ),
+  AFRICA(
+    "非洲",
+    "优先使用非洲线路",
+    "d1--ov-gotcha05.bilivideo.com",
+  ),
+}
+
 enum class AdvancedAudioPriority(val title: String, val description: String) {
   DOLBY("优先 Dolby", "优先杜比全景声；不可用时自动改用 HiRes"),
   HI_RES("优先 HiRes", "优先 HiRes 无损；不可用时自动改用 Dolby"),
@@ -60,6 +102,13 @@ internal fun canSelectPreferredResolution(
     (mode != PreferredResolutionMode.EXTREME && mode != PreferredResolutionMode.ULTRA_HIGH)
 
 data class AppSettings(
+  /**
+   * 重新启用触屏播放页的控制器层（带评论和推荐焦点链的页面导航/直接/控件状态机）。
+   * 默认关闭：体验欠佳，且控制器目前使用的是全屏直接播放表面。
+   */
+  val controllerTouchPlaybackPage: Boolean = false,
+  /** 无论当前是否连接控制器，都使用专用播放页；默认关闭以保持原有入口行为。 */
+  val alwaysControllerPlaybackPage: Boolean = false,
   val keepScreenOn: Boolean = true,
   val pauseWhenLeavingApp: Boolean = true,
   val brightnessGesture: Boolean = true,
@@ -70,26 +119,31 @@ data class AppSettings(
   val fullscreenInfoGesture: Boolean = true,
   val reduceMotion: Boolean = false,
   val glassEffects: Boolean = true,
+  val disableColorfulCards: Boolean = false,
   val limitImageLoadingSpeed: Boolean = false,
   val retainLastSearchQuery: Boolean = false,
   val homeGridColumns: Int = 3,
+  /** Secondary page shown inside the home root on startup: 0 推荐, 1 动态, 2 热门, 3 直播. */
+  val homeDefaultTab: Int = 0,
   val showPlaybackDeviceStatus: Boolean = true,
   val homeBackgroundUri: String = "",
   val videoBackgroundUri: String = "",
-  /** Empty keeps the bundled BiliOne foreground on the local startup warmup mask. */
+  /** 为空则在本地的启动预热蒙版上保留内置的 BiliOne 前景图。 */
   val startupMaskUri: String = "",
   val homeBackgroundBlur: Boolean = false,
+  /** 音乐页使用首页自定义背景时是否生成静态模糊版本。 */
+  val homeBackgroundMusicBlur: Boolean = true,
   val videoBackgroundBlur: Boolean = false,
   val useHomeBackgroundForMusic: Boolean = false,
-  /** 0 keeps the default behavior: resolve the personal folder whose trimmed title is “音乐”. */
+  /** 0 保持默认行为：解析去除首尾空白后标题为“音乐”的个人收藏夹。 */
   val musicFavoriteFolderId: Long = 0L,
-  /** False until the user has explicitly chosen how the music library should be sourced. */
+  /** 在用户明确选择音乐库的来源方式之前保持 false。 */
   val musicFavoriteFolderConfigured: Boolean = false,
   val useVideoCoverBackground: Boolean = true,
   val homeBackgroundTransparency: Float = .6f,
   val videoBackgroundTransparency: Float = .6f,
-  /** Brightness of the cover-derived letterbox around fullscreen on-demand video. */
-  val fullscreenBackgroundBrightness: Float = 1f,
+  /** 全屏点播视频周围封面派生黑边的亮度。 */
+  val fullscreenBackgroundBrightness: Float = .3f,
   val showCommentLocation: Boolean = true,
   val showCommentEmotes: Boolean = true,
   val controlsTimeoutSeconds: Int = 3,
@@ -97,8 +151,9 @@ data class AppSettings(
   val themeAccent: ThemeAccent = ThemeAccent.CYAN,
   val preferredResolutionMode: PreferredResolutionMode = PreferredResolutionMode.HIGH,
   val cellularPreferredResolutionMode: PreferredResolutionMode = PreferredResolutionMode.MEDIUM,
-  /** Music video is capped at the 1080P+/1080P60 tier even for VIP accounts. */
-  val musicPreferredResolutionMode: PreferredResolutionMode = PreferredResolutionMode.ULTRA_HIGH,
+  val cdnRegionPreference: CdnRegionPreference = CdnRegionPreference.MAINLAND_CHINA,
+  /** 音乐视频即使是 VIP 账号也被限制在 1080P+/1080P60 档位。 */
+  val musicPreferredResolutionMode: PreferredResolutionMode = PreferredResolutionMode.MEDIUM,
   val autoPlayNext: Boolean = true,
   val autoNextCountdownSeconds: Int = 5,
   val defaultShowSubtitles: Boolean = false,
@@ -107,15 +162,15 @@ data class AppSettings(
   val danmakuColor: Int = 0xFFFFFF,
   val danmakuColorful: Int = DANMAKU_COLORFUL_NONE,
   val danmakuSmartBlocking: Boolean = true,
-  val danmakuDisplayArea: Float = .75f,
+  val danmakuDisplayArea: Float = .3f,
   val danmakuDensity: Int = 3,
   val danmakuBlockLevel: Int = 1,
   val danmakuOpacity: Float = .72f,
   val danmakuFontScale: Float = 1f,
   val danmakuSpeed: Float = 1f,
-  /** Live-room danmaku settings are intentionally independent from on-demand video settings. */
+  /** 直播间弹幕设置有意独立于点播视频设置。 */
   val liveShowDanmaku: Boolean = true,
-  val liveDanmakuDisplayArea: Float = .75f,
+  val liveDanmakuDisplayArea: Float = .3f,
   val liveDanmakuOpacity: Float = .72f,
   val liveDanmakuFontScale: Float = 1f,
   val liveDanmakuSpeed: Float = 1f,
@@ -136,6 +191,8 @@ class AppSettingsViewModel(application: Application) : AndroidViewModel(applicat
     _state.value = value
     prefs
       .edit()
+      .putBoolean("controller_touch_playback_page", value.controllerTouchPlaybackPage)
+      .putBoolean("always_controller_playback_page", value.alwaysControllerPlaybackPage)
       .putBoolean("keep_screen_on", value.keepScreenOn)
       .putBoolean("pause_when_leaving_app", value.pauseWhenLeavingApp)
       .putBoolean("brightness_gesture", value.brightnessGesture)
@@ -146,14 +203,17 @@ class AppSettingsViewModel(application: Application) : AndroidViewModel(applicat
       .putBoolean("fullscreen_info_gesture", value.fullscreenInfoGesture)
       .putBoolean("reduce_motion", value.reduceMotion)
       .putBoolean("glass_effects", value.glassEffects)
+      .putBoolean("disable_colorful_cards", value.disableColorfulCards)
       .putBoolean("limit_image_loading_speed", value.limitImageLoadingSpeed)
       .putBoolean("retain_last_search_query", value.retainLastSearchQuery)
       .putInt("home_grid_columns", value.homeGridColumns.coerceIn(3, 6))
+      .putInt("home_default_tab", value.homeDefaultTab.coerceIn(0, 3))
       .putBoolean("show_playback_device_status", value.showPlaybackDeviceStatus)
       .putString("home_background_uri", value.homeBackgroundUri)
       .putString("video_background_uri", value.videoBackgroundUri)
       .putString("startup_mask_uri", value.startupMaskUri)
       .putBoolean("home_background_blur", value.homeBackgroundBlur)
+      .putBoolean("home_background_music_blur", value.homeBackgroundMusicBlur)
       .putBoolean("video_background_blur", value.videoBackgroundBlur)
       .putBoolean("use_home_background_for_music", value.useHomeBackgroundForMusic)
       .putLong("music_favorite_folder_id", value.musicFavoriteFolderId.coerceAtLeast(0L))
@@ -170,13 +230,14 @@ class AppSettingsViewModel(application: Application) : AndroidViewModel(applicat
       .putInt("controls_timeout", value.controlsTimeoutSeconds)
       .putString("theme_mode", value.themeMode.name)
       .putString("theme_accent", value.themeAccent.name)
-      // Keep the legacy key current so downgrading the app does not unexpectedly enable light mode.
+      // 让旧键保持最新，避免应用降级后意外启用浅色模式。
       .putBoolean("force_dark_mode", value.themeMode == ThemeMode.DARK)
       .putString("preferred_resolution_mode", value.preferredResolutionMode.name)
       .putString(
         "cellular_preferred_resolution_mode",
         value.cellularPreferredResolutionMode.name,
       )
+      .putString("cdn_region_preference", value.cdnRegionPreference.name)
       .putString("music_preferred_resolution_mode", value.musicPreferredResolutionMode.name)
       .putBoolean("auto_play_next", value.autoPlayNext)
       .putInt("auto_next_countdown_seconds", value.autoNextCountdownSeconds)
@@ -218,6 +279,8 @@ class AppSettingsViewModel(application: Application) : AndroidViewModel(applicat
 
   private fun read() =
     AppSettings(
+      controllerTouchPlaybackPage = prefs.getBoolean("controller_touch_playback_page", false),
+      alwaysControllerPlaybackPage = prefs.getBoolean("always_controller_playback_page", false),
       keepScreenOn = prefs.getBoolean("keep_screen_on", true),
       pauseWhenLeavingApp = prefs.getBoolean("pause_when_leaving_app", true),
       brightnessGesture = prefs.getBoolean("brightness_gesture", true),
@@ -233,14 +296,17 @@ class AppSettingsViewModel(application: Application) : AndroidViewModel(applicat
       fullscreenInfoGesture = prefs.getBoolean("fullscreen_info_gesture", true),
       reduceMotion = prefs.getBoolean("reduce_motion", false),
       glassEffects = prefs.getBoolean("glass_effects", true),
+      disableColorfulCards = prefs.getBoolean("disable_colorful_cards", false),
       limitImageLoadingSpeed = prefs.getBoolean("limit_image_loading_speed", false),
       retainLastSearchQuery = prefs.getBoolean("retain_last_search_query", false),
       homeGridColumns = prefs.getInt("home_grid_columns", 3).coerceIn(3, 6),
+      homeDefaultTab = prefs.getInt("home_default_tab", 0).coerceIn(0, 3),
       showPlaybackDeviceStatus = prefs.getBoolean("show_playback_device_status", true),
       homeBackgroundUri = prefs.getString("home_background_uri", "").orEmpty(),
       videoBackgroundUri = prefs.getString("video_background_uri", "").orEmpty(),
       startupMaskUri = prefs.getString("startup_mask_uri", "").orEmpty(),
       homeBackgroundBlur = prefs.getBoolean("home_background_blur", false),
+      homeBackgroundMusicBlur = prefs.getBoolean("home_background_music_blur", true),
       videoBackgroundBlur = prefs.getBoolean("video_background_blur", false),
       useHomeBackgroundForMusic = prefs.getBoolean("use_home_background_for_music", false),
       musicFavoriteFolderId = prefs.getLong("music_favorite_folder_id", 0L).coerceAtLeast(0L),
@@ -253,7 +319,7 @@ class AppSettingsViewModel(application: Application) : AndroidViewModel(applicat
       videoBackgroundTransparency =
         prefs.getFloat("video_background_transparency", .6f).coerceIn(0f, 1f),
       fullscreenBackgroundBrightness =
-        prefs.getFloat("fullscreen_background_brightness", 1f).coerceIn(0f, 1f),
+        prefs.getFloat("fullscreen_background_brightness", .3f).coerceIn(0f, 1f),
       showCommentLocation = prefs.getBoolean("comment_location", true),
       showCommentEmotes = prefs.getBoolean("comment_emotes", true),
       controlsTimeoutSeconds = prefs.getInt("controls_timeout", 3),
@@ -283,6 +349,13 @@ class AppSettingsViewModel(application: Application) : AndroidViewModel(applicat
             )
           }
           .getOrDefault(PreferredResolutionMode.MEDIUM),
+      cdnRegionPreference =
+        runCatching {
+            CdnRegionPreference.valueOf(
+              prefs.getString("cdn_region_preference", null).orEmpty()
+            )
+          }
+          .getOrDefault(CdnRegionPreference.MAINLAND_CHINA),
       musicPreferredResolutionMode =
         runCatching {
             PreferredResolutionMode.valueOf(
@@ -316,7 +389,7 @@ class AppSettingsViewModel(application: Application) : AndroidViewModel(applicat
           it == DANMAKU_COLORFUL_VIP_GRADIENT
         } ?: DANMAKU_COLORFUL_NONE,
       danmakuSmartBlocking = prefs.getBoolean("danmaku_smart_blocking", true),
-      danmakuDisplayArea = prefs.getFloat("danmaku_display_area", .75f).coerceIn(.1f, 1f),
+      danmakuDisplayArea = prefs.getFloat("danmaku_display_area", .3f).coerceIn(.1f, 1f),
       danmakuDensity = prefs.getInt("danmaku_density", 3).coerceIn(1, 5),
       danmakuBlockLevel = prefs.getInt("danmaku_block_level", 1).coerceIn(1, 5),
       danmakuOpacity = prefs.getFloat("danmaku_opacity", .72f).coerceIn(.2f, 1f),
@@ -330,7 +403,7 @@ class AppSettingsViewModel(application: Application) : AndroidViewModel(applicat
         prefs
           .getFloat(
             "live_danmaku_display_area",
-            prefs.getFloat("danmaku_display_area", .75f),
+            prefs.getFloat("danmaku_display_area", .3f),
           )
           .coerceIn(.1f, 1f),
       liveDanmakuOpacity =

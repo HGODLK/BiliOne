@@ -8,30 +8,30 @@ import dev.openbili.webdemo.api.BangumiEpisode
 import dev.openbili.webdemo.api.BangumiExploreCategory
 import dev.openbili.webdemo.api.BangumiExplorePage
 import dev.openbili.webdemo.api.BangumiUserStatus
+import dev.openbili.webdemo.api.BangumiWatchingHistoryPage
 import dev.openbili.webdemo.api.BangumiWatchProgress
 import dev.openbili.webdemo.api.BangumiWatchProgressState
-import dev.openbili.webdemo.api.BangumiWatchingHistoryPage
-import dev.openbili.webdemo.api.BiliApi
+import dev.openbili.webdemo.api.BiliBangumiApi
 import dev.openbili.webdemo.api.HistoryCursor
 import dev.openbili.webdemo.api.SpaceContentCard
 import java.util.concurrent.ConcurrentHashMap
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 
-/** Cache lifetime for the "正在追" card list. */
+/** “正在追”卡片列表的缓存有效期。 */
 private const val FOLLOWING_CACHE_MS = 60_000L
 private const val EXPLORE_PAGE_CACHE_MS = 5 * 60_000L
 private const val INITIAL_HISTORY_TARGET = 12
@@ -71,11 +71,39 @@ data class BangumiFollowingUiState(
   val loadingMore: Boolean = false,
   val hasMore: Boolean = false,
   val error: String? = null,
-  /** Changes whenever this category is entered again so its Compose tree starts cleanly. */
+  /** 每当再次进入该分类时改变，使其 Compose 树从头开始。 */
   val sessionId: Long = 0L,
-  /** Season currently animating to the front of this category's rail. */
+  /** 当前正动画移动到该分类轨道最前端的季度。 */
   val reorderingSeasonId: Long? = null,
 )
+
+/**
+ * 播放页会在进场动画期间卸载番剧探索页。这里仅保存返回所需的轻量锚点，避免把
+ * Compose 的 LazyGridState 放进 ViewModel。
+ */
+data class BangumiExploreReturnAnchor(
+  val category: BangumiExploreCategory,
+  val sessionId: Long,
+  val itemStableId: String,
+  val firstVisibleItemIndex: Int,
+  val firstVisibleItemScrollOffset: Int,
+  val followingScrollAnchor: BangumiExploreFollowingScrollAnchor? = null,
+  val sourceBounds: BangumiExploreSourceBounds? = null,
+)
+
+data class BangumiExploreFollowingScrollAnchor(
+  val firstVisibleItemIndex: Int,
+  val firstVisibleItemScrollOffset: Int,
+)
+
+data class BangumiExploreSourceBounds(
+  val left: Float,
+  val top: Float,
+  val right: Float,
+  val bottom: Float,
+) {
+  fun hasUsableSize(): Boolean = right > left && bottom > top
+}
 
 data class BangumiExploreUiState(
   val selectedCategory: BangumiExploreCategory = BangumiExploreCategory.ANIME,
@@ -124,7 +152,7 @@ private class FollowingComponentState {
   }
 }
 
-/** A small, per-category cache: entering the second page never disturbs the root PV state. */
+/** 一个小型按分类缓存：进入第二页永远不会打扰根 PV 状态。 */
 class BangumiExploreViewModel : ViewModel() {
   private val _state = MutableStateFlow(BangumiExploreUiState())
   val state: StateFlow<BangumiExploreUiState> = _state.asStateFlow()
@@ -133,6 +161,48 @@ class BangumiExploreViewModel : ViewModel() {
   private var accountMid: Long = 0L
   private val followingComponents = mutableMapOf<BangumiExploreCategory, FollowingComponentState>()
   private val episodeCoverCache = ConcurrentHashMap<Long, String>()
+  private var returnAnchor: BangumiExploreReturnAnchor? = null
+
+  fun rememberReturnAnchor(anchor: BangumiExploreReturnAnchor) {
+    returnAnchor = anchor
+  }
+
+  fun updateReturnAnchorFollowingScroll(
+    itemStableId: String,
+    scrollAnchor: BangumiExploreFollowingScrollAnchor,
+  ) {
+    val current = returnAnchor?.takeIf { it.itemStableId == itemStableId } ?: return
+    returnAnchor = current.copy(followingScrollAnchor = scrollAnchor)
+  }
+
+  fun updateReturnAnchorSourceBounds(
+    itemStableId: String,
+    bounds: BangumiExploreSourceBounds,
+  ) {
+    if (!bounds.hasUsableSize()) return
+    val current = returnAnchor?.takeIf { it.itemStableId == itemStableId } ?: return
+    returnAnchor = current.copy(sourceBounds = bounds)
+  }
+
+  fun returnAnchorForItem(itemStableId: String): BangumiExploreReturnAnchor? =
+    returnAnchor?.takeIf { it.itemStableId == itemStableId }
+
+  fun returnAnchor(
+    category: BangumiExploreCategory,
+    sessionId: Long,
+  ): BangumiExploreReturnAnchor? =
+    returnAnchor?.takeIf { it.category == category && it.sessionId == sessionId }
+
+  fun consumeReturnAnchor(anchor: BangumiExploreReturnAnchor) {
+    val current = returnAnchor
+    if (
+      current?.category == anchor.category &&
+        current.sessionId == anchor.sessionId &&
+        current.itemStableId == anchor.itemStableId
+    ) {
+      returnAnchor = null
+    }
+  }
 
   private fun followingComponent(category: BangumiExploreCategory): FollowingComponentState =
     followingComponents.getOrPut(category, ::FollowingComponentState)
@@ -152,6 +222,7 @@ class BangumiExploreViewModel : ViewModel() {
     accountMid = mid
     followingComponents.values.forEach(FollowingComponentState::reset)
     followingComponents.clear()
+    returnAnchor = null
     pageFetchedAtMillis.clear()
     _state.update {
       it.copy(
@@ -159,7 +230,7 @@ class BangumiExploreViewModel : ViewModel() {
         accountMid = mid,
       )
     }
-    if (mid > 0L && BiliApi.bangumiSeasonType(_state.value.selectedCategory) != null) {
+    if (mid > 0L && BiliBangumiApi.bangumiSeasonType(_state.value.selectedCategory) != null) {
       loadFollowing(category = _state.value.selectedCategory)
       ensureLoaded(_state.value.selectedCategory)
     }
@@ -168,19 +239,19 @@ class BangumiExploreViewModel : ViewModel() {
   fun select(category: BangumiExploreCategory) {
     _state.update { it.copy(selectedCategory = category) }
     ensureLoaded(category)
-    if (accountMid > 0L && BiliApi.bangumiSeasonType(category) != null) {
+    if (accountMid > 0L && BiliBangumiApi.bangumiSeasonType(category) != null) {
       val component = followingComponent(category)
       val following = _state.value.following(category)
       val fresh =
         component.fetchedAtMillis > 0L &&
           System.currentTimeMillis() - component.fetchedAtMillis < FOLLOWING_CACHE_MS
       if (following.cards.isEmpty() || !fresh) {
-      loadFollowing(
-        category = category,
+        loadFollowing(
+          category = category,
           silent = following.cards.isNotEmpty(),
-      )
+        )
+      }
     }
-  }
   }
 
   fun ensureLoaded(category: BangumiExploreCategory = _state.value.selectedCategory) {
@@ -195,7 +266,7 @@ class BangumiExploreViewModel : ViewModel() {
 
   fun refresh(category: BangumiExploreCategory = _state.value.selectedCategory) = load(category)
 
-  /** Refresh the "正在追" list from the network. Use [force] to bypass cache. */
+  /** 从网络刷新“正在追”列表。使用 [force] 绕过缓存。 */
   fun refreshFollowing(force: Boolean = false, silent: Boolean = false) {
     if (accountMid <= 0L) return
     val current = _state.value
@@ -207,7 +278,7 @@ class BangumiExploreViewModel : ViewModel() {
       component.fetchedAtMillis = 0L
       component.statusCache.clear()
     }
-    if (BiliApi.bangumiSeasonType(category) == null) return
+    if (BiliBangumiApi.bangumiSeasonType(category) == null) return
     loadFollowing(
       category = category,
       reset = true,
@@ -216,7 +287,7 @@ class BangumiExploreViewModel : ViewModel() {
     )
   }
 
-  /** Continue the horizontal "正在追" rail from its current server cursors. */
+  /** 从当前服务器游标继续加载横向“正在追”轨道。 */
   fun loadMoreFollowing(category: BangumiExploreCategory = _state.value.selectedCategory) {
     val current = _state.value
     val following = current.following(category)
@@ -226,7 +297,7 @@ class BangumiExploreViewModel : ViewModel() {
         following.loading ||
         following.refreshing ||
         following.loadingMore ||
-        BiliApi.bangumiSeasonType(category) == null
+        BiliBangumiApi.bangumiSeasonType(category) == null
     ) {
       return
     }
@@ -234,8 +305,7 @@ class BangumiExploreViewModel : ViewModel() {
   }
 
   /**
-   * Clear the cached following season status for a specific season so the next fetch picks up fresh
-   * data.
+   * 清除特定季度的追番状态缓存，让下一次拉取拿到最新数据。
    */
   fun clearFollowingStatusCache(seasonId: Long) {
     if (seasonId <= 0L) return
@@ -269,8 +339,7 @@ class BangumiExploreViewModel : ViewModel() {
   }
 
   /**
-   * Apply the currently selected episode to the matching category component while the server
-   * catches up.
+   * 在服务器追上的同时，把当前选中的分集应用到匹配的分类组件。
    */
   fun applyFollowingPlayback(seasonId: Long, episode: BangumiEpisode, positionMs: Long) {
     if (seasonId <= 0L || episode.id <= 0L) return
@@ -298,11 +367,9 @@ class BangumiExploreViewModel : ViewModel() {
   }
 
   /**
-   * Move the just-watched season's card to the front of the rail. Only the ordering changes; the
-   * card content is left untouched. With the season-stable LazyRow keys and
-   * `Modifier.animateItem()` this animates the old→new order transition in place instead of
-   * rebuilding the rail. The private history cache is reordered too so a later pagination merge
-   * cannot silently revert the move.
+   * 把刚看完的季度卡片移到轨道最前端。只有顺序改变，卡片内容不动。配合季度稳定的
+   * LazyRow key 和 `Modifier.animateItem()`，旧→新顺序的切换就地动画完成，而不是重建
+   * 轨道。私有历史缓存也一并重排，避免稍后的分页合并悄悄撤销这次移动。
    */
   fun moveFollowingToFront(seasonId: Long) {
     if (seasonId <= 0L) return
@@ -431,8 +498,7 @@ class BangumiExploreViewModel : ViewModel() {
             is FollowingPageResult.Continuation -> {
               response.batch.history?.let { history ->
                 val previousCursor = component.historyCursor
-                component.history =
-                  (component.history + history.cards).distinctBy(::followingKey)
+                component.history = (component.history + history.cards).distinctBy(::followingKey)
                 component.historyCursor = history.cursor
                 component.historyHasMore = history.hasMore && history.cursor != previousCursor
               }
@@ -451,9 +517,9 @@ class BangumiExploreViewModel : ViewModel() {
               overrideViewedAt = override.viewedAt,
             )
           }
-          val seasonType = BiliApi.bangumiSeasonType(requestedCategory) ?: return@onSuccess
+          val seasonType = BiliBangumiApi.bangumiSeasonType(requestedCategory) ?: return@onSuccess
           val rawCards =
-            BiliApi.mergeBangumiWatchingCards(component.followed, component.history, seasonType)
+            BiliBangumiApi.mergeBangumiWatchingCards(component.followed, component.history, seasonType)
               .map { applyFollowingPlaybackOverride(it, component) }
           val hasMore = component.historyHasMore || component.followedHasMore
           Log.d(
@@ -484,36 +550,34 @@ class BangumiExploreViewModel : ViewModel() {
             }
           }
 
-          // Do not hold pagination open while per-season status and episode-cover requests finish.
-          // They only enrich stable cards and can be cancelled/restarted from the newest snapshot.
+          // 在按季度状态和分集封面请求完成期间不要保持分页打开。它们只是丰富稳定卡片，
+          // 可以从最新快照取消/重启。
           val enrichmentGeneration = ++component.enrichmentGeneration
           val enrichmentStartedAt = SystemClock.elapsedRealtime()
           component.enrichmentJob?.cancel()
-          component.enrichmentJob =
-            viewModelScope.launch {
-              val resolvedCards =
-                withContext(Dispatchers.IO) {
-                  resolveFollowingEpisodeCovers(resolveFollowingStatuses(rawCards, component))
-                }
-              if (
-                requestedMid != accountMid ||
-                  component.enrichmentGeneration != enrichmentGeneration
-              ) {
-                return@launch
+          component.enrichmentJob = viewModelScope.launch {
+            val resolvedCards =
+              withContext(Dispatchers.IO) {
+                resolveFollowingEpisodeCovers(resolveFollowingStatuses(rawCards, component))
               }
-              updateFollowing(requestedCategory) { following ->
-                val cards =
-                  if (reset) sortFollowingCards(resolvedCards)
-                  else mergeFollowingPageStable(following.cards, resolvedCards)
-                if (followingSnapshotsEqual(following.cards, cards)) following
-                else following.copy(cards = cards)
-              }
-              Log.d(
-                FOLLOWING_LOG_TAG,
-                "enriched category=$requestedCategory visible=${resolvedCards.size} " +
-                  "durationMs=${SystemClock.elapsedRealtime() - enrichmentStartedAt}",
-              )
+            if (
+              requestedMid != accountMid || component.enrichmentGeneration != enrichmentGeneration
+            ) {
+              return@launch
             }
+            updateFollowing(requestedCategory) { following ->
+              val cards =
+                if (reset) sortFollowingCards(resolvedCards)
+                else mergeFollowingPageStable(following.cards, resolvedCards)
+              if (followingSnapshotsEqual(following.cards, cards)) following
+              else following.copy(cards = cards)
+            }
+            Log.d(
+              FOLLOWING_LOG_TAG,
+              "enriched category=$requestedCategory visible=${resolvedCards.size} " +
+                "durationMs=${SystemClock.elapsedRealtime() - enrichmentStartedAt}",
+            )
+          }
         }
         .onFailure { error ->
           if (error is CancellationException || requestedMid != accountMid) return@onFailure
@@ -558,8 +622,7 @@ class BangumiExploreViewModel : ViewModel() {
     var followedAttempted = false
     val historyCards = mutableListOf<SpaceContentCard>()
     val followedCards = mutableListOf<SpaceContentCard>()
-    val visibleExistingKeys =
-      (history + followed).mapTo(mutableSetOf(), ::followingKey)
+    val visibleExistingKeys = (history + followed).mapTo(mutableSetOf(), ::followingKey)
     var rounds = 0
     var visibleNewCards = 0
     while (
@@ -578,8 +641,7 @@ class BangumiExploreViewModel : ViewModel() {
                 loadWatchingHistoryBatch(
                   category = category,
                   cursor = nextHistoryCursor,
-                  existingKeys =
-                    (history + historyCards).mapTo(mutableSetOf(), ::followingKey),
+                  existingKeys = (history + historyCards).mapTo(mutableSetOf(), ::followingKey),
                   targetNewCards = FOLLOWING_PAGE_TARGET,
                   maxPages = FOLLOWING_PAGE_MAX_PAGES,
                 )
@@ -592,8 +654,7 @@ class BangumiExploreViewModel : ViewModel() {
                   mid = mid,
                   category = category,
                   firstPage = nextFollowedPage,
-                  existingKeys =
-                    (followed + followedCards).mapTo(mutableSetOf(), ::followingKey),
+                  existingKeys = (followed + followedCards).mapTo(mutableSetOf(), ::followingKey),
                   targetNewCards = FOLLOWING_PAGE_TARGET,
                   maxPages = FOLLOWING_PAGE_MAX_PAGES,
                 )
@@ -616,9 +677,9 @@ class BangumiExploreViewModel : ViewModel() {
       }
       rounds += 1
       visibleNewCards =
-        (historyCards + followedCards)
-          .distinctBy(::followingKey)
-          .count { followingKey(it) !in visibleExistingKeys }
+        (historyCards + followedCards).distinctBy(::followingKey).count {
+          followingKey(it) !in visibleExistingKeys
+        }
     }
     return FollowingContinuationBatch(
       history =
@@ -657,8 +718,8 @@ class BangumiExploreViewModel : ViewModel() {
         cards.distinctBy(::followingKey).count { followingKey(it) !in existingKeys } <
           targetNewCards
     ) {
-      val page = BiliApi.getBangumiWatchingHistoryPage(category, currentCursor)
-      val expectedSeasonType = BiliApi.bangumiSeasonType(category) ?: return page
+      val page = BiliBangumiApi.getBangumiWatchingHistoryPage(category, currentCursor)
+      val expectedSeasonType = BiliBangumiApi.bangumiSeasonType(category) ?: return page
       cards +=
         resolveFollowingSeasonTypes(page.cards).filter { it.seasonType == expectedSeasonType }
       val nextCursor = page.cursor
@@ -683,16 +744,15 @@ class BangumiExploreViewModel : ViewModel() {
           if (card.seasonType != 1 || (card.seasonId <= 0L && card.episodeId <= 0L)) {
             return@async card
           }
-          val authoritativeType =
-            semaphore.withPermit {
-              runCatching {
-                  BiliApi.getAuthoritativePgcSeasonType(
-                    seasonId = card.seasonId,
-                    episodeId = card.episodeId,
-                  )
-                }
-                .getOrDefault(0)
-            }
+          val authoritativeType = semaphore.withPermit {
+            runCatching {
+                BiliBangumiApi.getAuthoritativePgcSeasonType(
+                  seasonId = card.seasonId,
+                  episodeId = card.episodeId,
+                )
+              }
+              .getOrDefault(0)
+          }
           if (authoritativeType > 0 && authoritativeType != card.seasonType) {
             card.copy(seasonType = authoritativeType)
           } else card
@@ -720,7 +780,7 @@ class BangumiExploreViewModel : ViewModel() {
         cards.distinctBy(::followingKey).count { followingKey(it) !in existingKeys } <
           targetNewCards
     ) {
-      val response = BiliApi.getBangumiWatchingFollowedPage(mid, category, page)
+      val response = BiliBangumiApi.getBangumiWatchingFollowedPage(mid, category, page)
       cards += response.cards
       lastPage = page
       hasMore = response.hasMore
@@ -741,26 +801,26 @@ class BangumiExploreViewModel : ViewModel() {
     val semaphore = Semaphore(FOLLOWING_STATUS_RESOLVE_CONCURRENCY)
     cards
       .map { card ->
-      async {
-        if (
-          card.watchProgress != null ||
-            card.hasHistory ||
-            card.historicalOnly ||
-            card.seasonId <= 0L
-        ) {
-          return@async card.withResolvedProgressState()
+        async {
+          if (
+            card.watchProgress != null ||
+              card.hasHistory ||
+              card.historicalOnly ||
+              card.seasonId <= 0L
+          ) {
+            return@async card.withResolvedProgressState()
+          }
+          val cached = component.statusCache[card.seasonId]
+          val status =
+            cached
+              ?: semaphore.withPermit {
+                component.statusCache[card.seasonId]
+                  ?: BiliBangumiApi.getBangumiUserStatus(card.seasonId)?.also { resolved ->
+                    component.statusCache[card.seasonId] = resolved
+                  }
+              }
+          applyFollowingUserStatus(card, status)
         }
-        val cached = component.statusCache[card.seasonId]
-        val status =
-          cached
-            ?: semaphore.withPermit {
-              component.statusCache[card.seasonId]
-                ?: BiliApi.getBangumiUserStatus(card.seasonId)?.also { resolved ->
-                  component.statusCache[card.seasonId] = resolved
-                }
-            }
-        applyFollowingUserStatus(card, status)
-      }
       }
       .awaitAll()
   }
@@ -771,42 +831,42 @@ class BangumiExploreViewModel : ViewModel() {
     val semaphore = Semaphore(FOLLOWING_COVER_RESOLVE_CONCURRENCY)
     cards
       .mapIndexed { index, card ->
-      async {
-        val episodeId =
+        async {
+          val episodeId =
             card.watchProgress?.episodeId?.takeIf { it > 0L } ?: card.episodeId.takeIf { it > 0L }
-        if (
-          index >= FOLLOWING_COVER_RESOLVE_LIMIT ||
-            episodeId == null ||
-            card.historyCoverUrl.isNotBlank()
-        ) {
-          return@async card
+          if (
+            index >= FOLLOWING_COVER_RESOLVE_LIMIT ||
+              episodeId == null ||
+              card.historyCoverUrl.isNotBlank()
+          ) {
+            return@async card
+          }
+          val cover =
+            episodeCoverCache[episodeId]
+              ?: semaphore.withPermit {
+                episodeCoverCache[episodeId]
+                  ?: runCatching {
+                      val season = BiliBangumiApi.getBangumiSeason(episodeId = episodeId)
+                      (season.episodes + season.sections.flatMap { it.episodes })
+                        .firstOrNull { it.id == episodeId }
+                        ?.coverUrl
+                        .orEmpty()
+                    }
+                    .getOrDefault("")
+                    .also { resolved ->
+                      if (resolved.isNotBlank()) episodeCoverCache[episodeId] = resolved
+                    }
+              }
+          if (cover.isBlank()) card
+          else {
+            card.copy(
+              coverUrl = cover,
+              historyCoverUrl = cover,
+              episodeId = episodeId,
+              videoUrl = "https://www.bilibili.com/bangumi/play/ep$episodeId",
+            )
+          }
         }
-        val cover =
-          episodeCoverCache[episodeId]
-            ?: semaphore.withPermit {
-              episodeCoverCache[episodeId]
-                ?: runCatching {
-                    val season = BiliApi.getBangumiSeason(episodeId = episodeId)
-                    (season.episodes + season.sections.flatMap { it.episodes })
-                      .firstOrNull { it.id == episodeId }
-                      ?.coverUrl
-                      .orEmpty()
-                  }
-                  .getOrDefault("")
-                  .also { resolved ->
-                    if (resolved.isNotBlank()) episodeCoverCache[episodeId] = resolved
-                  }
-            }
-        if (cover.isBlank()) card
-        else {
-          card.copy(
-            coverUrl = cover,
-            historyCoverUrl = cover,
-            episodeId = episodeId,
-            videoUrl = "https://www.bilibili.com/bangumi/play/ep$episodeId",
-          )
-        }
-      }
       }
       .awaitAll()
   }
@@ -877,26 +937,26 @@ class BangumiExploreViewModel : ViewModel() {
     }
     requests[category] = viewModelScope.launch {
       val result =
-        withContext(Dispatchers.IO) { runCatching { BiliApi.getBangumiExplorePage(category) } }
-        result
-          .onSuccess { page ->
-            pageFetchedAtMillis[category] = System.currentTimeMillis()
-            _state.update {
-              it.copy(
-                pages = it.pages + (category to page),
-                loading = it.loading - category,
-              )
-            }
+        withContext(Dispatchers.IO) { runCatching { BiliBangumiApi.getBangumiExplorePage(category) } }
+      result
+        .onSuccess { page ->
+          pageFetchedAtMillis[category] = System.currentTimeMillis()
+          _state.update {
+            it.copy(
+              pages = it.pages + (category to page),
+              loading = it.loading - category,
+            )
           }
-          .onFailure { error ->
-            _state.update {
-              it.copy(
-                loading = it.loading - category,
-                errors = it.errors + (category to (error.message ?: "加载失败，请重试")),
-              )
-            }
+        }
+        .onFailure { error ->
+          _state.update {
+            it.copy(
+              loading = it.loading - category,
+              errors = it.errors + (category to (error.message ?: "加载失败，请重试")),
+            )
           }
-      }
+        }
+    }
   }
 }
 
@@ -912,13 +972,11 @@ internal fun shouldContinueFollowingScan(
   hasMore: Boolean,
   completedRounds: Int,
   maxRounds: Int,
-): Boolean =
-  visibleNewCards <= 0 && hasMore && completedRounds < maxRounds.coerceAtLeast(1)
+): Boolean = visibleNewCards <= 0 && hasMore && completedRounds < maxRounds.coerceAtLeast(1)
 
 /**
- * Cursor pages are older than the snapshot already shown. Update cards that gained progress in
- * place and append genuinely new rows, instead of globally sorting every positive timestamp ahead
- * of the followed-only filler cards.
+ * 游标页比已展示的快照更旧。就地更新获得新进度的卡片，并追加真正的新行，而不是把
+ * 每个正时间戳全局排序到仅有追番的填充卡片之前。
  */
 internal fun mergeFollowingPageStable(
   current: List<SpaceContentCard>,

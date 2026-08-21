@@ -2,17 +2,18 @@ package dev.openbili.webdemo.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.background
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -61,6 +62,9 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
@@ -69,10 +73,12 @@ import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -135,6 +141,12 @@ internal fun shouldPlayBangumiPreview(
   lifecycleStarted: Boolean,
 ): Boolean = active && !mainPageVisible && lifecycleStarted
 
+internal fun shouldEnableBangumiExploreControl(
+  controlMode: Boolean,
+  mainPageVisible: Boolean,
+  verticalSettling: Boolean,
+): Boolean = controlMode && mainPageVisible && !verticalSettling
+
 internal fun shouldCommitBangumiPreview(
   targetAvailable: Boolean,
   coverReady: Boolean,
@@ -144,15 +156,17 @@ internal fun bangumiPreloadDetailsSettled(
   items: List<BangumiRecommendation>,
   seasons: Map<String, BangumiSeason>,
   errors: Map<String, String>,
-): Boolean = items.filterNot(BangumiRecommendation::isLive).all { it.stableId in seasons || it.stableId in errors }
+): Boolean =
+  items.filterNot(BangumiRecommendation::isLive).all {
+    it.stableId in seasons || it.stableId in errors
+  }
 
 internal fun shouldHideBangumiRecommendationCard(cardId: String?, hiddenCardId: String?): Boolean =
   cardId != null && hiddenCardId != null && cardId == hiddenCardId
 
 /**
- * A detail page is drawn above the retained Bangumi root during a card return. Its Hero is still a
- * stable source layer, even though that root is intentionally inactive for input and preview
- * playback.
+ * 卡片返回期间，详情页绘制在保留的番剧根之上。其 Hero 仍是稳定的源图层，
+ * 即使该根有意对输入和预览播放保持不活跃。
  */
 internal fun shouldRetainBangumiHeroVisuals(
   active: Boolean,
@@ -160,7 +174,7 @@ internal fun shouldRetainBangumiHeroVisuals(
   retainedForDetailReturn: Boolean,
 ): Boolean = active || preloadEnabled || retainedForDetailReturn
 
-/** Returns null before touch slop, then locks the card gesture to its dominant direction. */
+/** 在触摸滑动阈值之前返回 null，然后把卡片手势锁定到其主导方向。 */
 internal fun bangumiCardGestureIsHorizontal(displacement: Offset, touchSlop: Float): Boolean? {
   if (displacement.getDistance() < touchSlop) return null
   return displacement.x.absoluteValue > displacement.y.absoluteValue
@@ -174,9 +188,13 @@ private const val PreviewPriorityNextEpisode = 3
 internal fun selectBangumiPreviewEpisode(sections: List<BangumiSection>): BangumiEpisode? {
   for (priority in PreviewPriorityPromo..PreviewPriorityNextEpisode) {
     sections.forEach { section ->
-      section.episodes.firstOrNull { episode ->
-        bangumiPreviewPriority(section, episode) == priority
-      }?.let { return it }
+      section.episodes
+        .firstOrNull { episode ->
+          bangumiPreviewPriority(section, episode) == priority
+        }
+        ?.let {
+          return it
+        }
     }
   }
   return null
@@ -197,8 +215,8 @@ private fun bangumiPreviewPriority(
   val sectionMusicVideo = sectionLabel.isBangumiMusicVideoLabel()
   val sectionHighlight = sectionLabel.isBangumiHighlightLabel()
   val sectionNextEpisode = sectionLabel.isBangumiNextEpisodePreviewLabel()
-  // A purely behind-the-scenes group is never a preview source. Mixed groups such as
-  // “PV＆花絮” still allow an item whose own title positively identifies it as a PV or MV.
+  // 纯幕后分组绝不作为预览源。像“PV＆花絮”这样的混合分组仍允许其标题明确标识为
+  // PV 或 MV 的条目。
   val sectionIsOnlyBehindScenes =
     sectionHasBehindScenes &&
       !sectionPromo &&
@@ -249,13 +267,11 @@ private fun String.isBangumiHighlightLabel(): Boolean =
 
 private fun String.isBangumiNextEpisodePreviewLabel(): Boolean =
   contains("预告") &&
-    (
-      contains("下集") ||
-        contains("下期") ||
-        contains("下一集") ||
-        contains("下回") ||
-        Regex("第[0-9一二三四五六七八九十百零〇]+集预告").containsMatchIn(this)
-    )
+    (contains("下集") ||
+      contains("下期") ||
+      contains("下一集") ||
+      contains("下回") ||
+      Regex("第[0-9一二三四五六七八九十百零〇]+集预告").containsMatchIn(this))
 
 private fun BangumiEpisode.isPlayableBangumiPreview(): Boolean =
   id > 0L && bvid.isNotBlank() && cid > 0L
@@ -275,18 +291,13 @@ internal fun recommendationPlaybackCover(
   season
     ?.let { selectBangumiAutoplayEpisode(it.sections, it.episodes) }
     ?.coverUrl
-    ?.takeIf(String::isNotBlank)
-    ?: season?.coverUrl?.takeIf(String::isNotBlank)
-    ?: item.cardUrl
+    ?.takeIf(String::isNotBlank) ?: season?.coverUrl?.takeIf(String::isNotBlank) ?: item.cardUrl
 
 internal fun recommendationMainEpisodeCover(
   item: BangumiRecommendation,
   season: BangumiSeason?,
 ): String =
-  season
-    ?.let { selectBangumiMainEpisode(it.episodes) }
-    ?.coverUrl
-    ?.takeIf(String::isNotBlank)
+  season?.let { selectBangumiMainEpisode(it.episodes) }?.coverUrl?.takeIf(String::isNotBlank)
     ?: season?.coverUrl?.takeIf(String::isNotBlank)
     ?: item.cardUrl
 
@@ -311,6 +322,10 @@ internal fun BangumiRecommendationScreen(
   onOpenExploreLandscape: (dev.openbili.webdemo.api.BangumiExploreItem, Rect) -> Unit,
   onOpenExplorePoster: (dev.openbili.webdemo.api.BangumiExploreItem, Rect) -> Unit,
   onOpenIndex: (Rect) -> Unit,
+  controlSecondLevelRequest: Int = 0,
+  controlFocusRestoreRequest: Int = 0,
+  controlLevel: BangumiControlLevel = BangumiControlLevel.ROOT,
+  onControlLevelChanged: (BangumiControlLevel) -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   val items = state.items
@@ -347,8 +362,8 @@ internal fun BangumiRecommendationScreen(
   BackHandler(enabled = active && livePlaceholderItem != null) { livePlaceholderItem = null }
 
   if (pageCount <= 0) {
-    // A transient carousel failure must not remove the entire Bangumi root. The explore page has
-    // its own endpoint and remains a valid destination while the first screen retries.
+    // 一次临时轮播故障绝不能移除整个番剧根。explore 页有自己的端点，
+    // 在第一屏重试期间仍是有效目的地。
     BangumiRecommendationFallbackWithExplore(
       active = active,
       currentAccountMid = currentAccountMid,
@@ -368,6 +383,11 @@ internal fun BangumiRecommendationScreen(
   val midpoint = Int.MAX_VALUE / 2
   val initialPage = remember { midpoint - Math.floorMod(midpoint, pageCount) }
   val pagerState = rememberPagerState(initialPage = initialPage, pageCount = { Int.MAX_VALUE })
+  val heroFocusRequester = remember { FocusRequester() }
+  val focusManager = LocalFocusManager.current
+  // 视频层覆盖根页后，根页仍会为返回转场保留在组合树中。控制器焦点必须跟随其
+  // 前台状态一起失效，否则方向键会穿透到已被视频遮住的内容卡。
+  val controlMode = LocalControlMode.current && active
   var mainPageVisible by remember { mutableStateOf(false) }
   var verticalPageMoving by remember { mutableStateOf(false) }
   val exploreState by exploreViewModel.state.collectAsState()
@@ -392,8 +412,9 @@ internal fun BangumiRecommendationScreen(
   val selectedSeason = seasons[selectedItem.stableId]
   val selectedPreviewEpisode =
     remember(selectedSeason) { selectedSeason?.let { selectBangumiPreviewEpisode(it.sections) } }
-  val selectedAutoplayEpisode =
-    selectedSeason?.let { selectBangumiAutoplayEpisode(it.sections, it.episodes) }
+  val selectedAutoplayEpisode = selectedSeason?.let {
+    selectBangumiAutoplayEpisode(it.sections, it.episodes)
+  }
   val selectedPreviewTarget =
     remember(selectedSeason, selectedAutoplayEpisode, selectedPreviewEpisode, selectedItem) {
       val season = selectedSeason ?: return@remember null
@@ -405,6 +426,36 @@ internal fun BangumiRecommendationScreen(
         isPromotional = selectedPreviewEpisode != null,
       )
     }
+
+  LaunchedEffect(active, controlMode, controlSecondLevelRequest) {
+    if (active && controlMode && controlLevel == BangumiControlLevel.ROOT) {
+      onControlLevelChanged(BangumiControlLevel.HERO)
+    }
+  }
+  LaunchedEffect(
+    active,
+    controlMode,
+    controlLevel,
+  ) {
+    if (active && controlMode && controlLevel == BangumiControlLevel.HERO) {
+      focusManager.clearFocus(force = true)
+    }
+  }
+  LaunchedEffect(
+    pagerState.settledPage,
+    active,
+    controlMode,
+    controlLevel,
+    controlFocusRestoreRequest,
+  ) {
+    if (active && controlMode && controlLevel == BangumiControlLevel.HERO) {
+      withFrameNanos {}
+      runCatching { heroFocusRequester.requestFocus() }
+    }
+  }
+  DisposableEffect(Unit) {
+    onDispose { onControlLevelChanged(BangumiControlLevel.ROOT) }
+  }
   val selectedPreviewCoverKey =
     selectedPreviewTarget?.item?.coverUrl?.let(::bangumiPreviewCoverCacheKey)
   val selectedPreviewCoverReady =
@@ -413,9 +464,8 @@ internal fun BangumiRecommendationScreen(
         LoadedFeedImageRegistry.bitmap(selectedPreviewCoverKey) != null)
 
   val imageLoadingEnabled = (active || preloadEnabled) && !interactionActive
-  // `active` governs input and the preview player. A detail page keeps this root composed beneath
-  // it, so Hero artwork needs a separate visual-retention signal and must not turn into its black
-  // placeholder while the right card alone performs the shared transition.
+  // `active` 支配输入和预览播放器。详情页让此根保持组合在其下方，因此 Hero 作品图
+  // 需要一个单独的视觉保留信号，且不能只让右侧卡片执行共享转场时变成黑色占位。
   val heroBackgroundLoadingEnabled =
     shouldRetainBangumiHeroVisuals(active, preloadEnabled, retainedForDetailReturn) &&
       !interactionActive &&
@@ -444,8 +494,8 @@ internal fun BangumiRecommendationScreen(
     }
   }
 
-  // The recommendation carousel is a visual destination, so cold-start readiness covers every
-  // item rather than only the currently composed pager neighbourhood.
+  // 推荐轮播是视觉目的地，因此冷启动就绪要覆盖每一项，
+  // 而不只是当前组合的分页邻域。
   val preloadItems = items.distinctBy(BangumiRecommendation::stableId)
   val preloadCoverKeys =
     preloadItems
@@ -459,26 +509,23 @@ internal fun BangumiRecommendationScreen(
       .filter(String::isNotBlank)
       .distinct()
       .map(::bangumiPreviewCoverCacheKey)
-  val preloadBackgroundKeys =
-    preloadItems.map { item -> "bangumi-background-bitmap-${item.stableId}" }
+  val preloadBackgroundKeys = preloadItems.map { item ->
+    "bangumi-background-bitmap-${item.stableId}"
+  }
   val preloadPosterKeys =
     preloadItems
       .mapNotNull { item -> seasons[item.stableId]?.coverUrl?.takeIf(String::isNotBlank) }
       .distinct()
-  val seasonRequestsSettled =
-    bangumiPreloadDetailsSettled(preloadItems, seasons, errors)
-  val preloadCoversReady =
-    preloadCoverKeys.all { key ->
-      key in readyPreviewCoverKeys || LoadedFeedImageRegistry.bitmap(key) != null
-    }
-  val preloadBackgroundsReady =
-    preloadBackgroundKeys.all { key ->
-      key in readyBackgroundKeys || LoadedFeedImageRegistry.bitmap(key) != null
-    }
-  val preloadPostersReady =
-    preloadPosterKeys.all { key ->
-      key in readyPosterKeys || LoadedFeedImageRegistry.contains(key)
-    }
+  val seasonRequestsSettled = bangumiPreloadDetailsSettled(preloadItems, seasons, errors)
+  val preloadCoversReady = preloadCoverKeys.all { key ->
+    key in readyPreviewCoverKeys || LoadedFeedImageRegistry.bitmap(key) != null
+  }
+  val preloadBackgroundsReady = preloadBackgroundKeys.all { key ->
+    key in readyBackgroundKeys || LoadedFeedImageRegistry.bitmap(key) != null
+  }
+  val preloadPostersReady = preloadPosterKeys.all { key ->
+    key in readyPosterKeys || LoadedFeedImageRegistry.contains(key)
+  }
   LaunchedEffect(
     preloadEnabled,
     seasonRequestsSettled,
@@ -520,7 +567,8 @@ internal fun BangumiRecommendationScreen(
           targetAvailable = target != null,
           coverReady = selectedPreviewCoverReady,
         )
-    ) return@LaunchedEffect
+    )
+      return@LaunchedEffect
 
     onPreviewChanged(target)
   }
@@ -592,8 +640,7 @@ internal fun BangumiRecommendationScreen(
             loadingEnabled = true,
             retainBitmap = true,
             onBitmapLoaded = {
-              readyPreviewCoverKeys =
-                readyPreviewCoverKeys + bangumiPreviewCoverCacheKey(coverUrl)
+              readyPreviewCoverKeys = readyPreviewCoverKeys + bangumiPreviewCoverCacheKey(coverUrl)
             },
             fadeIn = false,
           )
@@ -613,8 +660,7 @@ internal fun BangumiRecommendationScreen(
           loadingEnabled = true,
           retainBitmap = true,
           onBitmapLoaded = {
-            readyBackgroundKeys =
-              readyBackgroundKeys + "bangumi-background-bitmap-${item.stableId}"
+            readyBackgroundKeys = readyBackgroundKeys + "bangumi-background-bitmap-${item.stableId}"
           },
           fadeIn = false,
           contentScale = ContentScale.Crop,
@@ -647,33 +693,62 @@ internal fun BangumiRecommendationScreen(
     var settleJob by remember { mutableStateOf<Job?>(null) }
     var verticalSettling by remember { mutableStateOf(false) }
 
-    fun settleVerticalPage(showMainPage: Boolean) {
+    fun settleVerticalPage(showMainPage: Boolean, onSettled: () -> Unit = {}) {
       settleJob?.cancel()
       verticalSettling = true
-      settleJob =
-        animationScope.launch {
-          try {
-            val animation = androidx.compose.animation.core.Animatable(transitionOffsetPx)
-            animation.updateBounds(lowerBound = 0f, upperBound = screenHeightPx)
-            animation.animateTo(
-              targetValue = if (showMainPage) screenHeightPx else 0f,
-              animationSpec = spring(dampingRatio = .86f, stiffness = 360f),
-            ) {
-              transitionOffsetPx = value
-            }
-            mainPageVisible = showMainPage
-          } finally {
-            verticalSettling = false
-            verticalPageMoving = false
-            interactionActive = false
-            settleJob = null
+      settleJob = animationScope.launch {
+        var completed = false
+        try {
+          val animation = androidx.compose.animation.core.Animatable(transitionOffsetPx)
+          animation.updateBounds(lowerBound = 0f, upperBound = screenHeightPx)
+          animation.animateTo(
+            targetValue = if (showMainPage) screenHeightPx else 0f,
+            animationSpec = spring(dampingRatio = .86f, stiffness = 360f),
+          ) {
+            transitionOffsetPx = value
           }
+          mainPageVisible = showMainPage
+          completed = true
+        } finally {
+          verticalSettling = false
+          verticalPageMoving = false
+          interactionActive = false
+          settleJob = null
+          if (completed) onSettled()
         }
+      }
     }
 
-    // Detail/player routes sit above this root but keep it composed for the return transition.
-    // Never let their system Back fall through and also collapse this retained page.
-    BackHandler(enabled = active && mainPageVisible && !verticalSettling) { settleVerticalPage(false) }
+    // 详情/播放器路由位于此根之上，但为返回转场保持其组合。
+    // 绝不让它们的系统返回穿透并同时折叠这个保留页面。
+    BackHandler(enabled = active && mainPageVisible && !verticalSettling) {
+      settleVerticalPage(false)
+    }
+
+    BackHandler(
+      enabled =
+        active &&
+          controlMode &&
+          !verticalSettling &&
+          controlLevel in
+          setOf(
+            BangumiControlLevel.HERO,
+            BangumiControlLevel.EXPLORE_NAV,
+            BangumiControlLevel.EXPLORE_CONTENT,
+            BangumiControlLevel.EXPLORE_HERO,
+          ),
+    ) {
+      when (controlLevel) {
+        BangumiControlLevel.HERO -> onControlLevelChanged(BangumiControlLevel.ROOT)
+        BangumiControlLevel.EXPLORE_CONTENT ->
+          onControlLevelChanged(BangumiControlLevel.EXPLORE_NAV)
+        BangumiControlLevel.EXPLORE_NAV ->
+          settleVerticalPage(false) { onControlLevelChanged(BangumiControlLevel.HERO) }
+        BangumiControlLevel.EXPLORE_HERO ->
+          onControlLevelChanged(BangumiControlLevel.EXPLORE_CONTENT)
+        else -> Unit
+      }
+    }
 
     fun dragRecommendationBack(deltaPx: Float) {
       if (!mainPageVisible || verticalSettling) return
@@ -685,57 +760,66 @@ internal fun BangumiRecommendationScreen(
     fun releaseRecommendationBack(velocityY: Float) {
       if (!mainPageVisible || verticalSettling) return
       val revealedHeight = screenHeightPx - transitionOffsetPx
-      val returnToRecommendation =
-        revealedHeight > screenHeightPx * .18f || velocityY > 900f
+      val returnToRecommendation = revealedHeight > screenHeightPx * .18f || velocityY > 900f
       settleVerticalPage(showMainPage = !returnToRecommendation)
     }
 
-    // Once the explore page is settled, its LazyColumn owns vertical drags. Keeping this root
-    // detector active there was the direct cause of the permanent non-scrollable blank page.
+    // explore 页稳定后，其 LazyColumn 拥有垂直拖动。让此根检测器在那里保持活跃，
+    // 正是永久无法滚动的空白页的直接原因。
     val verticalTransitionModifier =
       if (active && !mainPageVisible) {
         Modifier.pointerInput(screenHeightPx) {
-        var dragDistance = 0f
-        detectVerticalDragGestures(
-          onDragStart = {
-            dragDistance = 0f
-            verticalPageMoving = true
-            interactionActive = true
-          },
-          onVerticalDrag = { change, dragAmount ->
-            change.consume()
-            dragDistance -= dragAmount
-            val pageBase = if (mainPageVisible) screenHeightPx else 0f
-            val requested = pageBase + dragDistance
-            transitionOffsetPx =
-              when {
-                !mainPageVisible && requested > 0f -> {
-                  val resisted = requested.coerceAtMost(transitionThresholdPx) * .30f
-                  val beyondThreshold = (requested - transitionThresholdPx).coerceAtLeast(0f)
-                  (resisted + beyondThreshold).coerceIn(0f, screenHeightPx)
+          var dragDistance = 0f
+          detectVerticalDragGestures(
+            onDragStart = {
+              dragDistance = 0f
+              verticalPageMoving = true
+              interactionActive = true
+            },
+            onVerticalDrag = { change, dragAmount ->
+              change.consume()
+              dragDistance -= dragAmount
+              val pageBase = if (mainPageVisible) screenHeightPx else 0f
+              val requested = pageBase + dragDistance
+              transitionOffsetPx =
+                when {
+                  !mainPageVisible && requested > 0f -> {
+                    val resisted = requested.coerceAtMost(transitionThresholdPx) * .30f
+                    val beyondThreshold = (requested - transitionThresholdPx).coerceAtLeast(0f)
+                    (resisted + beyondThreshold).coerceIn(0f, screenHeightPx)
+                  }
+                  mainPageVisible && requested < screenHeightPx ->
+                    requested.coerceIn(0f, screenHeightPx)
+                  else -> pageBase
                 }
-                mainPageVisible && requested < screenHeightPx ->
-                  requested.coerceIn(0f, screenHeightPx)
-                else -> pageBase
-              }
-          },
-          onDragEnd = {
-            val showMain =
-              if (mainPageVisible) dragDistance >= -transitionThresholdPx
-              else dragDistance > transitionThresholdPx
-            settleVerticalPage(showMain)
-          },
-          onDragCancel = { settleVerticalPage(mainPageVisible) },
-        )
+            },
+            onDragEnd = {
+              val showMain =
+                if (mainPageVisible) dragDistance >= -transitionThresholdPx
+                else dragDistance > transitionThresholdPx
+              settleVerticalPage(showMain)
+            },
+            onDragCancel = { settleVerticalPage(mainPageVisible) },
+          )
         }
       } else {
         Modifier
       }
 
-    Box(Modifier.fillMaxSize()) {
-      // The explore page is the stable bottom layer. It must be measured in the viewport rather
-      // than placed as a second child below a one-screen Column; otherwise its semantics and draw
-      // content are clipped when the recommendation layer moves away.
+    val controllerBoundaryModifier =
+      if (controlMode) {
+        Modifier.focusProperties {
+            onExit = {
+              if (controlLevel != BangumiControlLevel.ROOT) cancelFocusChange()
+            }
+          }
+          .focusGroup()
+      } else {
+        Modifier
+      }
+    Box(Modifier.fillMaxSize().then(controllerBoundaryModifier)) {
+      // explore 页是稳定的底层。它必须在视口中测量，而不是作为第二个子项放在一屏
+      // Column 之下；否则推荐层移开时其语义和绘制内容会被裁剪。
       BangumiExploreScreen(
         active = active,
         interactionEnabled = active && mainPageVisible && !verticalSettling,
@@ -749,6 +833,25 @@ internal fun BangumiRecommendationScreen(
         onOpenLandscape = onOpenExploreLandscape,
         onOpenPoster = onOpenExplorePoster,
         onOpenIndex = onOpenIndex,
+        // 推荐封面与探索页会同时保留在组合树中，但只能让当前可见层参与焦点竞争。
+        controlMode =
+          shouldEnableBangumiExploreControl(
+            controlMode = controlMode,
+            mainPageVisible = mainPageVisible,
+            verticalSettling = verticalSettling,
+          ),
+        controlLevel = controlLevel,
+        onControlLevelChanged = onControlLevelChanged,
+        onControlExploreNavUp = {
+          settleVerticalPage(false) { onControlLevelChanged(BangumiControlLevel.HERO) }
+        },
+        controlFocusRestoreRequest = controlFocusRestoreRequest,
+        returnAnchor = exploreViewModel::returnAnchor,
+        onRememberReturnAnchor = exploreViewModel::rememberReturnAnchor,
+        onUpdateReturnAnchorFollowingScroll =
+          exploreViewModel::updateReturnAnchorFollowingScroll,
+        onUpdateReturnAnchorSourceBounds = exploreViewModel::updateReturnAnchorSourceBounds,
+        onConsumeReturnAnchor = exploreViewModel::consumeReturnAnchor,
         modifier = Modifier.fillMaxSize(),
       )
       val pageProgress = (transitionOffsetPx / screenHeightPx).coerceIn(0f, 1f)
@@ -757,17 +860,17 @@ internal fun BangumiRecommendationScreen(
           .zIndex(.5f)
           .background(Color.Black.copy(alpha = .18f * (1f - pageProgress)))
       )
-      // This full viewport input layer belongs to the recommendation cover, not only its visible
-      // artwork. It closes the transparent-area hit-test hole into the explore cards underneath.
+      // 这个全视口输入层属于推荐封面，而不只是其可见作品图。它堵住了透明区域
+      // 穿透命中下面 explore 卡片的洞。
       Box(Modifier.fillMaxSize().then(verticalTransitionModifier).zIndex(1f)) {
         BangumiRecommendationHero(
-          // Keep the local TextureView mounted during a vertical drag so the decoded video moves
-          // with the recommendation cover instead of being replaced by a delayed surface portal.
+          // 垂直拖动期间保持本地 TextureView 挂载，让已解码的视频随推荐封面一起移动，
+          // 而不是被延迟的表面门户替换。
           active = previewPlaybackActive,
           modifier =
-            Modifier.fillMaxWidth()
-              .height(screenHeight)
-              .offset { IntOffset(0, -transitionOffsetPx.roundToInt()) },
+            Modifier.fillMaxWidth().height(screenHeight).offset {
+              IntOffset(0, -transitionOffsetPx.roundToInt())
+            },
           selectedItem = selectedItem,
           backgroundFromItem = blendFromItem,
           backgroundToItem = blendToItem,
@@ -807,6 +910,19 @@ internal fun BangumiRecommendationScreen(
             }
             interactionActive = false
           },
+          heroFocusRequester = heroFocusRequester,
+          controlMode = controlMode,
+          controlLevel = controlLevel,
+          onControlHeroMove = { delta ->
+            animationScope.launch {
+              pagerState.animateScrollToPage((pagerState.currentPage + delta).coerceAtLeast(0))
+            }
+          },
+          onControlHeroDown = {
+            settleVerticalPage(true) {
+              onControlLevelChanged(BangumiControlLevel.EXPLORE_NAV)
+            }
+          },
         )
       }
       BangumiUpwardHint(
@@ -825,15 +941,13 @@ internal fun BangumiRecommendationScreen(
       )
       if (verticalSettling) {
         Box(
-          Modifier.fillMaxSize()
-            .zIndex(20f)
-            .pointerInput(Unit) {
-              awaitPointerEventScope {
-                while (true) {
-                  awaitPointerEvent().changes.forEach { it.consume() }
-                }
+          Modifier.fillMaxSize().zIndex(20f).pointerInput(Unit) {
+            awaitPointerEventScope {
+              while (true) {
+                awaitPointerEvent().changes.forEach { it.consume() }
               }
             }
+          }
         )
       }
       livePlaceholderItem?.let { item ->
@@ -876,7 +990,7 @@ private fun BangumiRecommendationFallbackWithExplore(
     }
   }
 
-  // No root PV exists in this fallback, so clear the retained target explicitly.
+  // 此回退中不存在根 PV，因此显式清除保留的目标。
   LaunchedEffect(active) {
     onPreviewChanged(null)
   }
@@ -891,21 +1005,22 @@ private fun BangumiRecommendationFallbackWithExplore(
     fun settle(showExplore: Boolean) {
       settleJob?.cancel()
       settling = true
-      settleJob =
-        scope.launch {
-          try {
-            val animation = androidx.compose.animation.core.Animatable(offsetPx)
-            animation.updateBounds(0f, screenHeightPx)
-            animation.animateTo(
-              targetValue = if (showExplore) screenHeightPx else 0f,
-              animationSpec = spring(dampingRatio = .86f, stiffness = 360f),
-            ) { offsetPx = value }
-            exploreVisible = showExplore
-          } finally {
-            settling = false
-            settleJob = null
+      settleJob = scope.launch {
+        try {
+          val animation = androidx.compose.animation.core.Animatable(offsetPx)
+          animation.updateBounds(0f, screenHeightPx)
+          animation.animateTo(
+            targetValue = if (showExplore) screenHeightPx else 0f,
+            animationSpec = spring(dampingRatio = .86f, stiffness = 360f),
+          ) {
+            offsetPx = value
           }
+          exploreVisible = showExplore
+        } finally {
+          settling = false
+          settleJob = null
         }
+      }
     }
 
     BackHandler(enabled = active && exploreVisible && !settling) { settle(false) }
@@ -918,8 +1033,7 @@ private fun BangumiRecommendationFallbackWithExplore(
     fun releaseFallbackRecommendationBack(velocityY: Float) {
       if (!exploreVisible || settling) return
       val revealedHeight = screenHeightPx - offsetPx
-      val returnToRecommendation =
-        revealedHeight > screenHeightPx * .18f || velocityY > 900f
+      val returnToRecommendation = revealedHeight > screenHeightPx * .18f || velocityY > 900f
       settle(showExplore = !returnToRecommendation)
     }
     val verticalGestureModifier =
@@ -957,6 +1071,12 @@ private fun BangumiRecommendationFallbackWithExplore(
         onOpenLandscape = onOpenExploreLandscape,
         onOpenPoster = onOpenExplorePoster,
         onOpenIndex = onOpenIndex,
+        returnAnchor = exploreViewModel::returnAnchor,
+        onRememberReturnAnchor = exploreViewModel::rememberReturnAnchor,
+        onUpdateReturnAnchorFollowingScroll =
+          exploreViewModel::updateReturnAnchorFollowingScroll,
+        onUpdateReturnAnchorSourceBounds = exploreViewModel::updateReturnAnchorSourceBounds,
+        onConsumeReturnAnchor = exploreViewModel::consumeReturnAnchor,
         modifier = Modifier.fillMaxSize(),
       )
       val pageProgress = (offsetPx / screenHeightPx).coerceIn(0f, 1f)
@@ -970,9 +1090,9 @@ private fun BangumiRecommendationFallbackWithExplore(
           state = state,
           onRefresh = onRefresh,
           modifier =
-            Modifier.fillMaxWidth()
-              .height(screenHeight)
-              .offset { IntOffset(0, -offsetPx.roundToInt()) },
+            Modifier.fillMaxWidth().height(screenHeight).offset {
+              IntOffset(0, -offsetPx.roundToInt())
+            },
         )
       }
       BangumiUpwardHint(
@@ -991,13 +1111,11 @@ private fun BangumiRecommendationFallbackWithExplore(
       )
       if (settling) {
         Box(
-          Modifier.fillMaxSize()
-            .zIndex(20f)
-            .pointerInput(Unit) {
-              awaitPointerEventScope {
-                while (true) awaitPointerEvent().changes.forEach { it.consume() }
-              }
+          Modifier.fillMaxSize().zIndex(20f).pointerInput(Unit) {
+            awaitPointerEventScope {
+              while (true) awaitPointerEvent().changes.forEach { it.consume() }
             }
+          }
         )
       }
     }
@@ -1046,8 +1164,8 @@ private fun BangumiUpwardHint(
   transitionProgress: Float,
   modifier: Modifier = Modifier,
 ) {
-  // The adjacent Bangumi root page stays composed for instant tab restoration. Do not keep its
-  // decorative frame clock alive while the hint is completely invisible behind another page.
+  // 相邻的番剧根页保持组合以实现即时标签恢复。当提示完全不可见地藏在另一页之后时，
+  // 不要让其装饰性帧时钟继续存活。
   if (visibility <= 0f) return
   val breathing = rememberInfiniteTransition(label = "bangumiUpHint")
   val alpha by
@@ -1075,12 +1193,14 @@ private fun BangumiUpwardHint(
   val dismissTravelPx = with(LocalDensity.current) { 36.dp.toPx() }
   Box(
     modifier =
-      modifier.graphicsLayer {
+      modifier
+        .graphicsLayer {
           this.alpha = alpha * visibility
-          // The hint belongs to the recommendation cover: it rises with that cover while fading
-          // out, and naturally performs the exact inverse when the cover is pulled back down.
+          // 提示属于推荐封面：它随该封面淡出时一同升起，
+          // 并在封面被拉回时自然地执行完全相反的动作。
           translationY = lift * visibility - dismissTravelPx * transitionProgress.coerceIn(0f, 1f)
-        }.size(width = 42.dp, height = 38.dp),
+        }
+        .size(width = 42.dp, height = 38.dp)
   ) {
     Icon(
       imageVector = Icons.Rounded.KeyboardArrowUp,
@@ -1136,7 +1256,8 @@ private fun LiveUnavailableScreen(
         "返回",
         color = MaterialTheme.colorScheme.primary,
         style = MaterialTheme.typography.labelLarge,
-        modifier = Modifier.clip(RoundedCornerShape(12.dp)).clickable(onClick = onBack).padding(14.dp),
+        modifier =
+          Modifier.clip(RoundedCornerShape(12.dp)).clickable(onClick = onBack).padding(14.dp),
       )
     }
   }
@@ -1171,6 +1292,11 @@ private fun BangumiRecommendationHero(
   onTogglePreviewMute: () -> Unit,
   onPreviewCardGestureStart: () -> Unit,
   onPreviewCardGestureEnd: (pageChanged: Boolean) -> Unit,
+  heroFocusRequester: FocusRequester,
+  controlMode: Boolean,
+  controlLevel: BangumiControlLevel,
+  onControlHeroMove: (Int) -> Unit,
+  onControlHeroDown: () -> Unit,
 ) {
   BoxWithConstraints(modifier) {
     if (backgroundFromItem != null) {
@@ -1268,14 +1394,16 @@ private fun BangumiRecommendationHero(
             onOpenLive = onOpenLive,
             onGestureStart = onPreviewCardGestureStart,
             onGestureEnd = onPreviewCardGestureEnd,
+            heroFocusRequester = heroFocusRequester,
+            controlMode = controlMode,
+            controlLevel = controlLevel,
+            onControlHeroMove = onControlHeroMove,
+            onControlHeroDown = onControlHeroDown,
           )
         }
       } else {
         Column(
-          Modifier.fillMaxWidth()
-            .weight(1f)
-            .padding(horizontal = 20.dp)
-            .offset(y = (-8).dp),
+          Modifier.fillMaxWidth().weight(1f).padding(horizontal = 20.dp).offset(y = (-8).dp),
           verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
           BangumiPreviewPlayer(
@@ -1303,9 +1431,14 @@ private fun BangumiRecommendationHero(
             onHeroCardTransitionFinished = onHeroCardTransitionFinished,
             onOpen = onOpenMainEpisode,
             onOpenLive = onOpenLive,
-            onGestureStart = onPreviewCardGestureStart,
-            onGestureEnd = onPreviewCardGestureEnd,
-          )
+          onGestureStart = onPreviewCardGestureStart,
+          onGestureEnd = onPreviewCardGestureEnd,
+          heroFocusRequester = heroFocusRequester,
+          controlMode = controlMode,
+          controlLevel = controlLevel,
+          onControlHeroMove = onControlHeroMove,
+          onControlHeroDown = onControlHeroDown,
+        )
         }
       }
     }
@@ -1402,8 +1535,7 @@ private fun BangumiPreviewPlayer(
 ) {
   val fallbackUrl = season?.coverUrl?.takeIf(String::isNotBlank) ?: item.cardUrl
   Surface(
-    modifier =
-      modifier.fillMaxWidth().aspectRatio(16f / 9f),
+    modifier = modifier.fillMaxWidth().aspectRatio(16f / 9f),
     shape = VideoShapeTokens.Player,
     color = Color.Black,
     shadowElevation = 0.dp,
@@ -1455,7 +1587,8 @@ private fun BangumiPreviewPlayer(
             )
             CachedBangumiPreviewTransitionCover(
               coverUrl = previewCoverBlend.toCoverUrl,
-              modifier = Modifier.fillMaxSize().graphicsLayer { alpha = previewCoverBlend.progress },
+              modifier =
+                Modifier.fillMaxSize().graphicsLayer { alpha = previewCoverBlend.progress },
             )
           } else {
             CoverImage(
@@ -1523,7 +1656,6 @@ private fun BangumiPreviewPlayer(
           style = MaterialTheme.typography.bodyLarge,
         )
       }
-
     }
   }
 }
@@ -1542,6 +1674,11 @@ private fun BangumiCardStack(
   onOpenLive: (BangumiRecommendation) -> Unit,
   onGestureStart: () -> Unit,
   onGestureEnd: (pageChanged: Boolean) -> Unit,
+  heroFocusRequester: FocusRequester,
+  controlMode: Boolean,
+  controlLevel: BangumiControlLevel,
+  onControlHeroMove: (Int) -> Unit,
+  onControlHeroDown: () -> Unit,
 ) {
   val gestureScope = rememberCoroutineScope()
   var gestureSettleJob by remember { mutableStateOf<Job?>(null) }
@@ -1567,12 +1704,11 @@ private fun BangumiCardStack(
             if (!change.pressed) break
           }
           if (horizontalGesture == true && active) {
-            gestureSettleJob =
-              gestureScope.launch {
-                withFrameNanos {}
-                while (pagerState.isScrollInProgress) withFrameNanos {}
-                onGestureEnd(pagerState.settledPage != startPage)
-              }
+            gestureSettleJob = gestureScope.launch {
+              withFrameNanos {}
+              while (pagerState.isScrollInProgress) withFrameNanos {}
+              onGestureEnd(pagerState.settledPage != startPage)
+            }
           }
         }
       },
@@ -1584,8 +1720,7 @@ private fun BangumiCardStack(
     val index = Math.floorMod(page, items.size)
     val item = items[index]
     val season = seasons[item.stableId]
-    val navigation =
-      remember(item, season) { mainEpisodeNavigationTarget(item, season) }
+    val navigation = remember(item, season) { mainEpisodeNavigationTarget(item, season) }
     var bounds by remember(page) { mutableStateOf(Rect.Zero) }
     var opening by remember(page) { mutableStateOf(false) }
     val interactionSource = remember(page) { MutableInteractionSource() }
@@ -1598,8 +1733,7 @@ private fun BangumiCardStack(
       )
     val chromeAlpha = remember(page) { Animatable(1f) }
     var chromeAnimationJob by remember(page) { mutableStateOf<Job?>(null) }
-    val signedPageOffset =
-      (pagerState.currentPage - page) + pagerState.currentPageOffsetFraction
+    val signedPageOffset = (pagerState.currentPage - page) + pagerState.currentPageOffsetFraction
     val pageOffset = signedPageOffset.absoluteValue
     val stackScale = (1f - pageOffset.coerceIn(0f, 1f) * .075f) * pressScale
     val selected = page == pagerState.currentPage
@@ -1608,13 +1742,31 @@ private fun BangumiCardStack(
       if (opening && active && hiddenCardId == null) {
         opening = false
         chromeAnimationJob?.cancel()
-        chromeAnimationJob =
-          launch {
-            // The returning cover has already landed on this real card. Restore its information
-            // only after that handoff, keeping the shared home-style flight cover-only.
-            chromeAlpha.animateTo(1f, tween(220))
-            onHeroCardTransitionFinished()
+        chromeAnimationJob = launch {
+          // 返回封面已经落在这张真实卡片上。只在交接之后恢复其信息，
+          // 让共享的首页风格飞行保持仅封面。
+          chromeAlpha.animateTo(1f, tween(220))
+          onHeroCardTransitionFinished()
+        }
+      }
+    }
+    fun openSelected() {
+      if (!selected || opening || (navigation == null && !item.isLive)) return
+      if (item.isLive) {
+        onOpenLive(item)
+      } else {
+        opening = true
+        navigation?.let { target ->
+          chromeAnimationJob?.cancel()
+          chromeAnimationJob = gestureScope.launch {
+            // 匹配成熟的首页卡片契约：共享覆盖层只飞封面。这个 Hero 专属前奏
+            // 在卡片仍静止时完成，然后把其真实的 16:9 布局边界交给现有的首页
+            // 转场管线。
+            chromeAlpha.animateTo(0f, tween(220))
+            withFrameNanos {}
+            onOpen(target.first, target.second, bounds)
           }
+        }
       }
     }
     val clickModifier =
@@ -1622,25 +1774,7 @@ private fun BangumiCardStack(
         Modifier.clickable(
           interactionSource = interactionSource,
           indication = null,
-        ) {
-          if (item.isLive) {
-            onOpenLive(item)
-          } else if (!opening) {
-            opening = true
-            navigation?.let { target ->
-              chromeAnimationJob?.cancel()
-              chromeAnimationJob =
-                gestureScope.launch {
-                  // Match the mature home-card contract: the shared overlay flies only the cover.
-                  // This Hero-specific prelude completes while the card is still stationary, then
-                  // hands its real 16:9 layout bounds to the existing home transition pipeline.
-                  chromeAlpha.animateTo(0f, tween(220))
-                  withFrameNanos {}
-                  onOpen(target.first, target.second, bounds)
-                }
-            }
-          }
-        }
+        ) { openSelected() }
       } else {
         Modifier
       }
@@ -1666,6 +1800,48 @@ private fun BangumiCardStack(
               alpha = if (hidden) 0f else 1f - pageOffset.coerceIn(0f, 1f) * .14f
             }
             .onGloballyPositioned { bounds = it.boundsInRoot() }
+            .bangumiControllerFocus(
+              focusRequester = heroFocusRequester.takeIf { selected },
+              enabled = controlMode && controlLevel == BangumiControlLevel.HERO && selected,
+              shape = VideoShapeTokens.Card,
+              onKeyEvent = { event ->
+                if (
+                  !selected ||
+                    !controlMode ||
+                    controlLevel != BangumiControlLevel.HERO
+                ) {
+                  false
+                } else {
+                  when (event.nativeKeyEvent.keyCode) {
+                    android.view.KeyEvent.KEYCODE_DPAD_LEFT,
+                    android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                      if (
+                        event.type == androidx.compose.ui.input.key.KeyEventType.KeyDown &&
+                          event.nativeKeyEvent.repeatCount == 0
+                      ) {
+                        onControlHeroMove(
+                          if (event.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT)
+                            -1
+                          else 1
+                        )
+                      }
+                      true
+                    }
+                    android.view.KeyEvent.KEYCODE_DPAD_DOWN -> {
+                      if (
+                        event.type == androidx.compose.ui.input.key.KeyEventType.KeyDown &&
+                          event.nativeKeyEvent.repeatCount == 0
+                      ) {
+                        onControlHeroDown()
+                      }
+                      true
+                    }
+                    else -> false
+                  }
+                }
+              },
+              onConfirm = ::openSelected,
+            )
             .then(clickModifier),
         shape = VideoShapeTokens.Card,
         color = Color.Black,
@@ -1697,10 +1873,9 @@ private fun BangumiCardStack(
               )
           )
           Column(
-            Modifier.align(Alignment.BottomStart)
-              .padding(18.dp)
-              .fillMaxWidth(.82f)
-              .graphicsLayer { alpha = chromeAlpha.value }
+            Modifier.align(Alignment.BottomStart).padding(18.dp).fillMaxWidth(.82f).graphicsLayer {
+              alpha = chromeAlpha.value
+            }
           ) {
             Text(
               season?.title ?: item.title,

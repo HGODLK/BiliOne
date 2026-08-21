@@ -16,14 +16,14 @@ class BangumiFollowProgressParsingTest {
   fun `authoritative season response identifies guochuang even without history tag`() {
     val response = JSONObject("""{"type":4,"show_season_type":4,"title":"记忆管理局"}""")
 
-    assertEquals(4, BiliApi.resolveAuthoritativePgcSeasonType(response))
+    assertEquals(4, BiliBangumiApi.resolveAuthoritativePgcSeasonType(response))
   }
 
   @Test
   fun `authoritative season response falls back to show season type`() {
     val response = JSONObject("""{"type":0,"show_season_type":4}""")
 
-    assertEquals(4, BiliApi.resolveAuthoritativePgcSeasonType(response))
+    assertEquals(4, BiliBangumiApi.resolveAuthoritativePgcSeasonType(response))
   }
 
   @Test
@@ -48,7 +48,7 @@ class BangumiFollowProgressParsingTest {
         kind = SpaceContentKind.BANGUMI,
       )
 
-    val merged = BiliApi.mergeBangumiWatchingCards(listOf(followed), listOf(history), 1)
+    val merged = BiliBangumiApi.mergeBangumiWatchingCards(listOf(followed), listOf(history), 1)
 
     assertEquals("https://example.com/episode-2.jpg", merged.single().coverUrl)
   }
@@ -77,7 +77,7 @@ class BangumiFollowProgressParsingTest {
       )
 
     val merged =
-      BiliApi.mergeBangumiWatchingCards(
+      BiliBangumiApi.mergeBangumiWatchingCards(
         followed = emptyList(),
         history = listOf(older, newer),
         seasonType = 4,
@@ -102,11 +102,12 @@ class BangumiFollowProgressParsingTest {
       )
 
     val merged =
-      BiliApi.mergeBangumiWatchingCards(
-        followed = listOf(followed),
-        history = emptyList(),
-        seasonType = 1,
-      ).single()
+      BiliBangumiApi.mergeBangumiWatchingCards(
+          followed = listOf(followed),
+          history = emptyList(),
+          seasonType = 1,
+        )
+        .single()
 
     assertEquals(22L, merged.episodeId)
     assertEquals(progress, merged.watchProgress)
@@ -115,17 +116,21 @@ class BangumiFollowProgressParsingTest {
 
   @Test
   fun `web player history uses milliseconds and title field`() {
-    val row = JSONObject("""
-      {
-        "user_season": {
-          "last_ep_id": 469261,
-          "last_ep_index_title": "152",
-          "last_ep_progress": 103000
+    val row =
+      JSONObject(
+        """
+        {
+          "user_season": {
+            "last_ep_id": 469261,
+            "last_ep_index_title": "152",
+            "last_ep_progress": 103000
+          }
         }
-      }
-    """.trimIndent())
+        """
+          .trimIndent()
+      )
 
-    val progress = BiliApi.parseBangumiWatchProgress(row)
+    val progress = BiliBangumiApi.parseBangumiWatchProgress(row)
     assertNotNull(progress)
     assertEquals(469261L, progress!!.episodeId)
     assertEquals("152", progress.episodeIndex)
@@ -134,41 +139,49 @@ class BangumiFollowProgressParsingTest {
 
   @Test
   fun `web player fields take precedence over legacy fields`() {
-    val row = JSONObject("""
-      {
-        "user_season": {
-          "last_ep_id": 469261,
-          "last_ep_index_title": "152",
-          "last_ep_index": "151",
-          "last_ep_progress": 103000,
-          "last_time": 12
+    val row =
+      JSONObject(
+        """
+        {
+          "user_season": {
+            "last_ep_id": 469261,
+            "last_ep_index_title": "152",
+            "last_ep_index": "151",
+            "last_ep_progress": 103000,
+            "last_time": 12
+          }
         }
-      }
-    """.trimIndent())
+        """
+          .trimIndent()
+      )
 
-    val progress = BiliApi.parseBangumiWatchProgress(row)
+    val progress = BiliBangumiApi.parseBangumiWatchProgress(row)
     assertNotNull(progress)
     assertEquals("152", progress!!.episodeIndex)
     assertEquals(103_000L, progress.positionMs)
   }
 
-  // ── parseBangumiWatchProgress ─────────────────────────────────────────
+  // ── parseBangumiWatchProgress（解析观看进度） ────────────────────────────
 
   @Test
   fun `inline user_season with last_ep_id and numeric progress`() {
-    val row = JSONObject("""
-      {
-        "season_id": 12345,
-        "progress": 7,
-        "user_season": {
-          "last_ep_id": 469261,
-          "last_ep_index": "152",
-          "last_time": 103
+    val row =
+      JSONObject(
+        """
+        {
+          "season_id": 12345,
+          "progress": 7,
+          "user_season": {
+            "last_ep_id": 469261,
+            "last_ep_index": "152",
+            "last_time": 103
+          }
         }
-      }
-    """.trimIndent())
+        """
+          .trimIndent()
+      )
 
-    val progress = BiliApi.parseBangumiWatchProgress(row)
+    val progress = BiliBangumiApi.parseBangumiWatchProgress(row)
     assertNotNull(progress)
     assertEquals(469261L, progress!!.episodeId)
     assertEquals("152", progress.episodeIndex)
@@ -178,18 +191,22 @@ class BangumiFollowProgressParsingTest {
 
   @Test
   fun `inline user_season with string last_time`() {
-    val row = JSONObject("""
-      {
-        "season_id": 12345,
-        "user_season": {
-          "last_ep_id": 469261,
-          "last_ep_index": "152",
-          "last_time": "103"
+    val row =
+      JSONObject(
+        """
+        {
+          "season_id": 12345,
+          "user_season": {
+            "last_ep_id": 469261,
+            "last_ep_index": "152",
+            "last_time": "103"
+          }
         }
-      }
-    """.trimIndent())
+        """
+          .trimIndent()
+      )
 
-    val progress = BiliApi.parseBangumiWatchProgress(row)
+    val progress = BiliBangumiApi.parseBangumiWatchProgress(row)
     assertNotNull(progress)
     assertEquals(469261L, progress!!.episodeId)
     assertEquals(103_000L, progress.positionMs)
@@ -197,88 +214,108 @@ class BangumiFollowProgressParsingTest {
 
   @Test
   fun `progress as percentage string`() {
-    val row = JSONObject("""
-      {
-        "season_id": 12345,
-        "progress": "7%",
-        "user_season": {
-          "last_ep_id": 469261,
-          "last_ep_index": "152",
-          "last_time": 103
+    val row =
+      JSONObject(
+        """
+        {
+          "season_id": 12345,
+          "progress": "7%",
+          "user_season": {
+            "last_ep_id": 469261,
+            "last_ep_index": "152",
+            "last_time": 103
+          }
         }
-      }
-    """.trimIndent())
+        """
+          .trimIndent()
+      )
 
-    val progress = BiliApi.parseBangumiWatchProgress(row)
+    val progress = BiliBangumiApi.parseBangumiWatchProgress(row)
     assertNotNull(progress)
     assertEquals(7, progress!!.percent)
   }
 
   @Test
   fun `progress as JSONObject must not be parsed as percentage`() {
-    val row = JSONObject("""
-      {
-        "season_id": 12345,
-        "progress": {"some": "object"},
-        "user_season": {
-          "last_ep_id": 469261,
-          "last_ep_index": "152",
-          "last_time": 103
+    val row =
+      JSONObject(
+        """
+        {
+          "season_id": 12345,
+          "progress": {"some": "object"},
+          "user_season": {
+            "last_ep_id": 469261,
+            "last_ep_index": "152",
+            "last_time": 103
+          }
         }
-      }
-    """.trimIndent())
+        """
+          .trimIndent()
+      )
 
-    val progress = BiliApi.parseBangumiWatchProgress(row)
+    val progress = BiliBangumiApi.parseBangumiWatchProgress(row)
     assertNotNull(progress)
-    // When progress is a JSONObject, percent should be null (not mistakenly parsed)
+    // 当 progress 是 JSONObject 时，percent 应为 null（不要被误解析）
     assertNull(progress!!.percent)
   }
 
   @Test
   fun `no user_season returns null`() {
-    val row = JSONObject("""
-      {
-        "season_id": 12345,
-        "new_ep": {"id": 999, "index_show": "更新至第161话"}
-      }
-    """.trimIndent())
+    val row =
+      JSONObject(
+        """
+        {
+          "season_id": 12345,
+          "new_ep": {"id": 999, "index_show": "更新至第161话"}
+        }
+        """
+          .trimIndent()
+      )
 
-    assertNull(BiliApi.parseBangumiWatchProgress(row))
+    assertNull(BiliBangumiApi.parseBangumiWatchProgress(row))
   }
 
   @Test
   fun `unwatched season has no progress`() {
-    val row = JSONObject("""
-      {
-        "season_id": 67890,
-        "progress": 0,
-        "user_season": {
-          "last_ep_id": 0,
-          "last_ep_index": "",
-          "last_time": 0
+    val row =
+      JSONObject(
+        """
+        {
+          "season_id": 67890,
+          "progress": 0,
+          "user_season": {
+            "last_ep_id": 0,
+            "last_ep_index": "",
+            "last_time": 0
+          }
         }
-      }
-    """.trimIndent())
+        """
+          .trimIndent()
+      )
 
-    // last_ep_id = 0 means invalid, should return null
-    assertNull(BiliApi.parseBangumiWatchProgress(row))
+    // last_ep_id = 0 表示无效，应返回 null
+    assertNull(BiliBangumiApi.parseBangumiWatchProgress(row))
   }
 
   @Test
   fun `negative percent is clamped`() {
-    val row = JSONObject("""
-      {
-        "season_id": 12345,
-        "progress": -5,
-        "user_season": {
-          "last_ep_id": 469261,
-          "last_ep_index": "152",
-          "last_time": 103
+    val row =
+      JSONObject(
+        """
+        {
+          "season_id": 12345,
+          "progress": -5,
+          "user_season": {
+            "last_ep_id": 469261,
+            "last_ep_index": "152",
+            "last_time": 103
+          }
         }
-      }
-    """.trimIndent())
+        """
+          .trimIndent()
+      )
 
-    val progress = BiliApi.parseBangumiWatchProgress(row)
+    val progress = BiliBangumiApi.parseBangumiWatchProgress(row)
     assertNotNull(progress)
     val pct = progress!!.percent
     assertNotNull(pct)
@@ -287,59 +324,71 @@ class BangumiFollowProgressParsingTest {
 
   @Test
   fun `percent over 100 is clamped`() {
-    val row = JSONObject("""
-      {
-        "season_id": 12345,
-        "progress": 150,
-        "user_season": {
-          "last_ep_id": 469261,
-          "last_ep_index": "152",
-          "last_time": 103
+    val row =
+      JSONObject(
+        """
+        {
+          "season_id": 12345,
+          "progress": 150,
+          "user_season": {
+            "last_ep_id": 469261,
+            "last_ep_index": "152",
+            "last_time": 103
+          }
         }
-      }
-    """.trimIndent())
+        """
+          .trimIndent()
+      )
 
-    val progress = BiliApi.parseBangumiWatchProgress(row)
+    val progress = BiliBangumiApi.parseBangumiWatchProgress(row)
     assertNotNull(progress)
     assertEquals(100, progress!!.percent)
   }
 
   @Test
   fun `last_ep_id is zero invalidates whole record`() {
-    val row = JSONObject("""
-      {
-        "season_id": 12345,
-        "user_season": {
-          "last_ep_id": "0",
-          "last_ep_index": "",
-          "last_time": 0
+    val row =
+      JSONObject(
+        """
+        {
+          "season_id": 12345,
+          "user_season": {
+            "last_ep_id": "0",
+            "last_ep_index": "",
+            "last_time": 0
+          }
         }
-      }
-    """.trimIndent())
+        """
+          .trimIndent()
+      )
 
-    assertNull(BiliApi.parseBangumiWatchProgress(row))
+    assertNull(BiliBangumiApi.parseBangumiWatchProgress(row))
   }
 
   @Test
   fun `parse season slash user status response`() {
-    val json = JSONObject("""
-      {
-        "code": 0,
-        "message": "success",
-        "result": {
-          "follow": 1,
-          "follow_status": 1,
-          "login": true,
-          "progress": {
-            "last_ep_id": 469261,
-            "last_ep_index": "152",
-            "last_time": 103
+    val json =
+      JSONObject(
+        """
+        {
+          "code": 0,
+          "message": "success",
+          "result": {
+            "follow": 1,
+            "follow_status": 1,
+            "login": true,
+            "progress": {
+              "last_ep_id": 469261,
+              "last_ep_index": "152",
+              "last_time": 103
+            }
           }
         }
-      }
-    """.trimIndent())
+        """
+          .trimIndent()
+      )
 
-    val progress = BiliApi.parseBangumiWatchProgress(json)
+    val progress = BiliBangumiApi.parseBangumiWatchProgress(json)
     assertNotNull(progress)
     assertEquals(469261L, progress!!.episodeId)
     assertEquals("152", progress.episodeIndex)
@@ -348,56 +397,64 @@ class BangumiFollowProgressParsingTest {
 
   @Test
   fun `parse watch_progress as fallback key`() {
-    val json = JSONObject("""
-      {
-        "result": {
-          "login": true,
-          "watch_progress": {
-            "last_ep_id": "555",
-            "last_ep_index": "SP1",
-            "last_time": 42
+    val json =
+      JSONObject(
+        """
+        {
+          "result": {
+            "login": true,
+            "watch_progress": {
+              "last_ep_id": "555",
+              "last_ep_index": "SP1",
+              "last_time": 42
+            }
           }
         }
-      }
-    """.trimIndent())
+        """
+          .trimIndent()
+      )
 
-    val progress = BiliApi.parseBangumiWatchProgress(json)
+    val progress = BiliBangumiApi.parseBangumiWatchProgress(json)
     assertNotNull(progress)
     assertEquals(555L, progress!!.episodeId)
     assertEquals("SP1", progress.episodeIndex)
     assertEquals(42_000L, progress.positionMs)
   }
 
-  // ── parseSpaceBangumiResponse ────────────────────────────────────────
+  // ── parseSpaceBangumiResponse（解析空间番剧响应） ───────────────────────
 
   @Test
   fun `parseSpaceBangumiResponse extracts inline watch progress`() {
-    val json = JSONObject("""
-      {
-        "code": 0,
-        "data": {
-          "list": [
-            {
-              "season_id": 12345,
-              "title": "Test Anime",
-              "cover": "//i0.hdslb.com/test.jpg",
-              "new_ep": {"id": 999, "index_show": "更新至第161话"},
-              "progress": 7,
-              "user_season": {
-                "last_ep_id": 469261,
-                "last_ep_index": "152",
-                "last_time": 103
+    val json =
+      JSONObject(
+        """
+        {
+          "code": 0,
+          "data": {
+            "list": [
+              {
+                "season_id": 12345,
+                "title": "Test Anime",
+                "cover": "//i0.hdslb.com/test.jpg",
+                "new_ep": {"id": 999, "index_show": "更新至第161话"},
+                "progress": 7,
+                "user_season": {
+                  "last_ep_id": 469261,
+                  "last_ep_index": "152",
+                  "last_time": 103
+                }
               }
-            }
-          ],
-          "total": 1,
-          "pn": 1,
-          "ps": 10
+            ],
+            "total": 1,
+            "pn": 1,
+            "ps": 10
+          }
         }
-      }
-    """.trimIndent())
+        """
+          .trimIndent()
+      )
 
-    val response = BiliApi.parseSpaceBangumiResponse(json, type = 1, page = 1, pageSize = 10)
+    val response = BiliBangumiApi.parseSpaceBangumiResponse(json, type = 1, page = 1, pageSize = 10)
 
     assertEquals(1, response.cards.size)
     val card = response.cards[0]
@@ -414,26 +471,30 @@ class BangumiFollowProgressParsingTest {
 
   @Test
   fun `parseSpaceBangumiResponse card without progress gets null watchProgress`() {
-    val json = JSONObject("""
-      {
-        "code": 0,
-        "data": {
-          "list": [
-            {
-              "season_id": 67890,
-              "title": "Unwatched Anime",
-              "cover": "//i0.hdslb.com/test2.jpg",
-              "new_ep": {"id": 888, "index_show": "更新至第10话"}
-            }
-          ],
-          "total": 1,
-          "pn": 1,
-          "ps": 10
+    val json =
+      JSONObject(
+        """
+        {
+          "code": 0,
+          "data": {
+            "list": [
+              {
+                "season_id": 67890,
+                "title": "Unwatched Anime",
+                "cover": "//i0.hdslb.com/test2.jpg",
+                "new_ep": {"id": 888, "index_show": "更新至第10话"}
+              }
+            ],
+            "total": 1,
+            "pn": 1,
+            "ps": 10
+          }
         }
-      }
-    """.trimIndent())
+        """
+          .trimIndent()
+      )
 
-    val response = BiliApi.parseSpaceBangumiResponse(json, type = 1, page = 1, pageSize = 10)
+    val response = BiliBangumiApi.parseSpaceBangumiResponse(json, type = 1, page = 1, pageSize = 10)
 
     assertEquals(1, response.cards.size)
     assertNull(response.cards[0].watchProgress)
@@ -442,37 +503,41 @@ class BangumiFollowProgressParsingTest {
 
   @Test
   fun `parseSpaceBangumiResponse card stableId does not change with progress`() {
-    val json = JSONObject("""
-      {
-        "code": 0,
-        "data": {
-          "list": [
-            {
-              "season_id": 12345,
-              "title": "Stable Anime",
-              "cover": "//i0.hdslb.com/stable.jpg",
-              "new_ep": {"id": 999, "index_show": "更新至第161话"},
-              "user_season": {
-                "last_ep_id": 469261,
-                "last_ep_index": "152",
-                "last_time": 103
+    val json =
+      JSONObject(
+        """
+        {
+          "code": 0,
+          "data": {
+            "list": [
+              {
+                "season_id": 12345,
+                "title": "Stable Anime",
+                "cover": "//i0.hdslb.com/stable.jpg",
+                "new_ep": {"id": 999, "index_show": "更新至第161话"},
+                "user_season": {
+                  "last_ep_id": 469261,
+                  "last_ep_index": "152",
+                  "last_time": 103
+                }
               }
-            }
-          ],
-          "total": 1,
-          "pn": 1,
-          "ps": 10
+            ],
+            "total": 1,
+            "pn": 1,
+            "ps": 10
+          }
         }
-      }
-    """.trimIndent())
+        """
+          .trimIndent()
+      )
 
-    val response = BiliApi.parseSpaceBangumiResponse(json, type = 1, page = 1, pageSize = 10)
+    val response = BiliBangumiApi.parseSpaceBangumiResponse(json, type = 1, page = 1, pageSize = 10)
 
     assertEquals(1, response.cards.size)
     val card = response.cards[0]
-    // Stable ID derives from seasonId, not episodeId
+    // 稳定 ID 派生自 seasonId，而不是 episodeId
     assertTrue(card.id.startsWith("bangumi:"))
-    assertEquals(999L, card.episodeId) // new_ep.id, not watchProgress.episodeId
+    assertEquals(999L, card.episodeId) // 取 new_ep.id，而不是 watchProgress.episodeId
   }
 
   @Test
@@ -488,7 +553,7 @@ class BangumiFollowProgressParsingTest {
         )
       }
 
-    val merged = BiliApi.mergeBangumiWatchingCards(followed, emptyList(), seasonType = 1)
+    val merged = BiliBangumiApi.mergeBangumiWatchingCards(followed, emptyList(), seasonType = 1)
 
     assertEquals(8, merged.size)
     assertEquals(followed.map(SpaceContentCard::seasonId), merged.map(SpaceContentCard::seasonId))

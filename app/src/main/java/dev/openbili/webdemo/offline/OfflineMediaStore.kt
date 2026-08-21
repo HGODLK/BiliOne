@@ -10,7 +10,8 @@ internal class OfflineMediaStore(context: Context) {
 
   fun entries(): List<OfflineMediaEntry> =
     synchronized(lock) {
-      val array = runCatching { JSONArray(prefs.getString(KEY_ENTRIES, "[]")) }.getOrDefault(JSONArray())
+      val array =
+        runCatching { JSONArray(prefs.getString(KEY_ENTRIES, "[]")) }.getOrDefault(JSONArray())
       buildList {
         for (index in 0 until array.length()) {
           runCatching { decode(array.getJSONObject(index)) }.getOrNull()?.let(::add)
@@ -131,7 +132,9 @@ internal class OfflineMediaStore(context: Context) {
     }
     return OfflineMediaEntry(
       id = json.getString("id"),
-      kind = runCatching { OfflineMediaKind.valueOf(json.optString("kind")) }.getOrDefault(OfflineMediaKind.VIDEO),
+      kind =
+        runCatching { OfflineMediaKind.valueOf(json.optString("kind")) }
+          .getOrDefault(OfflineMediaKind.VIDEO),
       accountMid = json.optLong("accountMid"),
       title = json.optString("title"),
       partTitle = json.optString("partTitle"),

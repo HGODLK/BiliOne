@@ -1,21 +1,32 @@
 package dev.openbili.webdemo.my
 
+/**
+ * "我的"页界面模型。
+ *
+ * 统一管理分区切换、历史/收藏/关注/消息/稍后再看/互动消息的分页与刷新、未读前台
+ * 监控（5 秒轮询 + 失败退避）与私信实时增量合并。纯函数逻辑拆在 MyViewModelModels。
+ */
+
 import android.app.Application
 import android.content.Context
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.os.SystemClock
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import dev.openbili.webdemo.BangumiLocalHistoryStore
 import dev.openbili.webdemo.api.AccountHistoryItem
-import dev.openbili.webdemo.api.AccountHistoryResponse
 import dev.openbili.webdemo.api.AccountMessage
 import dev.openbili.webdemo.api.AccountMessageUserStyle
 import dev.openbili.webdemo.api.ArticleItem
-import dev.openbili.webdemo.api.BiliApi
-import dev.openbili.webdemo.api.BiliEmotePackage
 import dev.openbili.webdemo.api.BangumiWatchProgress
+import dev.openbili.webdemo.api.BiliCommentApi
+import dev.openbili.webdemo.api.BiliEmotePackage
+import dev.openbili.webdemo.api.BiliFavoriteApi
+import dev.openbili.webdemo.api.BiliFollowApi
+import dev.openbili.webdemo.api.BiliHistoryApi
+import dev.openbili.webdemo.api.BiliInteractionApi
+import dev.openbili.webdemo.api.BiliPrivateMessageApi
 import dev.openbili.webdemo.api.FavoriteFolder
 import dev.openbili.webdemo.api.FeedCard
 import dev.openbili.webdemo.api.FollowingGroup
@@ -25,364 +36,94 @@ import dev.openbili.webdemo.api.InteractionMessagePage
 import dev.openbili.webdemo.api.MessageCursor
 import dev.openbili.webdemo.api.SpaceContentCard
 import dev.openbili.webdemo.api.SpaceContentKind
+import dev.openbili.webdemo.BangumiLocalHistoryStore
 import dev.openbili.webdemo.feed.FeedItem
 import dev.openbili.webdemo.feed.FeedViewModel
 import dev.openbili.webdemo.live.LiveHistoryStore
 import dev.openbili.webdemo.live.LiveSearchRoom
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 
-enum class MySection(val label: String) {
-  FAVORITES("我的收藏"),
-  HISTORY("历史记录"),
-  WATCH_LATER("稍后再看"),
-  FOLLOWING("我的关注"),
-  MESSAGES("我的消息"),
-  INTERACTIONS("回复或@我的"),
-  LIKES("点赞消息"),
-  CACHED_VIDEOS("缓存视频"),
-  SETTINGS("设置"),
-}
-
-private const val PRIVATE_MESSAGE_SYNC_INTERVAL_MS = 800L
-private const val PRIVATE_SESSION_PAGE_SIZE = 18
-private const val PRIVATE_HISTORY_PAGE_SIZE = 15
-private const val ACCOUNT_UNREAD_REFRESH_INTERVAL_MS = 5_000L
-private const val MY_VIEW_MODEL_TAG = "MyViewModel"
-
-internal fun accountUnreadRetryDelayMs(consecutiveFailures: Int): Long =
-  when {
-    consecutiveFailures <= 1 -> 5_000L
-    consecutiveFailures == 2 -> 10_000L
-    else -> 30_000L
-  }
-
-internal fun applyAccountMessageUserStyles(
-  messages: List<AccountMessage>,
-  styles: Map<Long, AccountMessageUserStyle>,
-): List<AccountMessage> =
-  messages.map { message ->
-    styles[message.userMid]?.let { style ->
-      message.copy(
-        userLevel = style.level,
-        userVipActive = style.vipActive,
-        userVipLabel = style.vipLabel,
-      )
-    } ?: message
-  }
-
-internal fun privateConversationSession(
-  userMid: Long,
-  userName: String,
-  userFace: String,
-): AccountMessage =
-  AccountMessage(
-    id = userMid,
-    userMid = userMid,
-    userName = userName.ifBlank { "UID $userMid" },
-    userFace = userFace,
-    title = "私信会话",
-    content = "开始聊天吧",
-    sourceContent = "",
-    oid = 0L,
-    rootId = 0L,
-    parentId = 0L,
-    time = 0L,
-    messageType = 1,
-    isPrivate = true,
-  )
-
-internal fun includeDirectPrivateTarget(
-  sessions: List<AccountMessage>,
-  target: AccountMessage?,
-): List<AccountMessage> =
-  if (target != null && sessions.none { it.userMid == target.userMid }) {
-    listOf(target) + sessions
-  } else {
-    sessions
-  }
-
-internal fun normalizePrivateMessageHistory(messages: List<AccountMessage>): List<AccountMessage> {
-  // The immediate post-send read and the realtime poll can overlap. The server may therefore
-  // return the same sequence in both batches; never let duplicate stable IDs reach LazyColumn.
-  val sorted =
-    messages
-      .distinctBy { message ->
-        when {
-          message.id >= 0L -> "id:${message.id}"
-          message.messageKey > 0L -> "key:${message.messageKey}"
-          else -> "local:${message.id}"
-        }
-      }
-      .sortedWith(compareBy<AccountMessage> { it.time }.thenBy { it.sequence })
-  val serverMessages = sorted.filter { it.id >= 0L || it.messageKey > 0L }
-  val withoutAcknowledgedLocalCopies =
-    sorted.filterNot { pending ->
-      pending.id < 0L &&
-        serverMessages.any { server ->
-          server.isOutgoing == pending.isOutgoing &&
-            server.messageType == pending.messageType &&
-            kotlin.math.abs(server.time - pending.time) <= 12L &&
-            when (pending.messageType) {
-              2 -> server.coverUrl.isNotBlank() && server.coverUrl == pending.coverUrl
-              else -> server.content == pending.content
-            }
-        }
-    }
-  val result = mutableListOf<AccountMessage>()
-  val withdrawalIndexByTarget = mutableMapOf<Long, Int>()
-  withoutAcknowledgedLocalCopies.forEach { message ->
-    if (!message.withdrawn) {
-      result += message
-      return@forEach
-    }
-    val targetKey = message.withdrawTargetMessageKey.takeIf { it > 0L } ?: message.messageKey
-    val existingNoticeIndex = withdrawalIndexByTarget[targetKey]
-    if (targetKey > 0L && existingNoticeIndex != null) return@forEach
-    val originalIndex =
-      if (targetKey > 0L) result.indexOfFirst { it.messageKey == targetKey } else -1
-    val notice =
-      message.copy(
-        messageType = 5,
-        content = if (message.isOutgoing) "你撤回了一条消息" else "对方撤回了一条消息",
-        coverUrl = "",
-        linkUrl = "",
-        targetKind = dev.openbili.webdemo.api.MessageTargetKind.UNKNOWN,
-        withdrawTargetMessageKey = targetKey,
-      )
-    val index =
-      if (originalIndex >= 0) {
-        result[originalIndex] = notice
-        originalIndex
-      } else {
-        result += notice
-        result.lastIndex
-      }
-    if (targetKey > 0L) withdrawalIndexByTarget[targetKey] = index
-  }
-  val withdrawnTargets =
-    result.asSequence().filter(AccountMessage::withdrawn).map(AccountMessage::withdrawTargetMessageKey)
-      .filter { it > 0L }.toSet()
-  return result.filterNot { !it.withdrawn && it.messageKey in withdrawnTargets }
-}
-
-enum class FollowingOrder(val label: String, val apiValue: String) {
-  RECENT("最近关注", ""),
-  MOST_VISITED("最常访问", "attention"),
-}
-
-enum class HistoryFilter(val label: String, val apiType: String, val enabled: Boolean = true) {
-  ALL("全部", ""),
-  VIDEO("仅视频", "archive"),
-  LIVE("仅直播", "live"),
-  ARTICLE("仅专栏", "article"),
-}
-
-sealed interface HistoryCardItem {
-  val stableId: String
-  val viewAt: Long
-
-  data class Video(val item: FeedItem, override val viewAt: Long = item.publishedAt) : HistoryCardItem {
-    override val stableId: String = "video:${item.id}"
-  }
-
-  data class Bangumi(
-    val item: FeedItem,
-    val bangumi: SpaceContentCard,
-    val mediaLabel: String,
-    override val viewAt: Long = item.publishedAt,
-  ) : HistoryCardItem {
-    override val stableId: String = bangumi.id
-  }
-
-  data class Article(
-    val item: ArticleItem,
-    override val viewAt: Long = item.publishedAt,
-  ) : HistoryCardItem {
-    override val stableId: String = item.stableId
-  }
-
-  data class Live(
-    val room: LiveSearchRoom,
-    override val viewAt: Long,
-  ) : HistoryCardItem {
-    override val stableId: String = room.stableId
-  }
-}
-
-private fun historyMergeKey(item: HistoryCardItem): String =
-  (item as? HistoryCardItem.Bangumi)
-    ?.bangumi
-    ?.seasonId
-    ?.takeIf { it > 0L }
-    ?.let { "pgc:season:$it" }
-    ?: item.stableId
-
-data class MyUiState(
-  val section: MySection = MySection.HISTORY,
-  val folders: List<FavoriteFolder> = emptyList(),
-  val selectedFolderId: Long? = null,
-  val videos: List<FeedItem> = emptyList(),
-  val historyFilter: HistoryFilter = HistoryFilter.ALL,
-  val historyItems: List<HistoryCardItem> = emptyList(),
-  val historyCursor: HistoryCursor = HistoryCursor(),
-  val historyHasMore: Boolean = false,
-  val historyLoadingMore: Boolean = false,
-  val favoriteResourceIdByVideoId: Map<String, Long> = emptyMap(),
-  val favoriteTypeByVideoId: Map<String, Int> = emptyMap(),
-  val favoritePage: Int = 0,
-  val favoriteHasMore: Boolean = false,
-  val favoriteLoadingMore: Boolean = false,
-  val favoriteQuery: String = "",
-  val favoriteActionBusyId: String? = null,
-  val favoriteFolderActionBusy: Boolean = false,
-  val followings: List<FollowingUser> = emptyList(),
-  val followingTotal: Int = 0,
-  val followingResultTotal: Int = 0,
-  val followingPage: Int = 0,
-  val followingHasMore: Boolean = false,
-  val followingLoadingMore: Boolean = false,
-  val followingQuery: String = "",
-  val followingGroups: List<FollowingGroup> = emptyList(),
-  val selectedFollowingGroupId: Long? = null,
-  val followingOrder: FollowingOrder = FollowingOrder.RECENT,
-  val unfollowedIds: Set<Long> = emptySet(),
-  val messages: List<AccountMessage> = emptyList(),
-  val selectedMessageId: Long? = null,
-  val privateMessageUnreadCount: Int = 0,
-  val interactionUnreadCount: Int = 0,
-  val likeUnreadCount: Int = 0,
-  val privateMessageHistory: Map<Long, List<AccountMessage>> = emptyMap(),
-  val privateMessagesLoading: Boolean = false,
-  val privateHistoryHasMore: Boolean = false,
-  val privateHistoryLoadingMore: Boolean = false,
-  val privateSessionHasMore: Boolean = false,
-  val privateSessionLoadingMore: Boolean = false,
-  val privateMessageSending: Boolean = false,
-  val privateMessageSendSuccessToken: Long = 0L,
-  val messageEmotePackages: List<BiliEmotePackage> = emptyList(),
-  val messageReplyCursor: MessageCursor = MessageCursor(),
-  val messageAtCursor: MessageCursor = MessageCursor(),
-  val messageReplyHasMore: Boolean = false,
-  val messageAtHasMore: Boolean = false,
-  val messageLikeCursor: MessageCursor = MessageCursor(),
-  val messageLikeHasMore: Boolean = false,
-  val messagesLoadingMore: Boolean = false,
-  val loading: Boolean = false,
-  val error: String? = null,
-)
-
-internal fun MyUiState.hasUnread(section: MySection): Boolean =
-  when (section) {
-    MySection.MESSAGES -> privateMessageUnreadCount > 0
-    MySection.INTERACTIONS -> interactionUnreadCount > 0
-    MySection.LIKES -> likeUnreadCount > 0
-    else -> false
-  }
-
-internal fun resolvedPrivateMessageUnreadCount(
-  section: MySection,
-  privateMessagesLoaded: Boolean,
-  cachedUnreadCount: Int,
-  serverUnreadCount: Int,
-): Int =
-  if (section == MySection.MESSAGES && privateMessagesLoaded) {
-    cachedUnreadCount
-  } else {
-    serverUnreadCount
-  }
-
-internal fun favoriteFoldersAfterAction(
-  folders: List<FavoriteFolder>,
-  sourceFolderId: Long,
-  destinationFolderId: Long?,
-  move: Boolean,
-): List<FavoriteFolder> = folders.map { folder ->
-  when (folder.id) {
-    sourceFolderId ->
-      if (move) folder.copy(mediaCount = (folder.mediaCount - 1).coerceAtLeast(0)) else folder
-    destinationFolderId -> folder.copy(mediaCount = folder.mediaCount + 1)
-    else -> folder
-  }
-}
-
-internal fun favoriteActionConfirmed(
-  sourceContains: Boolean,
-  destinationContains: Boolean?,
-  hasDestination: Boolean,
-  move: Boolean,
-): Boolean =
-  when {
-    !hasDestination -> !sourceContains
-    move -> !sourceContains && destinationContains == true
-    else -> sourceContains && destinationContains == true
-  }
-
+/**
+ * "我的"页界面模型。
+ */
 class MyViewModel(application: Application) : AndroidViewModel(application) {
   private val _state = MutableStateFlow(MyUiState())
   val state: StateFlow<MyUiState> = _state.asStateFlow()
   private var mid = 0L
   private var loadJob: Job? = null
+  private var historySearchJob: Job? = null
   private var followingSearchJob: Job? = null
   private var favoriteSearchJob: Job? = null
   private var messageLoadMoreJob: Job? = null
   private var privateHistoryJob: Job? = null
   private var privateSessionLoadMoreJob: Job? = null
   private var privateMessageRealtimeJob: Job? = null
+  private val historyPeriodJobs = mutableMapOf<HistoryPeriod, Job>()
+  private var historyTimelineJob: Job? = null
   private var unreadLoadJob: Job? = null
   private var unreadMonitorJob: Job? = null
   @Volatile private var unreadMonitoringActive = false
   private val unreadRequestMutex = kotlinx.coroutines.sync.Mutex()
+  private val pendingUnreadAcknowledgements = mutableMapOf<MySection, PendingUnreadAcknowledgement>()
   private var privateMessagesLoaded = false
   private var privateMessagesCache: List<AccountMessage> = emptyList()
   private var privateMessageHistoryCache: Map<Long, List<AccountMessage>> = emptyMap()
   private var privateHistoryCursorByUser: Map<Long, Long> = emptyMap()
   private var privateHistoryHasMoreByUser: Map<Long, Boolean> = emptyMap()
+  private var historyLocalItems: List<HistoryCardItem> = emptyList()
   private var privateSessionCursor = 0L
   private var privateSessionHasMore = false
   private var messageEmoteCache: List<BiliEmotePackage> = emptyList()
   private var directPrivateMessageTarget: AccountMessage? = null
   private var loadGeneration = 0L
+  private var historySearchGeneration = 0L
 
   fun setUser(mid: Long, loadInitialSection: Boolean = true) {
     if (this.mid == mid) return
     commitPendingUnfollows()
     loadGeneration++
+    historySearchGeneration++
     loadJob?.cancel()
     followingSearchJob?.cancel()
     favoriteSearchJob?.cancel()
     messageLoadMoreJob?.cancel()
+    historySearchJob?.cancel()
     privateHistoryJob?.cancel()
     privateSessionLoadMoreJob?.cancel()
+    historyTimelineJob?.cancel()
+    historyTimelineJob = null
+    cancelHistoryPeriodJobs()
     privateMessageRealtimeJob?.cancel()
     unreadLoadJob?.cancel()
     unreadMonitorJob?.cancel()
+    pendingUnreadAcknowledgements.clear()
     privateMessagesLoaded = false
     privateMessagesCache = emptyList()
     privateMessageHistoryCache = emptyMap()
     privateHistoryCursorByUser = emptyMap()
     privateHistoryHasMoreByUser = emptyMap()
+    historyLocalItems = emptyList()
     privateSessionCursor = 0L
     privateSessionHasMore = false
     messageEmoteCache = emptyList()
     this.mid = mid
-    if (mid > 0 && loadInitialSection) select(MySection.HISTORY)
-    else _state.value = MyUiState()
+    if (mid > 0 && loadInitialSection) select(MySection.HISTORY) else _state.value = MyUiState()
     if (mid > 0L && unreadMonitoringActive) startUnreadMonitor()
   }
 
-  /** Search debounce and pagination are disposable while the root pager is in motion. */
+  /** 搜索防抖与分页在根 Pager 滚动期间可丢弃。 */
   fun cancelSupplementaryLoadingForPageSwitch() {
     followingSearchJob?.cancel()
     followingSearchJob = null
@@ -392,9 +133,14 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
     privateHistoryJob?.cancel()
     privateSessionLoadMoreJob?.cancel()
     privateMessageRealtimeJob?.cancel()
+    historyTimelineJob?.cancel()
+    historyTimelineJob = null
+    cancelHistoryPeriodJobs()
     messageLoadMoreJob = null
     val current = _state.value
     if (
+      !current.loading &&
+        !current.historyPeriods.values.any { it.loading } &&
       !current.historyLoadingMore &&
         !current.favoriteLoadingMore &&
         !current.followingLoadingMore &&
@@ -410,7 +156,10 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
     loadJob = null
     _state.value =
       current.copy(
+        historyPeriods = current.historyPeriods.mapValues { (_, value) -> value.copy(loading = false) },
+        historyTimeline = current.historyTimeline.copy(loading = false),
         historyLoadingMore = false,
+        loading = false,
         favoriteLoadingMore = false,
         followingLoadingMore = false,
         messagesLoadingMore = false,
@@ -418,6 +167,11 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
         privateSessionLoadingMore = false,
         privateHistoryLoadingMore = false,
       )
+  }
+
+  private fun cancelHistoryPeriodJobs() {
+    historyPeriodJobs.values.forEach(Job::cancel)
+    historyPeriodJobs.clear()
   }
 
   fun resumeSupplementaryLoadingAfterPageSwitch() {
@@ -443,10 +197,110 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
       return
     }
     unreadLoadJob?.cancel()
-    unreadLoadJob =
-      viewModelScope.launch {
-        requestUnreadStatus(expectedMid)
+    unreadLoadJob = viewModelScope.launch {
+      requestUnreadStatus(expectedMid)
+    }
+  }
+
+  private fun unreadCount(section: MySection): Int =
+    when (section) {
+      MySection.MESSAGES -> _state.value.privateMessageUnreadCount
+      MySection.INTERACTIONS -> _state.value.interactionUnreadCount
+      MySection.LIKES -> _state.value.likeUnreadCount
+      else -> 0
+    }
+
+  /** 进入未读分区或长按侧栏未读项时，先完成服务端回执，再更新本地红点。 */
+  fun markSectionRead(section: MySection) {
+    val unreadBeforeAcknowledgement = unreadCount(section)
+    if (mid <= 0L || unreadBeforeAcknowledgement <= 0) return
+    acknowledgeSectionRead(section, mid, unreadBeforeAcknowledgement)
+  }
+
+  private fun acknowledgeSectionRead(
+    section: MySection,
+    expectedMid: Long,
+    unreadBeforeAcknowledgement: Int,
+  ) {
+    val acknowledgedCounts =
+      mapOf(
+        MySection.MESSAGES to
+          if (section == MySection.MESSAGES) unreadBeforeAcknowledgement
+          else _state.value.privateMessageUnreadCount,
+        MySection.INTERACTIONS to
+          if (section == MySection.INTERACTIONS) unreadBeforeAcknowledgement
+          else _state.value.interactionUnreadCount,
+        MySection.LIKES to
+          if (section == MySection.LIKES) unreadBeforeAcknowledgement
+          else _state.value.likeUnreadCount,
+      )
+    viewModelScope.launch {
+      val acknowledged =
+        withContext(Dispatchers.IO) {
+          when (section) {
+            MySection.MESSAGES -> markAllPrivateMessagesReadOnServer()
+            MySection.INTERACTIONS,
+            MySection.LIKES -> runCatching { BiliInteractionApi.clearInteractionUnread() }.isSuccess
+            else -> false
+          }
+        }
+      if (!acknowledged || mid != expectedMid) return@launch
+      val acknowledgedAt = SystemClock.elapsedRealtime()
+      when (section) {
+        MySection.MESSAGES -> {
+          pendingUnreadAcknowledgements[MySection.MESSAGES] =
+            PendingUnreadAcknowledgement(
+              acknowledgedCount = acknowledgedCounts.getValue(MySection.MESSAGES),
+              createdAtMs = acknowledgedAt,
+            )
+          privateMessagesCache = privateMessagesCache.map { it.copy(unreadCount = 0) }
+          _state.value =
+            _state.value.copy(
+              messages = if (_state.value.section == MySection.MESSAGES) privateMessagesCache else _state.value.messages,
+              privateMessageUnreadCount = 0,
+            )
+        }
+        MySection.INTERACTIONS,
+        MySection.LIKES -> {
+          // x/msgfeed/clear 会同时清除回复、@ 与点赞，两个入口同步撤掉旧红点。
+          pendingUnreadAcknowledgements[MySection.INTERACTIONS] =
+            PendingUnreadAcknowledgement(
+              acknowledgedCount = acknowledgedCounts.getValue(MySection.INTERACTIONS),
+              createdAtMs = acknowledgedAt,
+            )
+          pendingUnreadAcknowledgements[MySection.LIKES] =
+            PendingUnreadAcknowledgement(
+              acknowledgedCount = acknowledgedCounts.getValue(MySection.LIKES),
+              createdAtMs = acknowledgedAt,
+            )
+          _state.value = _state.value.copy(interactionUnreadCount = 0, likeUnreadCount = 0)
+        }
+        else -> Unit
       }
+    }
+  }
+
+  private fun markAllPrivateMessagesReadOnServer(): Boolean {
+    val sessions = mutableListOf<AccountMessage>()
+    var cursor = 0L
+    var pageCount = 0
+    while (pageCount++ < 100) {
+      val page = runCatching { BiliPrivateMessageApi.getPrivateMessageSessions(cursor, 100) }.getOrNull()
+        ?: return false
+      sessions += page.items
+      if (!page.hasMore || page.endTimestamp <= 0L || page.endTimestamp == cursor) break
+      cursor = page.endTimestamp
+    }
+    // 服务端分页结果优先，避免本地已读缓存覆盖服务端仍未确认的会话。
+    val allSessions = (sessions + privateMessagesCache).distinctBy(AccountMessage::userMid)
+    val unread = allSessions.filter { it.unreadCount > 0 }
+    val acknowledgeTargets = unread.filter { it.userMid > 0L && it.sequence > 0L }
+    if (acknowledgeTargets.size != unread.size) return false
+    return acknowledgeTargets.all { session ->
+      runCatching {
+        BiliPrivateMessageApi.markPrivateMessageRead(session.userMid, session.sequence)
+      }.isSuccess
+    }
   }
 
   fun setUnreadMonitoringActive(active: Boolean) {
@@ -476,18 +330,17 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
       unreadMonitorJob = null
       return
     }
-    unreadMonitorJob =
-      viewModelScope.launch {
-        var consecutiveFailures = 0
-        while (unreadMonitoringActive && mid == expectedMid) {
-          val succeeded = requestUnreadStatus(expectedMid)
-          consecutiveFailures = if (succeeded) 0 else consecutiveFailures + 1
-          delay(
-            if (succeeded) ACCOUNT_UNREAD_REFRESH_INTERVAL_MS
-            else accountUnreadRetryDelayMs(consecutiveFailures)
-          )
-        }
+    unreadMonitorJob = viewModelScope.launch {
+      var consecutiveFailures = 0
+      while (unreadMonitoringActive && mid == expectedMid) {
+        val succeeded = requestUnreadStatus(expectedMid)
+        consecutiveFailures = if (succeeded) 0 else consecutiveFailures + 1
+        delay(
+          if (succeeded) ACCOUNT_UNREAD_REFRESH_INTERVAL_MS
+          else accountUnreadRetryDelayMs(consecutiveFailures)
+        )
       }
+    }
   }
 
   private suspend fun requestUnreadStatus(expectedMid: Long): Boolean =
@@ -497,7 +350,7 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
           val privateMessageRequest =
             async(Dispatchers.IO) {
               try {
-                BiliApi.getPrivateMessageUnreadCount()
+                BiliPrivateMessageApi.getPrivateMessageUnreadCount()
               } catch (error: kotlinx.coroutines.CancellationException) {
                 throw error
               } catch (error: Exception) {
@@ -508,7 +361,7 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
           val interactionRequest =
             async(Dispatchers.IO) {
               try {
-                BiliApi.getInteractionUnreadSummary()
+                BiliInteractionApi.getInteractionUnreadSummary()
               } catch (error: kotlinx.coroutines.CancellationException) {
                 throw error
               } catch (error: Exception) {
@@ -521,30 +374,46 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
       if (privateMessageCount == null && interactionSummary == null) return@withLock false
       if (mid != expectedMid) return@withLock false
       val current = _state.value
+      fun resolvedUnread(section: MySection, serverCount: Int): Int {
+        val resolution =
+          resolveUnreadAfterAcknowledgement(
+            serverCount = serverCount,
+            pending = pendingUnreadAcknowledgements[section],
+            nowMs = SystemClock.elapsedRealtime(),
+          )
+        if (!resolution.keepPending) pendingUnreadAcknowledgements.remove(section)
+        return resolution.visibleCount
+      }
       _state.value =
         current.copy(
           privateMessageUnreadCount =
             privateMessageCount?.let { serverUnreadCount ->
-              resolvedPrivateMessageUnreadCount(
-                section = current.section,
-                privateMessagesLoaded = privateMessagesLoaded,
-                cachedUnreadCount = privateMessagesCache.sumOf(AccountMessage::unreadCount),
-                serverUnreadCount = serverUnreadCount,
+              resolvedUnread(
+                MySection.MESSAGES,
+                resolvedPrivateMessageUnreadCount(
+                  section = current.section,
+                  privateMessagesLoaded = privateMessagesLoaded,
+                  cachedUnreadCount = privateMessagesCache.sumOf(AccountMessage::unreadCount),
+                  serverUnreadCount = serverUnreadCount,
+                ),
               )
             } ?: current.privateMessageUnreadCount,
           interactionUnreadCount =
             interactionSummary?.let { summary ->
-              if (current.section == MySection.INTERACTIONS) 0 else summary.interactionCount
+              if (current.section == MySection.INTERACTIONS) 0
+              else resolvedUnread(MySection.INTERACTIONS, summary.interactionCount)
             } ?: current.interactionUnreadCount,
           likeUnreadCount =
             interactionSummary?.let { summary ->
-              if (current.section == MySection.LIKES) 0 else summary.likeCount
+              if (current.section == MySection.LIKES) 0
+              else resolvedUnread(MySection.LIKES, summary.likeCount)
             } ?: current.likeUnreadCount,
         )
       privateMessageCount != null && interactionSummary != null
     }
 
   fun select(section: MySection) {
+    val unreadBeforeAcknowledgement = unreadCount(section)
     if (
       _state.value.section == MySection.FOLLOWING &&
         section == MySection.FOLLOWING &&
@@ -563,6 +432,10 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
     privateHistoryJob?.cancel()
     privateSessionLoadMoreJob?.cancel()
     privateMessageRealtimeJob?.cancel()
+    historyTimelineJob?.cancel()
+    historyTimelineJob = null
+    cancelHistoryPeriodJobs()
+    historyLocalItems = emptyList()
     _state.value =
       _state.value.copy(
         section = section,
@@ -570,9 +443,12 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
         historyFilter =
           if (section == MySection.HISTORY) HistoryFilter.ALL else _state.value.historyFilter,
         historyItems = emptyList(),
+        historyPeriods = emptyMap(),
+        historyTimeline = HistoryTimelineLoadState(),
         historyCursor = HistoryCursor(),
         historyHasMore = false,
         historyLoadingMore = false,
+        historySearch = HistorySearchState(),
         favoriteResourceIdByVideoId = emptyMap(),
         favoriteTypeByVideoId = emptyMap(),
         favoritePage = 0,
@@ -612,22 +488,25 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
         loading = false,
         error = null,
       )
-    if (
-      section == MySection.WATCH_LATER ||
-        section == MySection.CACHED_VIDEOS ||
-        mid <= 0
-    ) return
+    if (section == MySection.HISTORY) {
+      loadHistoryPage(reset = true)
+      return
+    }
+    if (section == MySection.WATCH_LATER || section == MySection.CACHED_VIDEOS || mid <= 0) return
+    if (unreadBeforeAcknowledgement > 0) {
+      acknowledgeSectionRead(section, expectedMid, unreadBeforeAcknowledgement)
+    }
     loadJob = viewModelScope.launch {
       _state.value =
         _state.value.copy(loading = !(section == MySection.MESSAGES && privateMessagesLoaded))
       try {
         when (section) {
           MySection.FAVORITES -> {
-            val folders = withContext(Dispatchers.IO) { BiliApi.getFavoriteFolders(expectedMid) }
+            val folders = withContext(Dispatchers.IO) { BiliFavoriteApi.getFavoriteFolders(expectedMid) }
             val selected = folders.firstOrNull()?.id
             val response =
               selected?.let {
-                withContext(Dispatchers.IO) { BiliApi.getFavoriteVideos(it, 1) }
+                withContext(Dispatchers.IO) { BiliFavoriteApi.getFavoriteVideos(it, 1) }
               } ?: dev.openbili.webdemo.api.SpaceVideoResponse(emptyList(), false)
             if (!isCurrentLoad(generation, expectedMid, section)) return@launch
             _state.value =
@@ -648,35 +527,17 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
                 loading = false,
               )
           }
-          MySection.HISTORY -> {
-            val (response, localHistory) =
-              withContext(Dispatchers.IO) {
-                BiliApi.getHistory(type = HistoryFilter.ALL.apiType) to
-                  (readLocalLiveHistory() + readLocalBangumiHistory())
-              }
-            if (!isCurrentLoad(generation, expectedMid, section)) return@launch
-            val remote = response.items.mapNotNull(::toHistoryCardItem)
-            _state.value =
-              _state.value.copy(
-                historyItems =
-                  (localHistory + remote)
-                    .sortedByDescending(HistoryCardItem::viewAt)
-                    .distinctBy(::historyMergeKey),
-                historyCursor = response.cursor,
-                historyHasMore = response.hasMore,
-                loading = false,
-              )
-          }
+          MySection.HISTORY -> Unit
           MySection.FOLLOWING -> {
             val (groups, response) =
               coroutineScope {
                 val groupsRequest =
                   async(Dispatchers.IO) {
-                    runCatching { BiliApi.getFollowingGroups() }.getOrDefault(emptyList())
+                    runCatching { BiliFollowApi.getFollowingGroups() }.getOrDefault(emptyList())
                   }
                 val followingRequest =
                   async(Dispatchers.IO) {
-                    BiliApi.getFollowings(
+                    BiliFollowApi.getFollowings(
                       expectedMid,
                       orderType = FollowingOrder.RECENT.apiValue,
                     )
@@ -701,12 +562,12 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
               coroutineScope {
                 val messagesRequest =
                   async(Dispatchers.IO) {
-                    BiliApi.getPrivateMessageSessions(size = PRIVATE_SESSION_PAGE_SIZE)
+                    BiliPrivateMessageApi.getPrivateMessageSessions(size = PRIVATE_SESSION_PAGE_SIZE)
                   }
                 val emotesRequest =
                   async(Dispatchers.IO) {
                     if (messageEmoteCache.isNotEmpty()) messageEmoteCache
-                    else runCatching { BiliApi.getReplyEmotes() }.getOrDefault(emptyList())
+                    else runCatching { BiliCommentApi.getReplyEmotes() }.getOrDefault(emptyList())
                   }
                 messagesRequest.await() to emotesRequest.await()
               }
@@ -722,12 +583,12 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
             }
             messageEmoteCache = emotes
             val selectedId =
-              requestedTarget
-                ?.let { target ->
-                  mergedMessages.firstOrNull { it.userMid == target.userMid }?.id
+              requestedTarget?.let { target ->
+                mergedMessages.firstOrNull { it.userMid == target.userMid }?.id
+              }
+                ?: _state.value.selectedMessageId?.takeIf { id ->
+                  mergedMessages.any { it.id == id }
                 }
-                ?: _state.value.selectedMessageId
-                  ?.takeIf { id -> mergedMessages.any { it.id == id } }
                 ?: mergedMessages.firstOrNull()?.id
             directPrivateMessageTarget = null
             _state.value =
@@ -754,7 +615,7 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
                 val emotesRequest =
                   async(Dispatchers.IO) {
                     if (messageEmoteCache.isNotEmpty()) messageEmoteCache
-                    else runCatching { BiliApi.getReplyEmotes() }.getOrDefault(emptyList())
+                    else runCatching { BiliCommentApi.getReplyEmotes() }.getOrDefault(emptyList())
                   }
                 pageRequest.await() to emotesRequest.await()
               }
@@ -782,11 +643,11 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
           MySection.LIKES -> {
             val (page, emotes) =
               coroutineScope {
-                val pageRequest = async(Dispatchers.IO) { BiliApi.getLikeMessages() }
+                val pageRequest = async(Dispatchers.IO) { BiliInteractionApi.getLikeMessages() }
                 val emotesRequest =
                   async(Dispatchers.IO) {
                     if (messageEmoteCache.isNotEmpty()) messageEmoteCache
-                    else runCatching { BiliApi.getReplyEmotes() }.getOrDefault(emptyList())
+                    else runCatching { BiliCommentApi.getReplyEmotes() }.getOrDefault(emptyList())
                   }
                 pageRequest.await() to emotesRequest.await()
               }
@@ -812,7 +673,7 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
           MySection.WATCH_LATER -> Unit
           MySection.CACHED_VIDEOS -> Unit
           MySection.SETTINGS -> {
-            val folders = withContext(Dispatchers.IO) { BiliApi.getFavoriteFolders(expectedMid) }
+            val folders = withContext(Dispatchers.IO) { BiliFavoriteApi.getFavoriteFolders(expectedMid) }
             if (!isCurrentLoad(generation, expectedMid, section)) return@launch
             _state.value = _state.value.copy(folders = folders, loading = false)
           }
@@ -834,7 +695,8 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
       section == MySection.SETTINGS ||
         section == MySection.WATCH_LATER ||
         section == MySection.CACHED_VIDEOS
-    ) return
+    )
+      return
     commitPendingUnfollows()
     if (section == MySection.FAVORITES && _state.value.selectedFolderId != null) {
       favoriteSearchJob?.cancel()
@@ -858,80 +720,248 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
         state.historyLoadingMore
     )
       return
-    _state.value = state.copy(historyFilter = filter)
+    historySearchJob?.cancel()
+    ++historySearchGeneration
+    _state.value = state.copy(historyFilter = filter, historySearch = HistorySearchState())
     loadHistoryPage(reset = true)
   }
 
+  /** 请求指定日期锚点的下一页，不会触发其他日期的加载。 */
+  fun loadMoreHistory(period: HistoryPeriod) {
+    loadHistoryPeriod(period)
+  }
+
+  /** 兼容旧调用方：默认继续加载“今天”锚点。 */
   fun loadMoreHistory() {
+    loadHistoryPeriod(HistoryPeriod.TODAY)
+  }
+
+  /** 时间轴点击使用连续元数据加载，完成目标日期到今天的所有日期范围后再跳转。 */
+  fun loadHistoryThrough(target: HistoryPeriod) {
     val state = _state.value
+    val expectedMid = mid
+    if (
+      expectedMid <= 0L ||
+        state.section != MySection.HISTORY ||
+        state.historyPeriods.isEmpty()
+    ) {
+      return
+    }
+    historyTimelineJob?.cancel()
+    historyTimelineJob = null
+    val filter = state.historyFilter
+    _state.value =
+      state.copy(
+        historyTimeline =
+          HistoryTimelineLoadState(target = target, loading = true, completed = false),
+        error = null,
+      )
+    historyTimelineJob =
+      viewModelScope.launch {
+        var generation = loadGeneration
+        try {
+          // 首屏的本地历史读取完成后再接管日期游标，避免把本地记录合并结果覆盖掉。
+          while (_state.value.loading && _state.value.section == MySection.HISTORY) {
+            delay(16L)
+          }
+          if (_state.value.section != MySection.HISTORY) return@launch
+          loadGeneration++
+          generation = loadGeneration
+          cancelHistoryPeriodJobs()
+          val idlePeriods =
+            _state.value.historyPeriods.mapValues { (_, value) -> value.copy(loading = false) }
+          _state.value =
+            _state.value.copy(
+              historyPeriods = idlePeriods,
+              historyLoadingMore = false,
+            )
+          historyPeriodsThrough(target).forEach { period ->
+            while (isCurrentLoad(generation, expectedMid, MySection.HISTORY)) {
+              val periodState = _state.value.historyPeriods[period] ?: break
+              if (periodState.initialized && !periodState.hasMore) break
+              val result = loadHistoryPeriodPage(period, filter, generation, expectedMid)
+              if (result == null || !result.progressed || !result.hasMore) break
+            }
+          }
+          if (isCurrentLoad(generation, expectedMid, MySection.HISTORY)) {
+            _state.value =
+              _state.value.copy(
+                historyTimeline =
+                  HistoryTimelineLoadState(target = target, completed = true),
+                historyLoadingMore = false,
+              )
+          }
+        } catch (error: Exception) {
+          if (error is kotlinx.coroutines.CancellationException) throw error
+          if (!isCurrentLoad(generation, expectedMid, MySection.HISTORY)) return@launch
+          _state.value =
+            _state.value.copy(
+              historyTimeline =
+                HistoryTimelineLoadState(
+                  target = target,
+                  completed = false,
+                  error = error.message ?: "历史记录加载失败",
+                ),
+              historyLoadingMore = false,
+            )
+        }
+      }
+  }
+
+  /** 使用网页端搜索接口检索完整历史，而不是只筛当前已经加载的卡片。 */
+  fun searchHistory(query: String) {
+    val normalized = query.trim()
+    historySearchJob?.cancel()
+    val generation = ++historySearchGeneration
+    if (normalized.isBlank()) {
+      _state.value = _state.value.copy(historySearch = HistorySearchState())
+      return
+    }
+    val state = _state.value
+    if (state.section != MySection.HISTORY || mid <= 0L) return
+    val filter = state.historyFilter
+    val business = filter.apiType.ifBlank { "all" }
+    _state.value =
+      state.copy(
+        historySearch = HistorySearchState(query = normalized, loading = true),
+        error = null,
+      )
+    val expectedMid = mid
+    historySearchJob =
+      viewModelScope.launch {
+        try {
+          val response =
+            withContext(Dispatchers.IO) {
+              BiliHistoryApi.searchHistory(normalized, page = 1, business = business)
+            }
+          if (
+            generation != historySearchGeneration ||
+              expectedMid != mid ||
+              _state.value.section != MySection.HISTORY ||
+              _state.value.historyFilter != filter
+          ) return@launch
+          val loaded = mergeHistoryItems(response.items.mapNotNull(::toHistoryCardItem))
+          _state.value =
+            _state.value.copy(
+              historySearch =
+                HistorySearchState(
+                  query = normalized,
+                  items = loaded,
+                  page = response.page,
+                  total = response.total,
+                  hasMore = response.hasMore,
+                )
+            )
+        } catch (error: Exception) {
+          if (error is kotlinx.coroutines.CancellationException) throw error
+          if (generation != historySearchGeneration || expectedMid != mid) return@launch
+          _state.value =
+            _state.value.copy(
+              historySearch =
+                HistorySearchState(query = normalized, error = error.message ?: "历史搜索失败")
+            )
+        }
+      }
+  }
+
+  /** 继续读取网页端历史搜索的下一页。 */
+  fun loadMoreHistorySearch() {
+    val state = _state.value
+    val search = state.historySearch
     if (
       state.section != MySection.HISTORY ||
-        state.loading ||
-        state.historyLoadingMore ||
-        !state.historyHasMore
+        search.query.isBlank() ||
+        search.loading ||
+        !search.hasMore ||
+        mid <= 0L
     )
       return
-    loadHistoryPage(reset = false)
+    val filter = state.historyFilter
+    val business = filter.apiType.ifBlank { "all" }
+    val nextPage = search.page + 1
+    val generation = historySearchGeneration
+    val expectedMid = mid
+    _state.value = _state.value.copy(historySearch = search.copy(loading = true))
+    historySearchJob =
+      viewModelScope.launch {
+        try {
+          val response =
+            withContext(Dispatchers.IO) {
+              BiliHistoryApi.searchHistory(search.query, page = nextPage, business = business)
+            }
+          if (
+            generation != historySearchGeneration ||
+              expectedMid != mid ||
+              _state.value.section != MySection.HISTORY ||
+              _state.value.historyFilter != filter ||
+              _state.value.historySearch.query != search.query
+          ) return@launch
+          val loaded = mergeHistoryItems(response.items.mapNotNull(::toHistoryCardItem))
+          _state.value =
+            _state.value.copy(
+              historySearch =
+                _state.value.historySearch.copy(
+                  items = mergeHistoryItems(_state.value.historySearch.items + loaded),
+                  page = response.page,
+                  total = response.total,
+                  hasMore = response.hasMore,
+                  loading = false,
+                  error = null,
+                )
+            )
+        } catch (error: Exception) {
+          if (error is kotlinx.coroutines.CancellationException) throw error
+          if (generation != historySearchGeneration || expectedMid != mid) return@launch
+          _state.value =
+            _state.value.copy(
+              historySearch = _state.value.historySearch.copy(
+                loading = false,
+                error = error.message ?: "历史搜索失败",
+              )
+            )
+        }
+      }
   }
 
   private fun loadHistoryPage(reset: Boolean) {
     val state = _state.value
     val expectedMid = mid
-    if (expectedMid <= 0L || state.section != MySection.HISTORY) return
+    if (!reset || expectedMid <= 0L || state.section != MySection.HISTORY) return
     val filter = state.historyFilter
-    val cursor = if (reset) HistoryCursor() else state.historyCursor
     val generation = ++loadGeneration
     loadJob?.cancel()
+    historyTimelineJob?.cancel()
+    historyTimelineJob = null
+    cancelHistoryPeriodJobs()
+    val periodStates = emptyHistoryPeriodStates()
+    historyLocalItems = emptyList()
     _state.value =
       state.copy(
-        historyItems = if (reset) emptyList() else state.historyItems,
-        historyCursor = if (reset) HistoryCursor() else state.historyCursor,
-        historyHasMore = if (reset) false else state.historyHasMore,
-        historyLoadingMore = !reset,
-        loading = reset,
+        historyItems = emptyList(),
+        historyPeriods = periodStates,
+        historyTimeline = HistoryTimelineLoadState(),
+        historyCursor = HistoryCursor(),
+        historyHasMore = false,
+        historyLoadingMore = false,
+        loading = true,
         error = null,
       )
     loadJob = viewModelScope.launch {
       try {
-        val (response, localHistory) =
-          withContext(Dispatchers.IO) {
-            loadFilteredHistory(cursor, filter) to
-              if (!reset) emptyList()
-              else
-                when (filter) {
-                  HistoryFilter.ALL -> readLocalLiveHistory() + readLocalBangumiHistory()
-                  HistoryFilter.LIVE -> readLocalLiveHistory()
-                  else -> emptyList()
-                }
-          }
+        val localHistory = withContext(Dispatchers.IO) { readLocalHistory(filter) }
         if (!isCurrentLoad(generation, expectedMid, MySection.HISTORY)) return@launch
         if (_state.value.historyFilter != filter) return@launch
-        val remoteLoaded =
-          response.items
-            .filter { item ->
-              when (filter) {
-                HistoryFilter.ALL -> true
-                HistoryFilter.VIDEO -> item is AccountHistoryItem.Video
-                HistoryFilter.ARTICLE -> item is AccountHistoryItem.Article
-                HistoryFilter.LIVE -> item is AccountHistoryItem.Live
-              }
-            }
-            .mapNotNull(::toHistoryCardItem)
-        val loaded =
-          (localHistory + remoteLoaded)
-            .sortedByDescending(HistoryCardItem::viewAt)
-            .distinctBy(::historyMergeKey)
+        historyLocalItems = mergeHistoryItems(localHistory)
         _state.value =
           _state.value.copy(
-            historyItems =
-              (if (reset) loaded else _state.value.historyItems + loaded)
-                .distinctBy(::historyMergeKey)
-                .sortedByDescending(HistoryCardItem::viewAt),
-            historyCursor = response.cursor,
-            historyHasMore = response.hasMore && response.cursor != cursor,
+            historyItems = historyLocalItems,
+            historyPeriods = periodStates,
+            historyCursor = HistoryCursor(),
+            historyHasMore = false,
             historyLoadingMore = false,
             loading = false,
           )
+        loadHistoryPeriod(HistoryPeriod.TODAY)
       } catch (error: Exception) {
         if (error is kotlinx.coroutines.CancellationException) throw error
         if (!isCurrentLoad(generation, expectedMid, MySection.HISTORY)) return@launch
@@ -945,13 +975,129 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
     }
   }
 
-  private fun loadFilteredHistory(
-    cursor: HistoryCursor,
+  private fun readLocalHistory(filter: HistoryFilter): List<HistoryCardItem> =
+    when (filter) {
+      HistoryFilter.ALL -> readLocalLiveHistory() + readLocalBangumiHistory()
+      HistoryFilter.LIVE -> readLocalLiveHistory()
+      else -> emptyList()
+    }
+
+  private fun loadHistoryPeriod(period: HistoryPeriod) {
+    val state = _state.value
+    val expectedMid = mid
+    if (
+      expectedMid <= 0L ||
+        state.section != MySection.HISTORY ||
+        state.historyTimeline.loading
+    ) {
+      return
+    }
+    val previous = state.historyPeriods[period] ?: return
+    if (previous.loading || (previous.initialized && !previous.hasMore)) return
+    val filter = state.historyFilter
+    val generation = loadGeneration
+    val job =
+      viewModelScope.launch {
+        try {
+          loadHistoryPeriodPage(period, filter, generation, expectedMid)
+        } catch (error: Exception) {
+          if (error is kotlinx.coroutines.CancellationException) throw error
+        }
+      }
+    historyPeriodJobs[period]?.cancel()
+    historyPeriodJobs[period] = job
+    job.invokeOnCompletion {
+      if (historyPeriodJobs[period] === job) historyPeriodJobs.remove(period)
+    }
+  }
+
+  private data class HistoryPeriodPageResult(
+    val progressed: Boolean,
+    val hasMore: Boolean,
+  )
+
+  private suspend fun loadHistoryPeriodPage(
+    period: HistoryPeriod,
     filter: HistoryFilter,
-  ): AccountHistoryResponse {
-    // Each history business owns its cursor. Scanning the mixed feed here made article paging
-    // stop after an arbitrary six pages and then continued with the wrong cursor.
-    return BiliApi.getHistory(cursor = cursor, type = filter.apiType)
+    generation: Long,
+    expectedMid: Long,
+  ): HistoryPeriodPageResult? {
+    if (!isCurrentLoad(generation, expectedMid, MySection.HISTORY)) return null
+    if (_state.value.historyFilter != filter) return null
+    val previous = _state.value.historyPeriods[period] ?: return null
+    if (previous.loading || (previous.initialized && !previous.hasMore)) {
+      return HistoryPeriodPageResult(progressed = false, hasMore = previous.hasMore)
+    }
+    val range = previous.range
+    val cursor =
+      if (previous.initialized) previous.cursor
+      else HistoryCursor(max = 0L, viewAt = range.endSeconds, business = "")
+    updateHistoryPeriodState(period) { current ->
+      current.copy(cursor = cursor, loading = true, error = null)
+    }
+    try {
+      val response =
+        withContext(Dispatchers.IO) {
+          BiliHistoryApi.getHistory(cursor = cursor, type = filter.apiType)
+        }
+      if (!isCurrentLoad(generation, expectedMid, MySection.HISTORY)) return null
+      if (_state.value.historyFilter != filter) return null
+      val parsed =
+        response.items
+          .filter { item ->
+            when (filter) {
+              HistoryFilter.ALL -> true
+              HistoryFilter.VIDEO -> item is AccountHistoryItem.Video
+              HistoryFilter.ARTICLE -> item is AccountHistoryItem.Article
+              HistoryFilter.LIVE -> item is AccountHistoryItem.Live
+            }
+          }
+          .mapNotNull(::toHistoryCardItem)
+      val inRange = parsed.filter { range.contains(it.viewAt) }
+      // 一页可能跨过日期边界。跨出下界后，继续请求该锚点已经没有必要；
+      // 跨出的记录不会丢失，其他日期锚点会用自己的边界游标重新读取并去重。
+      val crossedLowerBound = parsed.any { it.viewAt in 1L until range.startSeconds }
+      val progressed = response.cursor != cursor
+      val hasMore = response.hasMore && progressed && !crossedLowerBound
+      updateHistoryPeriodState(period) { current ->
+        current.copy(
+          items = mergeHistoryItems(current.items + inRange),
+          cursor = response.cursor,
+          hasMore = hasMore,
+          loading = false,
+          initialized = true,
+          error = null,
+        )
+      }
+      return HistoryPeriodPageResult(progressed = progressed, hasMore = hasMore)
+    } catch (error: Exception) {
+      if (error is kotlinx.coroutines.CancellationException) throw error
+      if (isCurrentLoad(generation, expectedMid, MySection.HISTORY)) {
+        updateHistoryPeriodState(period) { current ->
+          current.copy(loading = false, error = error.message ?: "历史记录加载失败")
+        }
+      }
+      throw error
+    }
+  }
+
+  private fun updateHistoryPeriodState(
+    period: HistoryPeriod,
+    transform: (HistoryPeriodLoadState) -> HistoryPeriodLoadState,
+  ) {
+    val state = _state.value
+    val previous = state.historyPeriods[period] ?: return
+    val updated = transform(previous)
+    val periods = state.historyPeriods.toMutableMap()
+    periods[period] = updated
+    _state.value =
+      state.copy(
+        historyPeriods = periods,
+        historyItems = mergeHistoryItems(historyLocalItems + periods.values.flatMap { it.items }),
+        historyCursor = updated.cursor,
+        historyHasMore = periods.values.any { it.hasMore },
+        historyLoadingMore = periods.values.any { it.loading },
+      )
   }
 
   fun selectMessage(id: Long) {
@@ -963,8 +1109,8 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
   }
 
   /**
-   * Opens the existing messages section on a specific profile, including users that do not yet
-   * have a session row. History still loads through the normal private-message paging pipeline.
+   * 在指定用户的空间打开既有消息板块，包括还没有会话行的用户；历史仍走普通私信
+   * 分页管线加载。
    */
   fun openPrivateConversation(userMid: Long, userName: String, userFace: String) {
     if (mid <= 0L || userMid <= 0L || userMid == mid) return
@@ -988,7 +1134,8 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
         !privateSessionHasMore ||
         cursor <= 0L ||
         expectedMid <= 0L
-    ) return
+    )
+      return
     val generation = loadGeneration
     _state.value = state.copy(privateSessionLoadingMore = true, error = null)
     privateSessionLoadMoreJob?.cancel()
@@ -996,7 +1143,7 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
       try {
         val page =
           withContext(Dispatchers.IO) {
-            BiliApi.getPrivateMessageSessions(cursor, PRIVATE_SESSION_PAGE_SIZE)
+            BiliPrivateMessageApi.getPrivateMessageSessions(cursor, PRIVATE_SESSION_PAGE_SIZE)
           }
         if (!isCurrentLoad(generation, expectedMid, MySection.MESSAGES)) return@launch
         val merged =
@@ -1028,15 +1175,17 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
   ): List<AccountMessage> {
     val previousByUser = privateMessagesCache.associateBy(AccountMessage::userMid)
     val changedUsers =
-      freshMessages.mapNotNull { fresh ->
-        val previous = previousByUser[fresh.userMid]
-        fresh.userMid.takeIf {
-          previous == null || fresh.sequence != previous.sequence || fresh.time > previous.time
+      freshMessages
+        .mapNotNull { fresh ->
+          val previous = previousByUser[fresh.userMid]
+          fresh.userMid.takeIf {
+            previous == null || fresh.sequence != previous.sequence || fresh.time > previous.time
+          }
         }
-      }.toSet()
+        .toSet()
     if (changedUsers.isNotEmpty()) {
-      // Keep the open conversation intact. Realtime updates merge into it below; clearing it here
-      // caused the whole right pane to flash and defeated per-message insertion animations.
+      // 保持已打开的会话不动：实时更新在下方合并进去；清空它会让整个右侧窗格闪烁，
+      // 也会破坏逐条消息的插入动画。
       val selectedUser =
         privateMessagesCache.firstOrNull { it.id == _state.value.selectedMessageId }?.userMid
       val inactiveChangedUsers = changedUsers - setOfNotNull(selectedUser)
@@ -1045,14 +1194,14 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
       privateHistoryHasMoreByUser = privateHistoryHasMoreByUser - inactiveChangedUsers
     }
     val selectedId = _state.value.selectedMessageId
-    val normalizedFresh =
-      freshMessages.map { message ->
-        if (message.id == selectedId) message.copy(unreadCount = 0) else message
-      }
+    val normalizedFresh = freshMessages.map { message ->
+      if (message.id == selectedId) message.copy(unreadCount = 0) else message
+    }
     val merged =
       if (replaceAll) normalizedFresh
       else {
-        (if (prependFresh) normalizedFresh + privateMessagesCache else privateMessagesCache + normalizedFresh)
+        (if (prependFresh) normalizedFresh + privateMessagesCache
+          else privateMessagesCache + normalizedFresh)
           .distinctBy(AccountMessage::userMid)
       }
     privateMessagesCache = merged
@@ -1069,10 +1218,9 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
     val session = privateMessagesCache.firstOrNull { it.id == sessionId } ?: return
     val unreadBeforeAcknowledgement = session.unreadCount
     if (session.unreadCount > 0) {
-      privateMessagesCache =
-        privateMessagesCache.map { message ->
-          if (message.id == sessionId) message.copy(unreadCount = 0) else message
-        }
+      privateMessagesCache = privateMessagesCache.map { message ->
+        if (message.id == sessionId) message.copy(unreadCount = 0) else message
+      }
       _state.value =
         _state.value.copy(
           messages = privateMessagesCache,
@@ -1083,19 +1231,19 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
     viewModelScope.launch {
       val acknowledged =
         withContext(Dispatchers.IO) {
-          runCatching { BiliApi.markPrivateMessageRead(session.userMid, session.sequence) }.isSuccess
+          runCatching { BiliPrivateMessageApi.markPrivateMessageRead(session.userMid, session.sequence) }
+            .isSuccess
         }
       if (!acknowledged) {
-        // Do not permanently pretend that a failed receipt reached the server. The next sync may
-        // still resolve it, but until then retain the visible unread indicator for this session.
-        privateMessagesCache =
-          privateMessagesCache.map { message ->
-            if (message.id == sessionId && message.sequence == session.sequence) {
-              message.copy(unreadCount = unreadBeforeAcknowledgement)
-            } else {
-              message
-            }
+        // 不要永久假装失败的已读回执已到达服务端：下次同步仍可能解决它，但在那
+        // 之前为该会话保留可见的未读指示。
+        privateMessagesCache = privateMessagesCache.map { message ->
+          if (message.id == sessionId && message.sequence == session.sequence) {
+            message.copy(unreadCount = unreadBeforeAcknowledgement)
+          } else {
+            message
           }
+        }
         val current = _state.value
         _state.value =
           current.copy(
@@ -1114,20 +1262,24 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
         delay(PRIVATE_MESSAGE_SYNC_INTERVAL_MS)
         val fresh =
           withContext(Dispatchers.IO) {
-            runCatching { BiliApi.getPrivateMessageSessions(size = PRIVATE_SESSION_PAGE_SIZE).items }
+            runCatching {
+                BiliPrivateMessageApi.getPrivateMessageSessions(size = PRIVATE_SESSION_PAGE_SIZE).items
+              }
               .getOrNull()
           } ?: continue
         if (!isCurrentLoad(generation, expectedMid, MySection.MESSAGES)) break
         val previousByUser = privateMessagesCache.associateBy(AccountMessage::userMid)
         val changedUsers =
-          fresh.mapNotNull { message ->
-            val previous = previousByUser[message.userMid]
-            message.userMid.takeIf {
-              previous == null ||
-                message.sequence != previous.sequence ||
-                message.time > previous.time
+          fresh
+            .mapNotNull { message ->
+              val previous = previousByUser[message.userMid]
+              message.userMid.takeIf {
+                previous == null ||
+                  message.sequence != previous.sequence ||
+                  message.time > previous.time
+              }
             }
-          }.toSet()
+            .toSet()
         mergePrivateSessionUpdates(fresh, replaceAll = false)
         val selected = privateMessagesCache.firstOrNull { it.id == _state.value.selectedMessageId }
         if (selected != null && selected.userMid in changedUsers) {
@@ -1135,7 +1287,7 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
           val latest =
             withContext(Dispatchers.IO) {
               runCatching {
-                  BiliApi.getPrivateMessageHistory(
+                  BiliPrivateMessageApi.getPrivateMessageHistory(
                     talkerId = selected.userMid,
                     accountMid = expectedMid,
                     size = PRIVATE_HISTORY_PAGE_SIZE,
@@ -1149,7 +1301,7 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
             normalizePrivateMessageHistory((existing + latest.items).distinctBy(AccountMessage::id))
           privateMessageHistoryCache =
             privateMessageHistoryCache + (selected.userMid to mergedHistory)
-          // Do not touch loading flags: this is an in-place append, never a page refresh.
+          // 不要动加载标记：这是原地追加，永远不是整页刷新。
           _state.value =
             _state.value.copy(
               privateMessageHistory =
@@ -1178,7 +1330,13 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
       return
     }
     val endSequence = if (loadMore) privateHistoryCursorByUser[userMid] ?: 0L else 0L
-    if (loadMore && (state.privateHistoryLoadingMore || endSequence <= 0L || privateHistoryHasMoreByUser[userMid] != true)) return
+    if (
+      loadMore &&
+        (state.privateHistoryLoadingMore ||
+          endSequence <= 0L ||
+          privateHistoryHasMoreByUser[userMid] != true)
+    )
+      return
     val expectedMid = mid
     val generation = loadGeneration
     privateHistoryJob?.cancel()
@@ -1193,12 +1351,12 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
       try {
         val page =
           withContext(Dispatchers.IO) {
-            BiliApi.getPrivateMessageHistory(
-                talkerId = userMid,
-                accountMid = expectedMid,
-                endSequence = endSequence,
-                size = PRIVATE_HISTORY_PAGE_SIZE,
-              )
+            BiliPrivateMessageApi.getPrivateMessageHistory(
+              talkerId = userMid,
+              accountMid = expectedMid,
+              endSequence = endSequence,
+              size = PRIVATE_HISTORY_PAGE_SIZE,
+            )
           }
         if (!isCurrentLoad(generation, expectedMid, MySection.MESSAGES)) return@launch
         val existing = _state.value.privateMessageHistory[userMid].orEmpty()
@@ -1255,8 +1413,10 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
         if (!isCurrentLoad(generation, expectedMid, MySection.INTERACTIONS)) return@launch
         _state.value =
           _state.value.copy(
-            messages = (_state.value.messages + page.items).distinctBy { it.id }
-              .sortedByDescending { it.time },
+            messages =
+              (_state.value.messages + page.items)
+                .distinctBy { it.id }
+                .sortedByDescending { it.time },
             messageReplyCursor = page.replyCursor,
             messageAtCursor = page.atCursor,
             messageReplyHasMore = state.messageReplyHasMore && page.replyHasMore,
@@ -1288,14 +1448,15 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
         state.loading ||
         state.messagesLoadingMore ||
         !state.messageLikeHasMore
-    ) return
+    )
+      return
     val expectedMid = mid
     val generation = loadGeneration
     _state.value = state.copy(messagesLoadingMore = true, error = null)
     messageLoadMoreJob?.cancel()
     messageLoadMoreJob = viewModelScope.launch {
       try {
-        val page = withContext(Dispatchers.IO) { BiliApi.getLikeMessages(state.messageLikeCursor) }
+        val page = withContext(Dispatchers.IO) { BiliInteractionApi.getLikeMessages(state.messageLikeCursor) }
         if (!isCurrentLoad(generation, expectedMid, MySection.LIKES)) return@launch
         _state.value =
           _state.value.copy(
@@ -1329,8 +1490,8 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
     loadAt: Boolean,
   ): InteractionMessagePage = coroutineScope {
     val replyRequest =
-      if (loadReply) async(Dispatchers.IO) { BiliApi.getReplyMessages(replyCursor) } else null
-    val atRequest = if (loadAt) async(Dispatchers.IO) { BiliApi.getAtMessages(atCursor) } else null
+      if (loadReply) async(Dispatchers.IO) { BiliInteractionApi.getReplyMessages(replyCursor) } else null
+    val atRequest = if (loadAt) async(Dispatchers.IO) { BiliInteractionApi.getAtMessages(atCursor) } else null
     val replies =
       replyRequest?.await()
         ?: dev.openbili.webdemo.api.AccountMessagePage(emptyList(), replyCursor, false)
@@ -1375,7 +1536,7 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
         unfollowedIds = emptySet(),
       )
     viewModelScope.launch(Dispatchers.IO) {
-      pending.forEach { userMid -> runCatching { BiliApi.setFollowing(userMid, false) } }
+      pending.forEach { userMid -> runCatching { BiliFollowApi.setFollowing(userMid, false) } }
     }
   }
 
@@ -1448,9 +1609,9 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
         val response =
           withContext(Dispatchers.IO) {
             if (query.isNotBlank() || selectedGroupId == null) {
-              BiliApi.getFollowings(expectedMid, page, query, order.apiValue)
+              BiliFollowApi.getFollowings(expectedMid, page, query, order.apiValue)
             } else {
-              BiliApi.getFollowingGroupMembers(selectedGroupId, page, order.apiValue)
+              BiliFollowApi.getFollowingGroupMembers(selectedGroupId, page, order.apiValue)
             }
           }
         if (!isCurrentLoad(generation, expectedMid, MySection.FOLLOWING)) return@launch
@@ -1498,8 +1659,8 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
       try {
         withContext(Dispatchers.IO) {
           if (_state.value.section == MySection.MESSAGES || message.isPrivate)
-            BiliApi.sendPrivateMessage(mid, message.userMid, text)
-          else BiliApi.replyToMessage(message, text)
+            BiliPrivateMessageApi.sendPrivateMessage(mid, message.userMid, text)
+          else BiliPrivateMessageApi.replyToMessage(message, text)
         }
         val sentAt = System.currentTimeMillis() / 1000L
         val current = _state.value
@@ -1525,17 +1686,17 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
                 isOutgoing = true,
               )
             current.privateMessageHistory +
-              (message.userMid to (current.privateMessageHistory[message.userMid].orEmpty() + local))
+              (message.userMid to
+                (current.privateMessageHistory[message.userMid].orEmpty() + local))
           } else current.privateMessageHistory
         _state.value = current.copy(loading = false, privateMessageHistory = updatedHistory)
         if (current.section == MySection.MESSAGES || message.isPrivate) {
           privateMessageHistoryCache = updatedHistory
-          privateMessagesCache =
-            privateMessagesCache.map { session ->
-              if (session.userMid == message.userMid) {
-                session.copy(content = text, time = sentAt, unreadCount = 0)
-              } else session
-            }
+          privateMessagesCache = privateMessagesCache.map { session ->
+            if (session.userMid == message.userMid) {
+              session.copy(content = text, time = sentAt, unreadCount = 0)
+            } else session
+          }
         }
       } catch (error: Exception) {
         _state.value = _state.value.copy(loading = false, error = error.message ?: "回复失败")
@@ -1555,54 +1716,56 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
   }
 
   fun replyToSelectedPrivate(context: Context, text: String, imageUri: Uri?) {
-    val selected = _state.value.messages.firstOrNull { it.id == _state.value.selectedMessageId } ?: return
+    val selected =
+      _state.value.messages.firstOrNull { it.id == _state.value.selectedMessageId } ?: return
     if (text.isBlank() && imageUri == null) return
     viewModelScope.launch {
       _state.value = _state.value.copy(privateMessageSending = true, error = null)
       try {
-        val image =
-          imageUri?.let { uri ->
-            try {
-              withContext(Dispatchers.IO) {
-                val bytes =
-                  context.contentResolver.openInputStream(uri)?.use { input -> input.readBytes() }
-                    ?: throw IllegalStateException("无法读取图片")
-                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-                if (bounds.outWidth <= 0 || bounds.outHeight <= 0) throw IllegalStateException("图片格式不受支持")
-                val mime = context.contentResolver.getType(uri).orEmpty().ifBlank { "image/jpeg" }
-                BiliApi.uploadPrivateImage(
-                  bytes = bytes,
-                  fileName = "private-image.${mime.substringAfterLast('/', "jpg")}",
-                  mimeType = mime,
-                  width = bounds.outWidth,
-                  height = bounds.outHeight,
-                )
-              }
-            } catch (error: Exception) {
-              if (error is kotlinx.coroutines.CancellationException) throw error
-              throw IllegalStateException("图片上传失败：${error.message ?: "未知错误"}", error)
-            }
-          }
-        val latestAfterSend = withContext(Dispatchers.IO) {
-          // Keep the protocol order deterministic when a draft includes both media and text.
-          if (image != null) {
-            try {
-              BiliApi.sendPrivateImage(mid, selected.userMid, image)
-            } catch (error: Exception) {
-              throw IllegalStateException("图片消息发送失败：${error.message ?: "未知错误"}", error)
-            }
-          }
-          if (text.isNotBlank()) BiliApi.sendPrivateMessage(mid, selected.userMid, text)
-          runCatching {
-              BiliApi.getPrivateMessageHistory(
-                talkerId = selected.userMid,
-                accountMid = mid,
-                size = PRIVATE_HISTORY_PAGE_SIZE,
+        val image = imageUri?.let { uri ->
+          try {
+            withContext(Dispatchers.IO) {
+              val bytes =
+                context.contentResolver.openInputStream(uri)?.use { input -> input.readBytes() }
+                  ?: throw IllegalStateException("无法读取图片")
+              val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+              BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+              if (bounds.outWidth <= 0 || bounds.outHeight <= 0)
+                throw IllegalStateException("图片格式不受支持")
+              val mime = context.contentResolver.getType(uri).orEmpty().ifBlank { "image/jpeg" }
+              BiliPrivateMessageApi.uploadPrivateImage(
+                bytes = bytes,
+                fileName = "private-image.${mime.substringAfterLast('/', "jpg")}",
+                mimeType = mime,
+                width = bounds.outWidth,
+                height = bounds.outHeight,
               )
             }
-            .getOrNull()
+          } catch (error: Exception) {
+            if (error is kotlinx.coroutines.CancellationException) throw error
+            throw IllegalStateException("图片上传失败：${error.message ?: "未知错误"}", error)
+          }
         }
+        val latestAfterSend =
+          withContext(Dispatchers.IO) {
+            // 草稿同时含媒体与文本时保持协议顺序确定（先图后文）。
+            if (image != null) {
+              try {
+                BiliPrivateMessageApi.sendPrivateImage(mid, selected.userMid, image)
+              } catch (error: Exception) {
+                throw IllegalStateException("图片消息发送失败：${error.message ?: "未知错误"}", error)
+              }
+            }
+            if (text.isNotBlank()) BiliPrivateMessageApi.sendPrivateMessage(mid, selected.userMid, text)
+            runCatching {
+                BiliPrivateMessageApi.getPrivateMessageHistory(
+                  talkerId = selected.userMid,
+                  accountMid = mid,
+                  size = PRIVATE_HISTORY_PAGE_SIZE,
+                )
+              }
+              .getOrNull()
+          }
         val sentAt = System.currentTimeMillis() / 1_000L
         val current = _state.value
         val mergedHistory =
@@ -1610,15 +1773,13 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
             current.privateMessageHistory[selected.userMid].orEmpty() +
               latestAfterSend?.items.orEmpty()
           )
-        val updatedHistory =
-          current.privateMessageHistory +
-            (selected.userMid to mergedHistory)
+        val updatedHistory = current.privateMessageHistory + (selected.userMid to mergedHistory)
         val sessionPreview = text.ifBlank { "图片消息" }
-        privateMessagesCache =
-          privateMessagesCache.map { session ->
-            if (session.userMid == selected.userMid) session.copy(content = sessionPreview, time = sentAt, unreadCount = 0)
-            else session
-          }
+        privateMessagesCache = privateMessagesCache.map { session ->
+          if (session.userMid == selected.userMid)
+            session.copy(content = sessionPreview, time = sentAt, unreadCount = 0)
+          else session
+        }
         privateMessageHistoryCache = updatedHistory
         _state.value =
           current.copy(
@@ -1639,12 +1800,13 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
   }
 
   fun withdrawPrivateMessage(message: AccountMessage) {
-    val selected = _state.value.messages.firstOrNull { it.id == _state.value.selectedMessageId } ?: return
+    val selected =
+      _state.value.messages.firstOrNull { it.id == _state.value.selectedMessageId } ?: return
     if (!message.isOutgoing || message.withdrawn || message.messageKey <= 0L) return
     viewModelScope.launch {
       try {
         withContext(Dispatchers.IO) {
-          BiliApi.withdrawPrivateMessage(mid, selected.userMid, message.messageKey)
+          BiliPrivateMessageApi.withdrawPrivateMessage(mid, selected.userMid, message.messageKey)
         }
         updatePrivateMessage(message.id) {
           it.copy(
@@ -1662,14 +1824,19 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
   }
 
   fun deletePrivateMessage(message: AccountMessage) {
-    val selected = _state.value.messages.firstOrNull { it.id == _state.value.selectedMessageId } ?: return
-    val updated = _state.value.privateMessageHistory[selected.userMid].orEmpty().filterNot { it.id == message.id }
+    val selected =
+      _state.value.messages.firstOrNull { it.id == _state.value.selectedMessageId } ?: return
+    val updated =
+      _state.value.privateMessageHistory[selected.userMid].orEmpty().filterNot {
+        it.id == message.id
+      }
     privateMessageHistoryCache = privateMessageHistoryCache + (selected.userMid to updated)
     _state.value = _state.value.copy(privateMessageHistory = privateMessageHistoryCache)
   }
 
   private fun updatePrivateMessage(messageId: Long, transform: (AccountMessage) -> AccountMessage) {
-    val selected = _state.value.messages.firstOrNull { it.id == _state.value.selectedMessageId } ?: return
+    val selected =
+      _state.value.messages.firstOrNull { it.id == _state.value.selectedMessageId } ?: return
     val updated =
       _state.value.privateMessageHistory[selected.userMid].orEmpty().map { message ->
         if (message.id == messageId) transform(message) else message
@@ -1688,14 +1855,15 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
       ownerMid <= 0L ||
         _state.value.section != MySection.FAVORITES ||
         _state.value.favoriteFolderActionBusy
-    ) return
+    )
+      return
     _state.value = _state.value.copy(favoriteFolderActionBusy = true, error = null)
     viewModelScope.launch {
       try {
         val folders =
           withContext(Dispatchers.IO) {
-            BiliApi.createFavoriteFolder(title, isPublic)
-            BiliApi.getFavoriteFolders(ownerMid)
+            BiliFavoriteApi.createFavoriteFolder(title, isPublic)
+            BiliFavoriteApi.getFavoriteFolders(ownerMid)
           }
         if (mid != ownerMid || _state.value.section != MySection.FAVORITES) return@launch
         val previousSelection = _state.value.selectedFolderId
@@ -1727,19 +1895,21 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
     if (userIds.isEmpty()) return
     viewModelScope.launch {
       val gate = Semaphore(6)
-      val styles =
-        coroutineScope {
-          userIds.map { userMid ->
+      val styles = coroutineScope {
+        userIds
+          .map { userMid ->
             async(Dispatchers.IO) {
-              gate.withPermit { runCatching { userMid to BiliApi.getAccountMessageUserStyle(userMid) }.getOrNull() }
+              gate.withPermit {
+                runCatching { userMid to BiliHistoryApi.getAccountMessageUserStyle(userMid) }.getOrNull()
+              }
             }
-          }.mapNotNull { it.await() }.toMap()
-        }
+          }
+          .mapNotNull { it.await() }
+          .toMap()
+      }
       if (!isCurrentLoad(generation, expectedMid, section) || styles.isEmpty()) return@launch
       _state.value =
-        _state.value.copy(
-          messages = applyAccountMessageUserStyles(_state.value.messages, styles)
-        )
+        _state.value.copy(messages = applyAccountMessageUserStyles(_state.value.messages, styles))
     }
   }
 
@@ -1749,11 +1919,12 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
       ownerMid <= 0L ||
         _state.value.section != MySection.FAVORITES ||
         _state.value.favoriteFolderActionBusy
-    ) return
+    )
+      return
     _state.value = _state.value.copy(favoriteFolderActionBusy = true, error = null)
     viewModelScope.launch {
       try {
-        withContext(Dispatchers.IO) { BiliApi.editFavoriteFolder(folder.id, title, isPublic) }
+        withContext(Dispatchers.IO) { BiliFavoriteApi.editFavoriteFolder(folder.id, title, isPublic) }
         if (mid != ownerMid || _state.value.section != MySection.FAVORITES) return@launch
         _state.value =
           _state.value.copy(
@@ -1779,18 +1950,20 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
       ownerMid <= 0L ||
         _state.value.section != MySection.FAVORITES ||
         _state.value.favoriteFolderActionBusy
-    ) return
+    )
+      return
     _state.value = _state.value.copy(favoriteFolderActionBusy = true, error = null)
     viewModelScope.launch {
       try {
         val folders =
           withContext(Dispatchers.IO) {
-            BiliApi.deleteFavoriteFolder(folder.id)
-            BiliApi.getFavoriteFolders(ownerMid)
+            BiliFavoriteApi.deleteFavoriteFolder(folder.id)
+            BiliFavoriteApi.getFavoriteFolders(ownerMid)
           }
         if (mid != ownerMid || _state.value.section != MySection.FAVORITES) return@launch
         val oldSelection = _state.value.selectedFolderId
-        val selection = oldSelection?.takeIf { id -> folders.any { it.id == id } } ?: folders.firstOrNull()?.id
+        val selection =
+          oldSelection?.takeIf { id -> folders.any { it.id == id } } ?: folders.firstOrNull()?.id
         _state.value =
           _state.value.copy(
             folders = folders,
@@ -1858,7 +2031,7 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
     loadJob = viewModelScope.launch {
       try {
         val response =
-          withContext(Dispatchers.IO) { BiliApi.getFavoriteVideos(folderId, page, query) }
+          withContext(Dispatchers.IO) { BiliFavoriteApi.getFavoriteVideos(folderId, page, query) }
         if (!isCurrentLoad(generation, expectedMid, MySection.FAVORITES)) return@launch
         val loadedVideos = response.cards.map(::toFeedItem)
         val loadedAids = response.cards.associate { card -> favoriteVideoId(card) to card.aid }
@@ -1926,13 +2099,13 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
       try {
         val sourceWasPresent =
           withContext(Dispatchers.IO) {
-            BiliApi.favoriteFolderContains(sourceFolderId, resourceId, resourceType)
+            BiliFavoriteApi.favoriteFolderContains(sourceFolderId, resourceId, resourceType)
           }
         if (!sourceWasPresent) throw IllegalStateException("这个内容已经不在当前收藏夹了")
         val destinationWasPresent =
           destinationFolderId?.let { folderId ->
             withContext(Dispatchers.IO) {
-              BiliApi.favoriteFolderContains(folderId, resourceId, resourceType)
+              BiliFavoriteApi.favoriteFolderContains(folderId, resourceId, resourceType)
             }
           } ?: false
         if (!move && destinationWasPresent) {
@@ -1941,19 +2114,19 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
         withContext(Dispatchers.IO) {
           when {
             destinationFolderId == null ->
-              BiliApi.removeFavoriteResource(
+              BiliFavoriteApi.removeFavoriteResource(
                 resourceId = resourceId,
                 resourceType = resourceType,
                 folderId = sourceFolderId,
               )
             move && destinationWasPresent ->
-              BiliApi.removeFavoriteResource(
+              BiliFavoriteApi.removeFavoriteResource(
                 resourceId = resourceId,
                 resourceType = resourceType,
                 folderId = sourceFolderId,
               )
             move ->
-              BiliApi.moveFavoriteResource(
+              BiliFavoriteApi.moveFavoriteResource(
                 ownerMid = ownerMid,
                 resourceId = resourceId,
                 resourceType = resourceType,
@@ -1961,7 +2134,7 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
                 targetFolderId = destinationFolderId,
               )
             else ->
-              BiliApi.copyFavoriteResource(
+              BiliFavoriteApi.copyFavoriteResource(
                 ownerMid = ownerMid,
                 resourceId = resourceId,
                 resourceType = resourceType,
@@ -2021,11 +2194,11 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
     repeat(3) { attempt ->
       val sourceContains =
         withContext(Dispatchers.IO) {
-          BiliApi.favoriteFolderContains(sourceFolderId, resourceId, resourceType)
+          BiliFavoriteApi.favoriteFolderContains(sourceFolderId, resourceId, resourceType)
         }
       val destinationContains = destinationFolderId?.let { folderId ->
         withContext(Dispatchers.IO) {
-          BiliApi.favoriteFolderContains(folderId, resourceId, resourceType)
+          BiliFavoriteApi.favoriteFolderContains(folderId, resourceId, resourceType)
         }
       }
       val confirmed =
@@ -2066,10 +2239,11 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
       is AccountHistoryItem.Bangumi ->
         HistoryCardItem.Bangumi(
           item =
-            toFeedItem(item.card).copy(
-              id = item.bangumi.id,
-              videoUrl = item.bangumi.videoUrl,
-            ),
+            toFeedItem(item.card)
+              .copy(
+                id = item.bangumi.id,
+                videoUrl = item.bangumi.videoUrl,
+              ),
           bangumi = item.bangumi,
           mediaLabel = item.mediaLabel,
           viewAt = item.viewAt,

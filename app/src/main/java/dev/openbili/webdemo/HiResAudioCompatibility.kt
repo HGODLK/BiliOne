@@ -16,10 +16,10 @@ import androidx.media3.exoplayer.mediacodec.MediaCodecInfo
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 
 /**
- * Android vendors are free to rank their own FLAC decoder ahead of the AOSP implementation.
- * Some of those decoders advertise FLAC support but keep a 32 KiB input buffer, which is smaller
- * than a valid Bilibili Hi-Res FLAC access unit. Prefer Media3's software ordering for FLAC on every
- * Android build and explicitly reserve enough room for high-resolution lossless frames.
+ * Android 厂商可以自由地把自己实现的 FLAC 解码器排在 AOSP 实现之前。其中一些解码器
+ * 声明支持 FLAC，却保留 32 KiB 的输入缓冲，小于合法的 B 站 Hi-Res FLAC 访问单元。
+ * 在所有 Android 构建上对 FLAC 优先使用 Media3 的软件排序，并显式留出足够空间容纳
+ * 高分辨率无损帧。
  */
 @OptIn(UnstableApi::class)
 internal open class HiResCompatibleRenderersFactory(
@@ -50,10 +50,9 @@ internal open class HiResCompatibleRenderersFactory(
               mimeType.equals(MimeTypes.AUDIO_FLAC, ignoreCase = true) ||
                 (preferSoftwareAudioDecoders && MimeTypes.isAudio(mimeType))
             ) {
-              // Some OEM FLAC implementations are themselves marked software-only, so Media3's
-              // generic software preference can still leave them ahead of the AOSP decoder. The
-              // platform decoder names are stable across OEM Android builds and form the final,
-              // vendor-neutral tie break.
+              // 一些 OEM 的 FLAC 实现本身被标记为纯软件，因此 Media3 通用的软件偏好仍可能
+              // 让它们排在 AOSP 解码器之前。平台解码器名称在 OEM Android 构建之间保持稳定，
+              // 构成最终且厂商中立的决胜条件。
               decoders.sortedBy { decoder -> hiResAudioDecoderRank(decoder.name) }
             } else {
               decoders
@@ -110,7 +109,8 @@ private class HiResMediaCodecAudioRenderer(
   eventHandler: Handler,
   eventListener: AudioRendererEventListener,
   audioSink: AudioSink,
-) : MediaCodecAudioRenderer(
+) :
+  MediaCodecAudioRenderer(
     context,
     codecAdapterFactory,
     mediaCodecSelector,

@@ -5,9 +5,8 @@ import android.util.Log
 import android.webkit.WebSettings
 
 /**
- * Builds a desktop Chrome user-agent string by extracting the current Chrome version from the
- * system WebView default UA. The result uses a Linux x86_64 desktop format that excludes Android,
- * Mobile, wv, and Version/4.0 markers.
+ * 从系统 WebView 默认 UA 中提取当前 Chrome 版本，构建桌面版 Chrome user-agent 字符串。
+ * 结果使用 Linux x86_64 桌面格式，排除 Android、Mobile、wv 和 Version/4.0 标记。
  */
 object UserAgentProvider {
 
@@ -15,8 +14,8 @@ object UserAgentProvider {
   private val chromeVersionRegex = Regex("""Chrome/(\d+\.\d+\.\d+\.\d+)""")
 
   /**
-   * Returns a desktop Chrome UA suitable for the video WebView, or null when the Chrome version
-   * cannot be extracted from the default UA.
+   * 返回适合视频 WebView 的桌面 Chrome UA；当无法从默认 UA 提取出 Chrome 版本时
+   * 返回 null。
    */
   fun desktopUserAgent(context: Context): String? {
     val defaultUa = runCatching { WebSettings.getDefaultUserAgent(context) }.getOrDefault("")

@@ -18,11 +18,11 @@ import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 
 /**
- * Publishes the process-wide detail player to Android system media controls.
+ * 把进程级详情播放器发布到 Android 系统媒体控件。
  *
- * The service never creates a second playback timeline: both it and the Activity obtain the same
- * application-scoped [PlayerViewModel] and therefore the same ExoPlayer instance. The Activity
- * continues to own the only PlayerView/SurfaceView used by the existing shared-element animations.
+ * 该服务从不创建第二条播放时间线：它和 Activity 都取得同一个应用作用域的
+ * [PlayerViewModel]，因此是同一个 ExoPlayer 实例。Activity 继续拥有现有共享元素动画
+ * 所使用的唯一 PlayerView/SurfaceView。
  */
 @OptIn(UnstableApi::class)
 class PlaybackSessionService : MediaSessionService() {
@@ -50,9 +50,8 @@ class PlaybackSessionService : MediaSessionService() {
 
   override fun onCreate() {
     super.onCreate()
-    // Keep a paused, prepared video available to Samsung's media panel. Without this, the default
-    // Media3 notification manager leaves the foreground and One UI stops the idle service shortly
-    // after the Activity's default "pause when leaving" transition.
+    // 为三星的媒体面板保留一个暂停且已准备的视频。没有它，默认的 Media3 通知管理器
+    // 会离开前台，One UI 会在 Activity 默认的“离开时暂停”转场后不久停掉空闲服务。
     setShowNotificationForIdlePlayer(SHOW_NOTIFICATION_FOR_IDLE_PLAYER_ALWAYS)
     val player = playerForTarget((application as BiliApplication).playbackSessionTarget)
     createNotificationChannel()
@@ -64,9 +63,7 @@ class PlaybackSessionService : MediaSessionService() {
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
       )
     mediaSession =
-      MediaSession.Builder(this, player)
-        .setSessionActivity(checkNotNull(sessionActivity))
-        .build()
+      MediaSession.Builder(this, player).setSessionActivity(checkNotNull(sessionActivity)).build()
     notificationPlayer = player
     player.addListener(notificationPlayerListener)
     updateForegroundNotification()
@@ -96,7 +93,12 @@ class PlaybackSessionService : MediaSessionService() {
   override fun onDestroy() {
     notificationPlayer?.removeListener(notificationPlayerListener)
     notificationPlayer = null
-    stopForeground(STOP_FOREGROUND_REMOVE)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+      stopForeground(STOP_FOREGROUND_REMOVE)
+    } else {
+      @Suppress("DEPRECATION")
+      stopForeground(true)
+    }
     mediaSession?.release()
     mediaSession = null
     sessionActivity = null
@@ -124,8 +126,7 @@ class PlaybackSessionService : MediaSessionService() {
     val metadata = player.mediaMetadata
     val title = metadata.title?.takeIf(CharSequence::isNotBlank) ?: getString(R.string.app_name)
     val artist =
-      metadata.artist?.takeIf(CharSequence::isNotBlank)
-        ?: if (musicSession) "音乐播放" else "视频播放"
+      metadata.artist?.takeIf(CharSequence::isNotBlank) ?: if (musicSession) "音乐播放" else "视频播放"
     val toggleIntent =
       PendingIntent.getService(
         this,
@@ -134,8 +135,7 @@ class PlaybackSessionService : MediaSessionService() {
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
       )
     val actionIcon =
-      if (player.isPlaying) android.R.drawable.ic_media_pause
-      else android.R.drawable.ic_media_play
+      if (player.isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play
     val actionTitle = if (player.isPlaying) "暂停" else "播放"
     val builder =
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -202,15 +202,16 @@ class PlaybackSessionService : MediaSessionService() {
     val manager = getSystemService(NotificationManager::class.java)
     val channel =
       NotificationChannel(
-        NOTIFICATION_CHANNEL_ID,
-        "媒体播放",
-        NotificationManager.IMPORTANCE_DEFAULT,
-      ).apply {
-        description = "显示当前视频或音乐与系统播放控件"
-        setSound(null, null)
-        enableVibration(false)
-        setShowBadge(false)
-      }
+          NOTIFICATION_CHANNEL_ID,
+          "媒体播放",
+          NotificationManager.IMPORTANCE_DEFAULT,
+        )
+        .apply {
+          description = "显示当前视频或音乐与系统播放控件"
+          setSound(null, null)
+          enableVibration(false)
+          setShowBadge(false)
+        }
     manager.createNotificationChannel(channel)
   }
 
@@ -296,8 +297,7 @@ class PlaybackSessionService : MediaSessionService() {
 
     private const val NOTIFICATION_ID = 2_333
     private const val NOTIFICATION_CHANNEL_ID = "bilione_video_playback"
-    private const val ACTION_TOGGLE_PLAYBACK =
-      "dev.openbili.webdemo.action.TOGGLE_PLAYBACK"
+    private const val ACTION_TOGGLE_PLAYBACK = "dev.openbili.webdemo.action.TOGGLE_PLAYBACK"
     private const val ACTION_PREVIOUS = "dev.openbili.webdemo.action.PREVIOUS"
     private const val ACTION_NEXT = "dev.openbili.webdemo.action.NEXT"
     private const val ACTION_BIND_MUSIC = "dev.openbili.webdemo.action.BIND_MUSIC"

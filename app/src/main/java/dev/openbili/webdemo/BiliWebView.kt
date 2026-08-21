@@ -20,7 +20,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 
-/** A lifecycle-aware WebView used only for the visible video page. */
+/** 一个具备生命周期感知的 WebView，仅用于可见的视频页。 */
 class BiliWebView(context: Context) : WebView(context) {
   private var released = false
   private var urlPollingRunnable: Runnable? = null
@@ -89,7 +89,7 @@ class BiliWebView(context: Context) : WebView(context) {
   }
 }
 
-/** Compatibility wrapper for the first-iteration screen state. */
+/** 第一版界面状态的兼容性包装。 */
 @Composable
 fun BiliWebViewContainer(
   state: WebViewState,
@@ -125,8 +125,8 @@ fun BiliWebViewContainer(
 }
 
 /**
- * Hosts the one long-lived WebView used by the video screen. The recommendation source WebView is
- * intentionally separate and must not use this container.
+ * 承载视频屏使用的唯一长生命周期 WebView。推荐源的 WebView 有意保持独立，
+ * 不得使用此容器。
  */
 @Composable
 fun VideoWebViewContainer(
@@ -179,8 +179,8 @@ fun VideoWebViewContainer(
           injectionManager = injection
           WebViewConfigurator.configure(this, BuildConfig.DEBUG)
 
-          // ── Desktop UA for video playback ──────────────────────────
-          // Set before first loadUrl so the server sees the desktop UA from the start.
+          // ── 用于视频播放的桌面 UA ──────────────────────────
+          // 在第一次 loadUrl 之前设置，让服务器从一开始就见到桌面 UA。
           val desktopUa = UserAgentProvider.desktopUserAgent(context)
           if (desktopUa != null) {
             settings.userAgentString = desktopUa
@@ -190,7 +190,7 @@ fun VideoWebViewContainer(
             }
           }
 
-          // Report current info (actual UA still unknown).
+          // 上报当前信息（实际 UA 仍未知）。
           onDebugInfo(
             VideoDebugInfo(
               setUserAgent = desktopUa,
@@ -216,17 +216,18 @@ fun VideoWebViewContainer(
             )
           biliWebChromeClient =
             BiliWebChromeClient(
-              onProgress = onProgress,
-              onTitle = { title -> onNavigation(url ?: initialUrl, title, canGoBack()) },
-              fullscreenDelegate = fullscreenDelegate,
-              routeNewWindow = { target ->
-                when (UrlPolicy.decide(target)) {
-                  UrlDecision.ALLOW -> loadUrl(target)
-                  UrlDecision.EXTERNAL -> openExternal(target)
-                  UrlDecision.BLOCK -> Unit
-                }
-              },
-            ).also { webChromeClient = it }
+                onProgress = onProgress,
+                onTitle = { title -> onNavigation(url ?: initialUrl, title, canGoBack()) },
+                fullscreenDelegate = fullscreenDelegate,
+                routeNewWindow = { target ->
+                  when (UrlPolicy.decide(target)) {
+                    UrlDecision.ALLOW -> loadUrl(target)
+                    UrlDecision.EXTERNAL -> openExternal(target)
+                    UrlDecision.BLOCK -> Unit
+                  }
+                },
+              )
+              .also { webChromeClient = it }
           injection.installDocumentStart(this)
           setOnReleasedListener { releasedWebView ->
             if (current === releasedWebView) current = null
@@ -243,7 +244,7 @@ fun VideoWebViewContainer(
               }
               loadUrl(initialUrl)
               if (BuildConfig.DEBUG) {
-                // Verify the effective navigator.userAgent once the page starts loading.
+                // 页面开始加载后校验生效的 navigator.userAgent。
                 postDelayed(
                   {
                     evaluateJavascript("navigator.userAgent") { actual ->

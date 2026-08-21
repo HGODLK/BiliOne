@@ -18,6 +18,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -39,6 +40,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
@@ -61,14 +63,18 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
@@ -105,11 +111,13 @@ import dev.openbili.webdemo.feed.LocalFeedImageLoadPolicy
 import dev.openbili.webdemo.feed.rememberListFeedImageLoadPolicy
 import dev.openbili.webdemo.settings.AppSettings
 import dev.openbili.webdemo.ui.PullRefreshContainer
-import dev.openbili.webdemo.ui.SessionPhase
+import dev.openbili.webdemo.ui.LocalControlFocusVisible
 import dev.openbili.webdemo.ui.StableBoundsTracker
 import dev.openbili.webdemo.ui.TransitionPreparationBarrier
 import dev.openbili.webdemo.ui.TransitionReadySignal
 import dev.openbili.webdemo.ui.VideoShapeTokens
+import dev.openbili.webdemo.ui.controllerInteractionActive
+import dev.openbili.webdemo.ui.controlFocusOutline
 import dev.openbili.webdemo.ui.hasUsableSize
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -162,6 +170,7 @@ internal fun VideoContent(
   hiddenPlaybackEndRecommendationCoverItemId: String?,
   recommendationListState: LazyListState,
   recommendationReturnBounds: MutableMap<String, Rect>,
+  commentMediaBounds: MutableMap<String, Rect> = mutableMapOf(),
   commentListState: LazyListState,
   commentNavigationSessionId: Long,
   commentChromeState: CommentChromeState,
@@ -194,6 +203,7 @@ internal fun VideoContent(
   onPostReply: (CommentItem, CommentItem, String, Uri?) -> Unit,
   onLikeComment: (CommentItem) -> Unit,
   onDeleteComment: (CommentItem) -> Unit,
+  onToggleCommentPin: (CommentItem) -> Unit = {},
   onLikeVideo: (Boolean) -> Unit,
   onCoinVideo: (Int, Boolean) -> Unit,
   onFavoriteVideo: (List<Long>, List<Long>) -> Unit,
@@ -242,11 +252,26 @@ internal fun VideoContent(
   bangumiPage: BangumiPageUi? = null,
   onBangumiPosterBoundsChanged: (Rect) -> Unit = {},
   onBangumiOpenDetails: () -> Unit = {},
+  onBangumiOpenEpisodeSelection: () -> Unit = {},
   onBangumiEpisodeSelected: (dev.openbili.webdemo.api.BangumiEpisode) -> Unit = {},
   onBangumiSeasonSelected: (Long) -> Unit = {},
+  controlPlayerModifier: Modifier = Modifier,
+  controlPlayerControlsEnabled: Boolean = false,
+  controlPlayerControlsFocusRequester: FocusRequester? = null,
+  controlPlaybackEndedEnabled: Boolean = false,
+  controlPlaybackEndFocusRequester: FocusRequester? = null,
+  controlModeEnabled: Boolean = false,
+  controlNavigationEnabled: Boolean = false,
+  controlPlayerFocusRequester: FocusRequester? = null,
+  controlRecommendationFocusRequester: FocusRequester? = null,
+  controlBangumiLowerPanelFocus: BangumiLowerPanelControlFocus? = null,
+  controlCommentFocusRequester: FocusRequester? = null,
   modifier: Modifier = Modifier,
   onPlayerBoundsChanged: (Rect) -> Unit,
 ) {
+  val controlCommentSortFocusRequester = remember { FocusRequester() }
+  val controlFirstCommentFocusRequester = remember { FocusRequester() }
+  val controlReplyEntryFocusRequester = remember { FocusRequester() }
   val recommendationImageLoadPolicy = rememberListFeedImageLoadPolicy(recommendationListState)
   val commentImageLoadPolicy = rememberListFeedImageLoadPolicy(commentListState)
   var localGestureFeedback by remember { mutableStateOf<GestureIndicator?>(null) }
@@ -264,6 +289,8 @@ internal fun VideoContent(
   var replyTarget by remember(item.id) { mutableStateOf<CommentItem?>(null) }
   var replyTargetRoot by remember(item.id) { mutableStateOf<CommentItem?>(null) }
   var displayedReplyRoot by remember(item.id) { mutableStateOf<CommentItem?>(replyRoot) }
+  var controlReplyReturnFocusRequester by
+    remember(item.id) { mutableStateOf<FocusRequester?>(null) }
   var replySourceBounds by remember(item.id) { mutableStateOf(Rect.Zero) }
   var navigationRootBounds by remember(item.id) { mutableStateOf(Rect.Zero) }
   var embeddedPlayerBoundsInRoot by remember(item.id) { mutableStateOf(Rect.Zero) }
@@ -293,7 +320,10 @@ internal fun VideoContent(
   val replyTransitionProgress = remember(item.id) { Animatable(if (replyRoot == null) 0f else 1f) }
   var replyContentReady by remember(item.id) { mutableStateOf(replyRoot != null) }
   var replyClosing by remember(item.id) { mutableStateOf(false) }
-  var replyDismissRequested by remember(item.id) { mutableStateOf(false) }
+  var replyDismissRequestId by
+    remember(item.id) { androidx.compose.runtime.mutableLongStateOf(0L) }
+  var handledReplyDismissRequestId by
+    remember(item.id) { androidx.compose.runtime.mutableLongStateOf(0L) }
   var replyPreparation by
     remember(item.id) {
       mutableStateOf<TransitionPreparationBarrier?>(null)
@@ -301,6 +331,22 @@ internal fun VideoContent(
   var contentBounds by remember(item.id) { mutableStateOf(Rect.Zero) }
   var longCommentOverlay by remember(item.id) { mutableStateOf(false) }
   var resumePlaybackAfterLongComment by remember(item.id) { mutableStateOf(false) }
+  val controlFocusVisible = LocalControlFocusVisible.current
+  val controllerOwnsInteraction =
+    controllerInteractionActive(
+      controlMode = controlModeEnabled,
+      controlFocusVisible = controlFocusVisible,
+    )
+  LaunchedEffect(controllerOwnsInteraction) {
+    if (controllerOwnsInteraction) {
+      commentComposerBounds = Rect.Zero
+      replyTarget = null
+      replyTargetRoot = null
+      longCommentOverlay = false
+      if (resumePlaybackAfterLongComment && !isPlaying) onPlayPause()
+      resumePlaybackAfterLongComment = false
+    }
+  }
   LaunchedEffect(
     commentNavigationSessionId,
     commentNavigationTarget?.requestId,
@@ -381,6 +427,11 @@ internal fun VideoContent(
       .distinctUntilChanged()
       .collect { (scrolling, direction, isAtTop) ->
         if (commentFastScrolling != scrolling) commentFastScrolling = scrolling
+        // 只有列表真正朝顶部回移时才释放短列表回弹闩锁。静止的短列表仍可能被
+        // 上滑视口手势有意收起；可滚动列表到达偏移零必须恢复操作行。
+        if (isAtTop && direction < 0 && keepCommentChromeHiddenAtTop) {
+          keepCommentChromeHiddenAtTop = false
+        }
         val nextVisibility =
           commentChromeAfterObservedScroll(
             currentVisibility = commentChromeVisibility,
@@ -437,17 +488,23 @@ internal fun VideoContent(
       localGestureFeedback = null
     }
   }
-  LaunchedEffect(replyRoot?.rpid, replyDismissRequested) {
+  LaunchedEffect(replyRoot?.rpid, replyDismissRequestId) {
     val root = replyRoot
-    if (replyDismissRequested && displayedReplyRoot != null) {
+    if (
+      replyDismissRequestId != handledReplyDismissRequestId &&
+        displayedReplyRoot != null
+    ) {
+      // 关闭请求使用单调代次而不是布尔值：父层在动画结束后清空 replyRoot 时不会把
+      // 当前收起协程的 effect key 改回初始值，从而避免第二次打开后只能播放按压动画。
+      handledReplyDismissRequestId = replyDismissRequestId
       replyPreparation?.cancel()
       replyPreparation = null
       replyClosing = true
-      // Stop drawing the expensive reply LazyColumn before the contraction. The lightweight
-      // surface below remains visible, so the close still reads as one continuous transition.
+      // 收起动画开始前停止绘制昂贵的回复 LazyColumn：下方轻量表面保持可见，
+      // 关闭仍读作一次连续转场。
       replyContentReady = false
-      // Keep only the lightweight panel mounted through the contraction. Recording or transforming
-      // the full reply list caused a long main-thread draw and made the animation jump to its end.
+      // 收起期间只挂载轻量面板：录制或变换完整回复列表会造成长时间主线程绘制，
+      // 让动画跳到结尾。
       replyTransitionProgress.animateTo(
         0f,
         tween(if (settings.reduceMotion) 80 else 260, easing = FastOutSlowInEasing),
@@ -456,7 +513,12 @@ internal fun VideoContent(
       displayedReplyRoot = null
       replyClosing = false
       onDismissReplies()
-      replyDismissRequested = false
+      if (controllerOwnsInteraction) {
+        withFrameNanos {}
+        controlReplyReturnFocusRequester?.let { requester ->
+          runCatching { requester.requestFocus() }
+        }
+      }
       replyPreparation = null
     } else if (root != null) {
       replyClosing = false
@@ -485,8 +547,8 @@ internal fun VideoContent(
           }
         }
       }
-      // The reply target is the already-laid-out comment pane. Do not let a stale/invalid bounds
-      // callback hold a user tap behind the global transition timeout.
+      // 回复目标是已布局好的评论窗格：不要让过期/无效的边界回调把用户点击
+      // 卡在全局转场超时之后。
       preparation.await(timeoutMillis = 80L)
       if (replyPreparation !== preparation || displayedReplyRoot?.rpid != root.rpid) {
         return@LaunchedEffect
@@ -497,6 +559,10 @@ internal fun VideoContent(
       )
       withFrameNanos {}
       replyContentReady = true
+      if (controllerOwnsInteraction) {
+        withFrameNanos {}
+        runCatching { controlReplyEntryFocusRequester.requestFocus() }
+      }
       replyPreparation = null
     } else if (displayedReplyRoot != null) {
       replyPreparation?.cancel()
@@ -510,14 +576,18 @@ internal fun VideoContent(
       delay(16)
       displayedReplyRoot = null
       replyClosing = false
+      if (controllerOwnsInteraction) {
+        withFrameNanos {}
+        controlReplyReturnFocusRequester?.let { requester ->
+          runCatching { requester.requestFocus() }
+        }
+      }
       replyPreparation = null
     }
   }
   BackHandler(enabled = deleteCandidate != null) { deleteCandidate = null }
-  BackHandler(
-    enabled = displayedReplyRoot != null && deleteCandidate == null
-  ) {
-    if (!replyClosing) replyDismissRequested = true
+  BackHandler(enabled = displayedReplyRoot != null && deleteCandidate == null) {
+    if (!replyClosing) replyDismissRequestId += 1L
   }
   Box(
     modifier =
@@ -548,10 +618,10 @@ internal fun VideoContent(
     AdaptiveVideoPanes(
       modifier = Modifier.fillMaxSize(),
       primary = {
-        // ── LEFT: Player + info + recommendations ──────────────────────────
+        // ── 左：播放器 + 信息 + 推荐 ──────────────────────────
         Column(modifier = Modifier.fillMaxSize().onSizeChanged { primaryPaneSize = it }) {
-          // The measured pane height is shared between the player and the recommendation rail.
-          // This prevents a full-width 16:9 player from pushing the rail outside short windows.
+          // 实测窗格高度在播放器与推荐轨之间共享：避免全宽 16:9 播放器把推荐轨
+          // 挤出矮窗口。
           val measuredPane = primaryPaneSize.width > 0 && primaryPaneSize.height > 0
           Box(
             modifier =
@@ -566,6 +636,7 @@ internal fun VideoContent(
               modifier =
                 (if (measuredPane) Modifier.width(pageLayout.playerWidth).fillMaxHeight()
                   else Modifier.fillMaxSize())
+                  .then(controlPlayerModifier)
                   .onGloballyPositioned {
                     val bounds = it.boundsInRoot()
                     embeddedPlayerBoundsInRoot = bounds
@@ -596,26 +667,25 @@ internal fun VideoContent(
                       Modifier.fillMaxSize()
                         .blur(loadingCoverBlur.value.dp)
                         .graphicsLayer { alpha = loadingCoverAlpha.value }
-                        .zIndex(.5f),
+                        .zIndex(.5f)
                   ) {
                     CoverImage(
                       coverUrl = item.coverUrl,
                       modifier = Modifier.fillMaxSize(),
                       shape = VideoShapeTokens.Player,
                       contentScale =
-                        if (bangumiPage != null)
-                          androidx.compose.ui.layout.ContentScale.Fit
+                        if (bangumiPage != null) androidx.compose.ui.layout.ContentScale.Fit
                         else androidx.compose.ui.layout.ContentScale.Crop,
                     )
                     if (dimLoadingCover) {
-                      // This shade belongs to the temporary SDR cover layer. It fades out with the
-                      // cover and never touches the decoded HDR/Dolby SurfaceView underneath.
+                      // 该遮罩属于临时 SDR 封面层：随封面淡出，绝不触碰底下已解码
+                      // 的 HDR/杜比 SurfaceView。
                       Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = .62f)))
                     }
                   }
                 }
 
-                // Small loading circle when buffering at start.
+                // 起播缓冲时的小加载圈。
                 if (isBuffering || (keepLoadingCover && loadingCoverAlpha.value > .15f)) {
                   Box(
                     modifier = Modifier.fillMaxSize().zIndex(.75f),
@@ -630,35 +700,35 @@ internal fun VideoContent(
 
                 key(embeddedGestureResetKey) {
                   PlayerGestureLayer(
-                  enabledBrightness = brightnessGestureEnabled,
-                  enabledVolume = settings.volumeGesture,
-                  enabledSeek = settings.horizontalSeekGesture,
-                  enabledFullscreenToggle = settings.twoFingerFullscreenGesture,
-                  enabledTwoFingerSeek = settings.twoFingerSeekGesture,
-                  positionProvider = playerPositionProvider,
-                  durationMs = durationMs,
-                  onSeek = onSeek,
-                  onIndicator = {
-                    localGestureFeedback = it
-                    localGestureFeedbackVisible = true
-                    localGestureFeedbackVersion += 1
-                  },
-                  onSeekPreview = {
-                    localSeekPreviewMs = it
-                    if (it != null) {
-                      onSeekPreview(it)
-                      localGestureFeedbackVisible = false
-                      localGestureFeedback = null
-                      onControlsVisible(true)
-                    }
-                  },
-                  onSeekCancel = onSeekCancel,
-                  onToggleControls = { onControlsVisible(!controlsVisible) },
-                  onDoubleTap = onPlayPause,
-                  onTemporarySpeedChanged = onTemporarySpeedChanged,
-                  isFullscreen = false,
-                  onFullscreenChanged = { if (it) onEnterFullscreen() },
-                  seekEdgeInset = 0.dp,
+                    enabledBrightness = brightnessGestureEnabled,
+                    enabledVolume = settings.volumeGesture,
+                    enabledSeek = settings.horizontalSeekGesture,
+                    enabledFullscreenToggle = settings.twoFingerFullscreenGesture,
+                    enabledTwoFingerSeek = settings.twoFingerSeekGesture,
+                    positionProvider = playerPositionProvider,
+                    durationMs = durationMs,
+                    onSeek = onSeek,
+                    onIndicator = {
+                      localGestureFeedback = it
+                      localGestureFeedbackVisible = true
+                      localGestureFeedbackVersion += 1
+                    },
+                    onSeekPreview = {
+                      localSeekPreviewMs = it
+                      if (it != null) {
+                        onSeekPreview(it)
+                        localGestureFeedbackVisible = false
+                        localGestureFeedback = null
+                        onControlsVisible(true)
+                      }
+                    },
+                    onSeekCancel = onSeekCancel,
+                    onToggleControls = { onControlsVisible(!controlsVisible) },
+                    onDoubleTap = onPlayPause,
+                    onTemporarySpeedChanged = onTemporarySpeedChanged,
+                    isFullscreen = false,
+                    onFullscreenChanged = { if (it) onEnterFullscreen() },
+                    seekEdgeInset = 0.dp,
                     modifier = Modifier.fillMaxSize().zIndex(1.5f),
                   )
                 }
@@ -754,6 +824,8 @@ internal fun VideoContent(
                       onSettingsChange { it.copy(subtitleStyle = style) }
                     },
                     modifier = Modifier.fillMaxSize(),
+                    controlEnabled = controlPlayerControlsEnabled,
+                    controlInitialFocusRequester = controlPlayerControlsFocusRequester,
                   )
                 }
                 if (showDanmakuComposer) {
@@ -795,6 +867,8 @@ internal fun VideoContent(
                       onFullscreen = onEnterFullscreen,
                       onNext = onAutoNext,
                       onReplay = onReplay,
+                      controlEnabled = controlPlaybackEndedEnabled,
+                      initialFocusRequester = controlPlaybackEndFocusRequester,
                       modifier = Modifier.fillMaxSize().zIndex(7f),
                     )
                   } else {
@@ -810,6 +884,8 @@ internal fun VideoContent(
                         onRecommendationClick(recommendation, enterBounds, enterBounds, true)
                       },
                       onRecommendationLongClick = onRecommendationLongClick,
+                      controlEnabled = controlPlaybackEndedEnabled,
+                      initialFocusRequester = controlPlaybackEndFocusRequester,
                       modifier = Modifier.fillMaxSize().zIndex(7f),
                     )
                   }
@@ -825,15 +901,17 @@ internal fun VideoContent(
               page = bangumiPage,
               onPosterBoundsChanged = onBangumiPosterBoundsChanged,
               onOpenDetails = onBangumiOpenDetails,
+              onOpenEpisodeSelection = onBangumiOpenEpisodeSelection,
               onEpisodeSelected = onBangumiEpisodeSelected,
               onSeasonSelected = onBangumiSeasonSelected,
               panelSlideProgress = panelSlideProgress,
               glassBackdrop = glassBackdrop,
               foregroundColor = pageForegroundColor,
+              controlFocus = controlBangumiLowerPanelFocus,
               modifier = Modifier.weight(1f),
             )
           } else {
-            // Recommendations (horizontal scroll)
+            // 推荐（横向滚动）
             AnimatedVisibility(
               visible = recommendations.isNotEmpty(),
               enter = fadeIn(tween(if (settings.reduceMotion) 90 else 240)),
@@ -855,15 +933,35 @@ internal fun VideoContent(
                 )
                 Spacer(Modifier.height(4.dp))
                 Box(Modifier.fillMaxWidth()) {
+                  val displayedRecommendations = recommendations.take(20)
                   CompositionLocalProvider(
                     LocalFeedImageLoadPolicy provides recommendationImageLoadPolicy
                   ) {
                     LazyRow(
                       state = recommendationListState,
+                      modifier =
+                        Modifier.then(
+                          if (controlNavigationEnabled) {
+                            Modifier.focusProperties {
+                                onExit = {
+                                  if (
+                                    requestedFocusDirection == FocusDirection.Left ||
+                                      requestedFocusDirection == FocusDirection.Right
+                                  ) {
+                                    cancelFocusChange()
+                                  }
+                                }
+                              }
+                              .focusGroup()
+                          } else Modifier
+                        ),
                       contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
                       horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                      items(recommendations.take(20), key = { it.id }) { rec ->
+                      itemsIndexed(
+                        items = displayedRecommendations,
+                        key = { _, rec -> rec.id },
+                      ) { index, rec ->
                         RecommendationCard(
                           item = rec,
                           onClick = { bounds ->
@@ -876,6 +974,12 @@ internal fun VideoContent(
                           compactHorizontal = pageLayout.compactHorizontalRecommendations,
                           compactHeight = pageLayout.compactRecommendationCardHeight,
                           showDuration = true,
+                          controlEnabled = controlNavigationEnabled,
+                          controlFocusRequester =
+                            controlRecommendationFocusRequester.takeIf { index == 0 },
+                          controlUpFocusRequester = controlPlayerFocusRequester,
+                          controlAtHorizontalStart = index == 0,
+                          controlAtHorizontalEnd = index == displayedRecommendations.lastIndex,
                         )
                       }
                     }
@@ -899,390 +1003,469 @@ internal fun VideoContent(
       },
       secondary = {
         if (deferCommentContent) {
-          // Preserve the pane's real constraint-derived geometry for the player target without
-          // mounting or drawing comments while the shared cover owns the frame budget.
+          // 为播放器目标保留窗格真实的约束派生几何，在共享封面占用帧预算期间
+          // 不挂载也不绘制评论。
           Box(
             Modifier.fillMaxSize().onGloballyPositioned {
               commentExpandedBounds = it.boundsInRoot()
             }
           )
         } else {
-          // ── RIGHT: Comments ───────────────────────────────────────────────
+          // ── 右：评论 ───────────────────────────────────────────────
           Box(
-          modifier =
-            Modifier.fillMaxSize()
-              .onGloballyPositioned { commentExpandedBounds = it.boundsInRoot() }
-              .zIndex(2f)
-              .graphicsLayer {
-                val progress = panelSlideProgress().coerceIn(0f, 1f)
-                alpha = progress
-                compositingStrategy = CompositingStrategy.ModulateAlpha
-              }
-              .pointerInput(item.id, displayedReplyRoot?.rpid) {
-                if (displayedReplyRoot != null) return@pointerInput
-                val collapseThresholdPx = 24.dp.toPx()
-                val restoreThresholdPx = 32.dp.toPx()
-                awaitPointerEventScope {
-                  var tracking = false
-                  var handled = false
-                  var travelY = 0f
-                  while (true) {
-                    val event = awaitPointerEvent(PointerEventPass.Final)
-                    val change = event.changes.firstOrNull() ?: continue
-                    when {
-                      change.pressed && !change.previousPressed -> {
-                        tracking = true
-                        handled = false
-                        travelY = 0f
-                      }
-                      tracking && change.pressed -> {
-                        travelY += change.position.y - change.previousPosition.y
-                        val crossedThreshold =
-                          travelY <= -collapseThresholdPx || travelY >= restoreThresholdPx
-                        if (!handled && crossedThreshold) {
-                          keepCommentChromeHiddenAtTop = travelY < 0f
-                          commentChromeVisibility =
-                            commentChromeAfterViewportSwipe(
-                              currentVisibility = commentChromeVisibility,
-                              fingerDeltaY = travelY,
-                              listIsAtTop =
-                                commentListState.firstVisibleItemIndex == 0 &&
-                                  commentListState.firstVisibleItemScrollOffset == 0,
-                            )
-                          if (floatingActionsExpanded) floatingActionsExpanded = false
-                          handled = true
+            modifier =
+              Modifier.fillMaxSize()
+                .onGloballyPositioned { commentExpandedBounds = it.boundsInRoot() }
+                .zIndex(2f)
+                .graphicsLayer {
+                  val progress = panelSlideProgress().coerceIn(0f, 1f)
+                  alpha = progress
+                  compositingStrategy = CompositingStrategy.ModulateAlpha
+                }
+                .pointerInput(item.id, displayedReplyRoot?.rpid) {
+                  if (displayedReplyRoot != null) return@pointerInput
+                  val collapseThresholdPx = 24.dp.toPx()
+                  val restoreThresholdPx = 32.dp.toPx()
+                  awaitPointerEventScope {
+                    var tracking = false
+                    var handled = false
+                    var travelY = 0f
+                    while (true) {
+                      val event = awaitPointerEvent(PointerEventPass.Final)
+                      val change = event.changes.firstOrNull() ?: continue
+                      when {
+                        change.pressed && !change.previousPressed -> {
+                          tracking = true
+                          handled = false
+                          travelY = 0f
                         }
-                      }
-                      !change.pressed -> {
-                        tracking = false
-                        handled = false
-                        travelY = 0f
+                        tracking && change.pressed -> {
+                          travelY += change.position.y - change.previousPosition.y
+                          val crossedThreshold =
+                            travelY <= -collapseThresholdPx || travelY >= restoreThresholdPx
+                          if (!handled && crossedThreshold) {
+                            keepCommentChromeHiddenAtTop = travelY < 0f
+                            commentChromeVisibility =
+                              commentChromeAfterViewportSwipe(
+                                currentVisibility = commentChromeVisibility,
+                                fingerDeltaY = travelY,
+                                listIsAtTop =
+                                  commentListState.firstVisibleItemIndex == 0 &&
+                                    commentListState.firstVisibleItemScrollOffset == 0,
+                              )
+                            if (floatingActionsExpanded) floatingActionsExpanded = false
+                            handled = true
+                          }
+                        }
+                        !change.pressed -> {
+                          tracking = false
+                          handled = false
+                          travelY = 0f
+                        }
                       }
                     }
                   }
                 }
-              }
-        ) {
-          Box(
-            Modifier.fillMaxSize().graphicsLayer {
-              // Once the reply surface is nearly opaque, stop compositing the comment list behind
-              // it. Keeping this render-only avoids recomposing either LazyColumn during motion.
-              alpha = (1f - replyTransitionProgress.value * 2.5f).coerceIn(0f, 1f)
-            }
           ) {
-            Column(Modifier.fillMaxSize()) {
-              AnimatedVisibility(
-                visible = commentChromeVisibility.showDockedActions,
-                modifier = Modifier.fillMaxWidth(),
-                enter =
-                  expandVertically(
-                    animationSpec = tween(if (settings.reduceMotion) 80 else 240),
-                    expandFrom = Alignment.Top,
-                  ) +
-                    scaleIn(
-                      initialScale = .24f,
-                      transformOrigin = TransformOrigin(.5f, 0f),
-                      animationSpec = tween(if (settings.reduceMotion) 80 else 220),
-                    ) +
-                    fadeIn(tween(if (settings.reduceMotion) 60 else 160)),
-                exit =
-                  shrinkVertically(
-                    animationSpec = tween(if (settings.reduceMotion) 70 else 220),
-                    shrinkTowards = Alignment.Top,
-                  ) +
-                    scaleOut(
-                      targetScale = .24f,
-                      transformOrigin = TransformOrigin(.5f, 0f),
-                      animationSpec = tween(if (settings.reduceMotion) 70 else 200),
-                    ) +
-                    fadeOut(tween(if (settings.reduceMotion) 60 else 140)),
-              ) {
-                Column {
-                  VideoActionPanel(
-                    info = videoInfo,
-                    engagement = videoEngagement,
-                    loggedIn = currentAccountMid > 0L,
-                    favoriteFolders = favoriteFolders,
-                    favoriteFoldersLoading = favoriteFoldersLoading,
-                    onLike = onLikeVideo,
-                    onCoin = onCoinVideo,
-                    onFavorite = onFavoriteVideo,
-                    onLoadFavoriteFolders = onLoadFavoriteFolders,
-                    onLogin = onLogin,
-                    foregroundColor = pageForegroundColor,
-                  )
-                  Spacer(Modifier.height(8.dp))
-                }
+            Box(
+              Modifier.fillMaxSize().graphicsLayer {
+                // 回复表面接近不透明后，停止在其后合成评论列表：保持仅渲染，
+                // 避免运动期间重组任一 LazyColumn。
+                alpha = (1f - replyTransitionProgress.value * 2.5f).coerceIn(0f, 1f)
               }
-              AnimatedVisibility(
-                visible = commentChromeVisibility.showSortControls,
-                modifier = Modifier.fillMaxWidth(),
-                enter =
-                  slideInVertically(
-                    initialOffsetY = { -it },
-                    animationSpec = tween(if (settings.reduceMotion) 70 else 190),
-                  ) +
+            ) {
+              Column(Modifier.fillMaxSize()) {
+                AnimatedVisibility(
+                  visible = commentChromeVisibility.showDockedActions,
+                  modifier = Modifier.fillMaxWidth(),
+                  enter =
                     expandVertically(
-                      animationSpec = tween(if (settings.reduceMotion) 70 else 190),
+                      animationSpec = tween(if (settings.reduceMotion) 80 else 240),
                       expandFrom = Alignment.Top,
                     ) +
-                    fadeIn(tween(if (settings.reduceMotion) 60 else 150)),
-                exit =
-                  slideOutVertically(
-                    targetOffsetY = { -it },
-                    animationSpec = tween(if (settings.reduceMotion) 70 else 180),
-                  ) +
+                      scaleIn(
+                        initialScale = .24f,
+                        transformOrigin = TransformOrigin(.5f, 0f),
+                        animationSpec = tween(if (settings.reduceMotion) 80 else 220),
+                      ) +
+                      fadeIn(tween(if (settings.reduceMotion) 60 else 160)),
+                  exit =
                     shrinkVertically(
-                      animationSpec = tween(if (settings.reduceMotion) 70 else 180),
+                      animationSpec = tween(if (settings.reduceMotion) 70 else 220),
                       shrinkTowards = Alignment.Top,
                     ) +
-                    fadeOut(tween(if (settings.reduceMotion) 60 else 130)),
-              ) {
-                CommentSectionHeader(
-                  commentCount = commentTotalCount,
-                  commentSort = commentSort,
-                  onCommentSort = onCommentSort,
-                  foregroundColor = pageForegroundColor,
-                )
-              }
-              Box(
-                Modifier.weight(1f).fillMaxWidth().onGloballyPositioned {
-                  commentPaneBounds = it.boundsInRoot()
-                }
-              ) {
-                val nearCommentEnd by
-                  remember(commentListState) {
-                    derivedStateOf {
-                      val last =
-                        commentListState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-                      last >= commentListState.layoutInfo.totalItemsCount - 4
-                    }
-                  }
-                LaunchedEffect(
-                  nearCommentEnd,
-                  commentHasMore,
-                  commentsLoading,
-                  commentImageLoadPolicy.mode,
+                      scaleOut(
+                        targetScale = .24f,
+                        transformOrigin = TransformOrigin(.5f, 0f),
+                        animationSpec = tween(if (settings.reduceMotion) 70 else 200),
+                      ) +
+                      fadeOut(tween(if (settings.reduceMotion) 60 else 140)),
                 ) {
-                  if (
-                    nearCommentEnd &&
-                      commentHasMore &&
-                      !commentsLoading &&
-                      commentImageLoadPolicy.mode != FeedImageLoadMode.PAUSED
-                  )
-                    onLoadMoreComments()
-                }
-                LaunchedEffect(commentSort) {
-                  if (commentListState.layoutInfo.totalItemsCount > 0)
-                    commentListState.scrollToItem(0)
-                }
-                val commentBottomPadding =
-                  with(LocalDensity.current) {
-                    maxOf(100.dp.toPx(), commentComposerBounds.height + 16.dp.toPx()).toDp()
+                  Column {
+                    VideoActionPanel(
+                      info = videoInfo,
+                      engagement = videoEngagement,
+                      loggedIn = currentAccountMid > 0L,
+                      favoriteFolders = favoriteFolders,
+                      favoriteFoldersLoading = favoriteFoldersLoading,
+                      onLike = onLikeVideo,
+                      onCoin = onCoinVideo,
+                      onFavorite = onFavoriteVideo,
+                      onLoadFavoriteFolders = onLoadFavoriteFolders,
+                      onLogin = onLogin,
+                      foregroundColor = pageForegroundColor,
+                      controlEnabled = controlNavigationEnabled,
+                      controlLikeFocusRequester = controlCommentFocusRequester,
+                      controlPlayerFocusRequester = controlPlayerFocusRequester,
+                      controlSortFocusRequester = controlCommentSortFocusRequester,
+                    )
+                    Spacer(Modifier.height(8.dp))
                   }
-                Box(Modifier.matchParentSize()) {
-                  PullRefreshContainer(
-                    refreshing = commentsRefreshing,
-                    onRefresh = onRefreshComments,
-                    modifier = Modifier.fillMaxSize(),
+                }
+                AnimatedVisibility(
+                  visible = commentChromeVisibility.showSortControls,
+                  modifier = Modifier.fillMaxWidth(),
+                  enter =
+                    slideInVertically(
+                      initialOffsetY = { -it },
+                      animationSpec = tween(if (settings.reduceMotion) 70 else 190),
+                    ) +
+                      expandVertically(
+                        animationSpec = tween(if (settings.reduceMotion) 70 else 190),
+                        expandFrom = Alignment.Top,
+                      ) +
+                      fadeIn(tween(if (settings.reduceMotion) 60 else 150)),
+                  exit =
+                    slideOutVertically(
+                      targetOffsetY = { -it },
+                      animationSpec = tween(if (settings.reduceMotion) 70 else 180),
+                    ) +
+                      shrinkVertically(
+                        animationSpec = tween(if (settings.reduceMotion) 70 else 180),
+                        shrinkTowards = Alignment.Top,
+                      ) +
+                      fadeOut(tween(if (settings.reduceMotion) 60 else 130)),
+                ) {
+                  CommentSectionHeader(
+                    commentCount = commentTotalCount,
+                    commentSort = commentSort,
+                    onCommentSort = onCommentSort,
+                    foregroundColor = pageForegroundColor,
+                    controlEnabled = controlNavigationEnabled,
+                    controlFirstFocusRequester = controlCommentSortFocusRequester,
+                    controlUpFocusRequester = controlCommentFocusRequester,
+                    controlDownFocusRequester = controlFirstCommentFocusRequester,
+                  )
+                }
+                Box(
+                  Modifier.weight(1f).fillMaxWidth().onGloballyPositioned {
+                    commentPaneBounds = it.boundsInRoot()
+                  }
+                ) {
+                  val nearCommentEnd by
+                    remember(commentListState) {
+                      derivedStateOf {
+                        val last =
+                          commentListState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+                        last >= commentListState.layoutInfo.totalItemsCount - 4
+                      }
+                    }
+                  LaunchedEffect(
+                    nearCommentEnd,
+                    commentHasMore,
+                    commentsLoading,
+                    commentImageLoadPolicy.mode,
                   ) {
-                    FadeVisibility(
-                      visible = commentItems.isNotEmpty(),
+                    if (
+                      nearCommentEnd &&
+                        commentHasMore &&
+                        !commentsLoading &&
+                        commentImageLoadPolicy.mode != FeedImageLoadMode.PAUSED
+                    )
+                      onLoadMoreComments()
+                  }
+                  LaunchedEffect(commentSort) {
+                    commentListState.scrollToItem(0)
+                  }
+                  val commentBottomPadding =
+                    with(LocalDensity.current) {
+                      maxOf(100.dp.toPx(), commentComposerBounds.height + 16.dp.toPx()).toDp()
+                    }
+                  Box(Modifier.matchParentSize()) {
+                    PullRefreshContainer(
+                      refreshing = commentsRefreshing,
+                      onRefresh = onRefreshComments,
                       modifier = Modifier.fillMaxSize(),
-                      enterMillis = if (settings.reduceMotion) 90 else 240,
-                      exitMillis = if (settings.reduceMotion) 70 else 150,
                     ) {
-                      CompositionLocalProvider(
-                        LocalFeedImageLoadPolicy provides commentImageLoadPolicy
+                      FadeVisibility(
+                        visible = commentItems.isNotEmpty(),
+                        modifier = Modifier.fillMaxSize(),
+                        enterMillis = if (settings.reduceMotion) 90 else 240,
+                        exitMillis = if (settings.reduceMotion) 70 else 150,
                       ) {
-                        LazyColumn(
-                          state = commentListState,
-                          modifier = Modifier.fillMaxSize(),
-                          contentPadding =
-                            PaddingValues(
-                              start = 10.dp,
-                              end = 10.dp,
-                              top = 8.dp,
-                              bottom = commentBottomPadding,
-                            ),
-                          verticalArrangement = Arrangement.spacedBy(0.dp),
+                        CompositionLocalProvider(
+                          LocalFeedImageLoadPolicy provides commentImageLoadPolicy
                         ) {
-                          items(
-                            items = commentItems,
-                            key = { it.rpid },
-                            contentType = { "comment" },
-                          ) { comment ->
-                            Box(
-                              Modifier.fillMaxWidth().onGloballyPositioned {
-                                if (commentNavigationTarget?.rootRpid == comment.rpid) {
-                                  navigationRootBounds = it.boundsInRoot()
-                                }
-                              }
-                            ) {
-                              CommentRow(
-                                comment,
-                                settings.showCommentEmotes,
-                                emoteMap,
-                                settings.showCommentLocation,
-                                onLikeComment,
-                                videoInfo?.uploaderMid ?: item.uploaderMid,
-                                onCommentProfileClick,
-                                onCommentImagePreview,
-                                { comment, bounds ->
-                                  replySourceBounds = bounds
-                                  onOpenReplies(comment)
-                                },
-                                {
-                                  replyTargetRoot = comment
-                                  replyTarget = comment
-                                },
-                                bottomClearancePx = commentComposerBounds.height,
-                                viewportHeightPx = commentPaneBounds.height,
-                                avatarVisible = hiddenCommentAvatarRpid != comment.rpid,
-                                trackBounds = !commentFastScrolling,
-                                hiddenLinkedVideoCoverItemId = hiddenRecommendationCoverItemId,
-                                onLinkedVideoClick = { linkedVideo, bounds ->
-                                  onRecommendationClick(linkedVideo, bounds, bounds, false)
-                                },
-                                onLinkedVideoLongClick = onRecommendationLongClick,
-                                onLinkedArticleClick = onArticleClick,
-                                hiddenLinkedArticleItemId = hiddenLinkedArticleItemId,
-                                deletionSelected = deleteCandidate?.rpid == comment.rpid,
-                                onDeleteRequest =
-                                  if (canDeleteComment(comment)) {
-                                    { bounds ->
-                                      deleteCandidateBounds = bounds
-                                      deleteCandidate = comment
-                                    }
-                                  } else null,
-                                onDeleteConfirm = {
-                                  deleteCandidate = null
-                                  onDeleteComment(comment)
-                                },
-                                onDeleteCancel = { deleteCandidate = null },
-                                onDeletionBoundsChanged = { deleteCandidateBounds = it },
-                              )
-                            }
-                          }
-                          if (commentsLoading) {
-                            item {
+                          LazyColumn(
+                            state = commentListState,
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding =
+                              PaddingValues(
+                                start = 10.dp,
+                                end = 10.dp,
+                                top = 8.dp,
+                                bottom = commentBottomPadding,
+                              ),
+                            verticalArrangement = Arrangement.spacedBy(0.dp),
+                          ) {
+                            itemsIndexed(
+                              items = commentItems,
+                              key = { _, comment -> comment.rpid },
+                              contentType = { _, _ -> "comment" },
+                            ) { index, comment ->
+                              val controlReturnFocusRequester =
+                                remember(comment.rpid) { FocusRequester() }
                               Box(
-                                Modifier.fillMaxWidth().padding(8.dp),
-                                contentAlignment = Alignment.Center,
+                                Modifier.fillMaxWidth().onGloballyPositioned {
+                                  if (commentNavigationTarget?.rootRpid == comment.rpid) {
+                                    navigationRootBounds = it.boundsInRoot()
+                                  }
+                                }
                               ) {
-                                CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                                CommentRow(
+                                  comment,
+                                  settings.showCommentEmotes,
+                                  emoteMap,
+                                  settings.showCommentLocation,
+                                  onLikeComment,
+                                  videoInfo?.uploaderMid ?: item.uploaderMid,
+                                  onCommentProfileClick,
+                                  onCommentImagePreview,
+                                  { comment, bounds ->
+                                    replySourceBounds = bounds
+                                    onOpenReplies(comment)
+                                  },
+                                  {
+                                    replyTargetRoot = comment
+                                    replyTarget = comment
+                                  },
+                                  bottomClearancePx = commentComposerBounds.height,
+                                  viewportHeightPx = commentPaneBounds.height,
+                                  avatarVisible = hiddenCommentAvatarRpid != comment.rpid,
+                                  trackBounds = !commentFastScrolling,
+                                  hiddenLinkedVideoCoverItemId = hiddenRecommendationCoverItemId,
+                                  onLinkedVideoClick = { linkedVideo, bounds ->
+                                    commentMediaBounds[linkedVideo.id] = bounds
+                                    onRecommendationClick(linkedVideo, bounds, bounds, false)
+                                  },
+                                  onLinkedVideoBoundsChanged = { linkedVideo, bounds ->
+                                    commentMediaBounds[linkedVideo.id] = bounds
+                                  },
+                                  onLinkedVideoLongClick = onRecommendationLongClick,
+                                  onTimestampClick = { seconds, _ ->
+                                    onSeek((seconds * 1000L).coerceIn(0L, durationMs))
+                                  },
+                                  onLinkedArticleClick = onArticleClick,
+                                  hiddenLinkedArticleItemId = hiddenLinkedArticleItemId,
+                                  deletionSelected = deleteCandidate?.rpid == comment.rpid,
+                                  pinActionAvailable =
+                                    currentAccountMid > 0L && currentAccountMid == currentUploaderMid,
+                                  pinActionLabel = if (comment.isPinned) "取消置顶" else "置顶",
+                                  onPinRequest = {
+                                    deleteCandidate = null
+                                    onToggleCommentPin(comment)
+                                  },
+                                  onDeleteRequest =
+                                    if (canDeleteComment(comment)) {
+                                      { bounds ->
+                                        deleteCandidateBounds = bounds
+                                        deleteCandidate = comment
+                                      }
+                                    } else null,
+                                  onDeleteConfirm = {
+                                    deleteCandidate = null
+                                    onDeleteComment(comment)
+                                  },
+                                  onDeleteCancel = { deleteCandidate = null },
+                                  onDeletionBoundsChanged = { deleteCandidateBounds = it },
+                                  controlEnabled = controlNavigationEnabled,
+                                  controlFocusRequester =
+                                    controlFirstCommentFocusRequester.takeIf {
+                                      index ==
+                                        commentListState.firstVisibleItemIndex.coerceIn(
+                                          0,
+                                          commentItems.lastIndex.coerceAtLeast(0),
+                                        )
+                                    },
+                                  controlReturnFocusRequester = controlReturnFocusRequester,
+                                  controlPlayerFocusRequester = controlPlayerFocusRequester,
+                                  controlUpFocusRequester =
+                                    controlCommentSortFocusRequester.takeIf { index == 0 },
+                                  controlAtListEnd = index == commentItems.lastIndex,
+                                  onControlOpenReplies = { selectedComment, bounds ->
+                                    controlReplyReturnFocusRequester = controlReturnFocusRequester
+                                    replySourceBounds = bounds
+                                    onOpenReplies(selectedComment)
+                                  },
+                                )
+                              }
+                            }
+                            if (commentsLoading) {
+                              item {
+                                Box(
+                                  Modifier.fillMaxWidth().padding(8.dp),
+                                  contentAlignment = Alignment.Center,
+                                ) {
+                                  CircularProgressIndicator(
+                                    Modifier.size(22.dp),
+                                    strokeWidth = 2.dp,
+                                  )
+                                }
                               }
                             }
                           }
                         }
                       }
-                    }
-                    FadeVisibility(
-                      visible = pageContentLoading && commentItems.isEmpty(),
-                      modifier = Modifier.fillMaxSize(),
-                      enterMillis = if (settings.reduceMotion) 80 else 180,
-                      exitMillis = if (settings.reduceMotion) 70 else 150,
-                    ) {
-                      CommentLoadingSkeleton(Modifier.fillMaxSize())
-                    }
-                    if (commentsLoading && commentItems.isEmpty() && !pageContentLoading) {
-                      CircularProgressIndicator(
-                        Modifier.align(Alignment.Center).size(24.dp),
-                        strokeWidth = 2.dp,
-                      )
+                      FadeVisibility(
+                        visible = pageContentLoading && commentItems.isEmpty(),
+                        modifier = Modifier.fillMaxSize(),
+                        enterMillis = if (settings.reduceMotion) 80 else 180,
+                        exitMillis = if (settings.reduceMotion) 70 else 150,
+                      ) {
+                        CommentLoadingSkeleton(Modifier.fillMaxSize())
+                      }
+                      if (commentsLoading && commentItems.isEmpty() && !pageContentLoading) {
+                        CircularProgressIndicator(
+                          Modifier.align(Alignment.Center).size(24.dp),
+                          strokeWidth = 2.dp,
+                        )
+                      }
                     }
                   }
                 }
               }
+              if (!commentChromeVisibility.showDockedActions && displayedReplyRoot == null) {
+                FloatingVideoActions(
+                  expanded = floatingActionsExpanded,
+                  info = videoInfo,
+                  engagement = videoEngagement,
+                  loggedIn = currentAccountMid > 0L,
+                  favoriteFolders = favoriteFolders,
+                  favoriteFoldersLoading = favoriteFoldersLoading,
+                  reduceMotion = settings.reduceMotion,
+                  onExpandedChange = { floatingActionsExpanded = it },
+                  onLike = onLikeVideo,
+                  onCoin = onCoinVideo,
+                  onFavorite = onFavoriteVideo,
+                  onLoadFavoriteFolders = onLoadFavoriteFolders,
+                  onLogin = onLogin,
+                  foregroundColor = pageForegroundColor,
+                  modifier = Modifier.fillMaxSize().zIndex(25f),
+                )
+              }
             }
-            if (!commentChromeVisibility.showDockedActions && displayedReplyRoot == null) {
-              FloatingVideoActions(
-                expanded = floatingActionsExpanded,
-                info = videoInfo,
-                engagement = videoEngagement,
-                loggedIn = currentAccountMid > 0L,
-                favoriteFolders = favoriteFolders,
-                favoriteFoldersLoading = favoriteFoldersLoading,
-                reduceMotion = settings.reduceMotion,
-                onExpandedChange = { floatingActionsExpanded = it },
-                onLike = onLikeVideo,
-                onCoin = onCoinVideo,
-                onFavorite = onFavoriteVideo,
-                onLoadFavoriteFolders = onLoadFavoriteFolders,
-                onLogin = onLogin,
-                foregroundColor = pageForegroundColor,
-                modifier = Modifier.fillMaxSize().zIndex(25f),
-              )
+            displayedReplyRoot?.let { root ->
+              ReplyThreadTransitionContainer(
+                sourceBounds = replySourceBounds,
+                targetBounds = commentExpandedBounds,
+                progress = { replyTransitionProgress.value },
+                contentReady = replyContentReady,
+                modifier = Modifier.fillMaxSize().zIndex(30f),
+              ) {
+                ReplyThreadPanel(
+                  root = root,
+                  replies = replyItems,
+                  hasMore = replyHasMore,
+                  loading = repliesLoading,
+                  showEmotes = settings.showCommentEmotes,
+                  emoteCatalog = emoteMap,
+                  showLocation = settings.showCommentLocation,
+                  onLike = onLikeComment,
+                  uploaderMid = currentUploaderMid,
+                  onProfileClick = onCommentProfileClick,
+                  onImagePreview = onCommentImagePreview,
+                  onReply = { root, target ->
+                    replyTargetRoot = root
+                    replyTarget = target
+                  },
+                  onLoadMore = onLoadMoreReplies,
+                  navigationTargetRpid =
+                    commentNavigationTarget?.targetRpid?.takeIf {
+                      commentNavigationTarget.rootRpid == root.rpid
+                    },
+                  navigationRequestId =
+                    commentNavigationTarget?.requestId?.takeIf {
+                      commentNavigationTarget.rootRpid == root.rpid
+                    },
+                  onNavigationTargetReached = onCommentNavigationConsumed,
+                  onRefresh = onRefreshReplies,
+                  onDismiss = {
+                    if (!replyClosing) replyDismissRequestId += 1L
+                  },
+                  bottomClearancePx = commentComposerBounds.height,
+                  hiddenCommentAvatarRpid = hiddenCommentAvatarRpid,
+                  hiddenLinkedVideoCoverItemId = hiddenRecommendationCoverItemId,
+                  onLinkedVideoClick = { linkedVideo, bounds ->
+                    commentMediaBounds[linkedVideo.id] = bounds
+                    onRecommendationClick(linkedVideo, bounds, bounds, false)
+                  },
+                  onLinkedVideoBoundsChanged = { linkedVideo, bounds ->
+                    commentMediaBounds[linkedVideo.id] = bounds
+                  },
+                  onLinkedVideoLongClick = onRecommendationLongClick,
+                  onTimestampClick = { seconds, _ ->
+                    onSeek((seconds * 1000L).coerceIn(0L, durationMs))
+                  },
+                  onLinkedArticleClick = onArticleClick,
+                  hiddenLinkedArticleItemId = hiddenLinkedArticleItemId,
+                  deletionSelectedRpid = deleteCandidate?.rpid,
+                  canDeleteComment = ::canDeleteComment,
+                  onDeleteRequest = { comment, bounds ->
+                    deleteCandidateBounds = bounds
+                    deleteCandidate = comment
+                  },
+                  onDeleteConfirm = { comment ->
+                    deleteCandidate = null
+                    onDeleteComment(comment)
+                  },
+                  onDeleteCancel = { deleteCandidate = null },
+                  onDeletionBoundsChanged = { deleteCandidateBounds = it },
+                  pinActionAvailable =
+                    currentAccountMid > 0L && currentAccountMid == currentUploaderMid,
+                  pinActionLabel = { comment -> if (comment.isPinned) "取消置顶" else "置顶" },
+                  onPinRequest = {
+                    deleteCandidate = null
+                    onToggleCommentPin(it)
+                  },
+                  controlEnabled = controlModeEnabled,
+                  controlInitialFocusRequester = controlReplyEntryFocusRequester,
+                  modifier = Modifier.fillMaxSize(),
+                )
+              }
             }
           }
-          displayedReplyRoot?.let { root ->
-            ReplyThreadTransitionContainer(
-              sourceBounds = replySourceBounds,
-              targetBounds = commentExpandedBounds,
-              progress = { replyTransitionProgress.value },
-              contentReady = replyContentReady,
-              modifier = Modifier.fillMaxSize().zIndex(30f),
-            ) {
-              ReplyThreadPanel(
-                root = root,
-                replies = replyItems,
-                hasMore = replyHasMore,
-                loading = repliesLoading,
-                showEmotes = settings.showCommentEmotes,
-                emoteCatalog = emoteMap,
-                showLocation = settings.showCommentLocation,
-                onLike = onLikeComment,
-                uploaderMid = currentUploaderMid,
-                onProfileClick = onCommentProfileClick,
-                onImagePreview = onCommentImagePreview,
-                onReply = { root, target ->
-                  replyTargetRoot = root
-                  replyTarget = target
-                },
-                onLoadMore = onLoadMoreReplies,
-                navigationTargetRpid =
-                  commentNavigationTarget?.targetRpid?.takeIf {
-                    commentNavigationTarget.rootRpid == root.rpid
-                  },
-                navigationRequestId =
-                  commentNavigationTarget?.requestId?.takeIf {
-                    commentNavigationTarget.rootRpid == root.rpid
-                  },
-                onNavigationTargetReached = onCommentNavigationConsumed,
-                onRefresh = onRefreshReplies,
-                onDismiss = {
-                  if (!replyClosing) replyDismissRequested = true
-                },
-                bottomClearancePx = commentComposerBounds.height,
-                hiddenCommentAvatarRpid = hiddenCommentAvatarRpid,
-                hiddenLinkedVideoCoverItemId = hiddenRecommendationCoverItemId,
-                onLinkedVideoClick = { linkedVideo, bounds ->
-                  onRecommendationClick(linkedVideo, bounds, bounds, false)
-                },
-                onLinkedVideoLongClick = onRecommendationLongClick,
-                onLinkedArticleClick = onArticleClick,
-                hiddenLinkedArticleItemId = hiddenLinkedArticleItemId,
-                deletionSelectedRpid = deleteCandidate?.rpid,
-                canDeleteComment = ::canDeleteComment,
-                onDeleteRequest = { comment, bounds ->
-                  deleteCandidateBounds = bounds
-                  deleteCandidate = comment
-                },
-                onDeleteConfirm = { comment ->
-                  deleteCandidate = null
-                  onDeleteComment(comment)
-                },
-                onDeleteCancel = { deleteCandidate = null },
-                onDeletionBoundsChanged = { deleteCandidateBounds = it },
-                modifier = Modifier.fillMaxSize(),
-              )
-            }
-          }
-        }
         }
       },
     )
-    if (commentPaneBounds.width > 0f) {
+    val commentComposerVisible =
+      commentPaneBounds.width > 0f && !controllerOwnsInteraction
+    AnimatedVisibility(
+      visible = commentComposerVisible,
+      modifier =
+        if (longCommentOverlay) {
+          Modifier.align(Alignment.BottomEnd).fillMaxSize().zIndex(40f)
+        } else {
+          Modifier.align(Alignment.BottomEnd)
+            .width(with(density) { commentPaneBounds.width.toDp() })
+            .zIndex(20f)
+        },
+      enter =
+        fadeIn(tween(if (settings.reduceMotion) 70 else 170)) +
+          slideInVertically(tween(if (settings.reduceMotion) 70 else 190)) { it / 5 },
+      exit =
+        fadeOut(tween(if (settings.reduceMotion) 60 else 130)) +
+          slideOutVertically(tween(if (settings.reduceMotion) 60 else 150)) { it / 5 },
+    ) {
       CommentComposer(
         emotes = emotes,
         emotePackages = emotePackages,
@@ -1318,19 +1501,14 @@ internal fun VideoContent(
         },
         modifier =
           if (longCommentOverlay) {
-            Modifier.align(Alignment.BottomEnd)
-              .fillMaxSize()
+            Modifier.fillMaxSize()
               .navigationBarsPadding()
               .imePadding()
-              .zIndex(40f)
               .onGloballyPositioned { commentComposerBounds = it.boundsInRoot() }
           } else {
-            Modifier.align(Alignment.BottomEnd)
-              .width(with(density) { commentPaneBounds.width.toDp() })
-              .navigationBarsPadding()
+            Modifier.navigationBarsPadding()
               .imePadding()
               .padding(12.dp)
-              .zIndex(20f)
               .onGloballyPositioned { commentComposerBounds = it.boundsInRoot() }
           },
       )
@@ -1349,7 +1527,7 @@ internal data class CommentChromeVisibility(
   val showSortControls: Boolean = true,
 )
 
-/** Retained per-video UI state so restoring a parent never changes comment geometry mid-flight. */
+/** 保留每个视频的 UI 状态，让恢复父页时绝不改变飞行中的评论几何。 */
 internal class CommentChromeState {
   val visibility = mutableStateOf(CommentChromeVisibility())
   val keepHiddenAtTop = mutableStateOf(false)
@@ -1390,7 +1568,7 @@ internal fun commentChromeAfterScroll(
   }
 }
 
-/** Handles vertical intent even when an empty or short comment list has no scroll range. */
+/** 即使空/短评论列表没有滚动范围，也处理竖向手势意图。 */
 internal fun commentChromeAfterViewportSwipe(
   currentVisibility: CommentChromeVisibility,
   fingerDeltaY: Float,
@@ -1404,9 +1582,7 @@ internal fun commentChromeAfterViewportSwipe(
     else -> currentVisibility
   }
 
-/**
- * Prevents a short list's top-edge rebound from immediately undoing an intentional upward swipe.
- */
+/** 在真实顶部恢复操作行，同时保留有意的短列表收起。 */
 internal fun commentChromeAfterObservedScroll(
   currentVisibility: CommentChromeVisibility,
   scrolling: Boolean,
@@ -1419,9 +1595,8 @@ internal fun commentChromeAfterObservedScroll(
     isAtTop -> CommentChromeVisibility()
     scrolling && direction > 0 ->
       CommentChromeVisibility(showDockedActions = false, showSortControls = false)
-    // Downward list jitter, fling settling and overscroll rebound can all report a one-pixel
-    // reverse movement. Restoring is therefore owned by the viewport gesture detector, which
-    // requires a deliberate 32dp downward drag before changing the chrome.
+    // 向下的列表抖动、惯性停稳与过滚动回弹都可能报出一像素的反向移动：恢复因此
+    // 由视口手势检测器掌控，需要刻意的 32dp 下拉才改变控制条。
     scrolling && direction < 0 -> currentVisibility
     else -> currentVisibility
   }
@@ -1500,8 +1675,8 @@ private fun FloatingVideoActions(
             Canvas(Modifier.size(width = 20.dp, height = 12.dp)) {
               val triangle =
                 Path().apply {
-                  // Keep every edge inset from the pixel boundary so antialiasing cannot clip
-                  // one side and make the small indicator appear tilted.
+                  // 让每条边距都离开像素边界，避免抗锯齿裁掉一侧让小指示器显得
+                  // 倾斜。
                   moveTo(size.width * .12f, size.height * .18f)
                   lineTo(size.width * .88f, size.height * .18f)
                   lineTo(size.width * .5f, size.height * .84f)
@@ -1574,6 +1749,10 @@ private fun CommentSectionHeader(
   commentSort: CommentSort,
   onCommentSort: (CommentSort) -> Unit,
   foregroundColor: Color,
+  controlEnabled: Boolean = false,
+  controlFirstFocusRequester: FocusRequester? = null,
+  controlUpFocusRequester: FocusRequester? = null,
+  controlDownFocusRequester: FocusRequester? = null,
 ) {
   Surface(
     color = Color.Transparent,
@@ -1597,6 +1776,10 @@ private fun CommentSectionHeader(
       CommentSortControls(
         commentSort = commentSort,
         onCommentSort = onCommentSort,
+        controlEnabled = controlEnabled,
+        controlFirstFocusRequester = controlFirstFocusRequester,
+        controlUpFocusRequester = controlUpFocusRequester,
+        controlDownFocusRequester = controlDownFocusRequester,
       )
     }
   }
@@ -1606,8 +1789,19 @@ private fun CommentSectionHeader(
 private fun CommentSortControls(
   commentSort: CommentSort,
   onCommentSort: (CommentSort) -> Unit,
+  controlEnabled: Boolean = false,
+  controlFirstFocusRequester: FocusRequester? = null,
+  controlUpFocusRequester: FocusRequester? = null,
+  controlDownFocusRequester: FocusRequester? = null,
 ) {
-  CommentSort.entries.forEach { sort ->
+  val focusRequesters =
+    remember(controlFirstFocusRequester) {
+      CommentSort.entries.mapIndexed { index, _ ->
+        if (index == 0 && controlFirstFocusRequester != null) controlFirstFocusRequester
+        else FocusRequester()
+      }
+    }
+  CommentSort.entries.forEachIndexed { index, sort ->
     FilterChip(
       selected = commentSort == sort,
       onClick = { onCommentSort(sort) },
@@ -1618,6 +1812,26 @@ private fun CommentSortControls(
           labelColor = MaterialTheme.colorScheme.onBackground,
           selectedContainerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = .76f),
           selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        ),
+      modifier =
+        Modifier.then(
+          if (controlEnabled) {
+            Modifier.focusRequester(focusRequesters[index])
+              .focusProperties {
+                left =
+                  if (index == 0) FocusRequester.Cancel else focusRequesters[index - 1]
+                right =
+                  if (index == focusRequesters.lastIndex) FocusRequester.Cancel
+                  else focusRequesters[index + 1]
+                up = controlUpFocusRequester ?: FocusRequester.Cancel
+                down = controlDownFocusRequester ?: FocusRequester.Cancel
+              }
+              .controlFocusOutline(
+                RoundedCornerShape(16.dp),
+                MaterialTheme.colorScheme.primary,
+                enabled = true,
+              )
+          } else Modifier
         ),
     )
   }
@@ -1647,9 +1861,9 @@ internal fun videoPageLayoutForPane(
   if (compactHorizontalRecommendations) {
     val headerHeight = 36f + (scale - 1f).coerceAtLeast(0f) * 45f
     val bottomClearance = 4f
-    // Short panes use a horizontal card, but keep enough height for a true 16:9 thumbnail and
-    // two readable text lines. Width remains continuous so 4:3, 16:10, split, and freeform
-    // windows all land on a balanced number of visible cards without device-specific branches.
+    // 矮窗格用横向卡，但保留足够高度容纳真正的 16:9 缩略图与两行可读文本：宽度
+    // 保持连续，让 4:3、16:10、分屏与自由窗口都落在平衡的可见卡数量上，无需按
+    // 设备分支。
     val minimumCardHeight = 84f + (scale - 1f).coerceAtLeast(0f) * 30f
     val maximumCardHeight = 156f + (scale - 1f).coerceAtLeast(0f) * 30f
     val heightAvailableBelowIdealPlayer =

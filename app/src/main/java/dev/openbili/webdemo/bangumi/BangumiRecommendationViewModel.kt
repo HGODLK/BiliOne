@@ -4,13 +4,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.openbili.webdemo.api.BangumiRecommendation
 import dev.openbili.webdemo.api.BangumiSeason
-import dev.openbili.webdemo.api.BiliApi
+import dev.openbili.webdemo.api.BiliBangumiApi
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -83,7 +83,7 @@ class BangumiRecommendationViewModel : ViewModel() {
     viewModelScope.launch {
       val result =
         withContext(Dispatchers.IO) {
-          runCatching { BiliApi.getBangumiRecommendations() }
+          runCatching { BiliBangumiApi.getBangumiRecommendations() }
         }
       if (requestGen != generation) return@launch
       result
@@ -115,14 +115,14 @@ class BangumiRecommendationViewModel : ViewModel() {
             _state.update {
               it.copy(
                 initialLoading = false,
-                initialError = error.message ?: "本期推荐加载失败"
+                initialError = error.message ?: "本期推荐加载失败",
               )
             }
           } else {
             _state.update {
               it.copy(
                 refreshing = false,
-                refreshMessage = error.message ?: "刷新失败，已保留当前内容"
+                refreshMessage = error.message ?: "刷新失败，已保留当前内容",
               )
             }
           }
@@ -146,10 +146,8 @@ class BangumiRecommendationViewModel : ViewModel() {
         items.getOrNull(newIndex)?.stableId ?: items.firstOrNull()?.stableId
       }
 
-    val newSeasons =
-      oldSeasons.filterKeys { id -> items.any { it.stableId == id } }
-    val newErrors =
-      oldErrors.filterKeys { id -> items.any { it.stableId == id } }
+    val newSeasons = oldSeasons.filterKeys { id -> items.any { it.stableId == id } }
+    val newErrors = oldErrors.filterKeys { id -> items.any { it.stableId == id } }
 
     _state.update {
       it.copy(
@@ -201,8 +199,8 @@ class BangumiRecommendationViewModel : ViewModel() {
         withContext(Dispatchers.IO) {
           runCatching {
             when {
-              item.seasonId > 0L -> BiliApi.getBangumiSeason(seasonId = item.seasonId)
-              item.episodeId > 0L -> BiliApi.getBangumiSeason(episodeId = item.episodeId)
+              item.seasonId > 0L -> BiliBangumiApi.getBangumiSeason(seasonId = item.seasonId)
+              item.episodeId > 0L -> BiliBangumiApi.getBangumiSeason(episodeId = item.episodeId)
               else -> throw IllegalStateException("缺少番剧标识")
             }
           }
@@ -213,10 +211,7 @@ class BangumiRecommendationViewModel : ViewModel() {
         }
         .onFailure { error ->
           _state.update {
-            it.copy(
-              detailErrors =
-                it.detailErrors + (stableId to (error.message ?: "番剧资料加载失败"))
-            )
+            it.copy(detailErrors = it.detailErrors + (stableId to (error.message ?: "番剧资料加载失败")))
           }
         }
       detailJobs.remove(stableId)

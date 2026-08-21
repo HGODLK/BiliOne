@@ -3,43 +3,45 @@ package dev.openbili.webdemo.offline
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Environment
 import android.os.StatFs
 import android.os.storage.StorageManager
 import androidx.annotation.OptIn
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.database.StandaloneDatabaseProvider
-import androidx.media3.datasource.DefaultDataSource
-import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.NoOpCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
-import androidx.media3.exoplayer.offline.DefaultDownloadIndex
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.offline.DefaultDownloaderFactory
+import androidx.media3.exoplayer.offline.DefaultDownloadIndex
 import androidx.media3.exoplayer.offline.Download
 import androidx.media3.exoplayer.offline.DownloadManager
 import androidx.media3.exoplayer.offline.DownloadRequest
 import androidx.media3.exoplayer.offline.DownloadService
 import androidx.media3.exoplayer.scheduler.Requirements
-import dev.openbili.webdemo.api.BiliApi
+import dev.openbili.webdemo.api.BiliDanmakuApi
 import dev.openbili.webdemo.api.BiliHttpClient
 import dev.openbili.webdemo.api.BiliSubtitleApi
+import dev.openbili.webdemo.api.BiliVideoApi
 import dev.openbili.webdemo.api.DanmakuItem
 import dev.openbili.webdemo.api.PlayUrlData
 import dev.openbili.webdemo.api.UserInfo
 import java.io.File
-import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlinx.coroutines.CoroutineScope
+import java.util.concurrent.Executors
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -95,21 +97,22 @@ class OfflineMediaManager private constructor(context: Context) {
 
   private fun createDownloadManager(cache: SimpleCache): DownloadManager =
     DownloadManager(
-      appContext,
-      DefaultDownloadIndex(databaseProvider, "offline_media"),
-      DefaultDownloaderFactory(
-        CacheDataSource.Factory()
-          .setCache(cache)
-          .setUpstreamDataSourceFactory(upstreamFactory)
-          .setCacheKeyFactory { dataSpec -> dataSpec.key ?: dataSpec.uri.toString() }
-          .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR),
-        downloaderExecutor,
-      ),
-    ).apply {
-      maxParallelDownloads = 2
-      minRetryCount = 4
-      requirements = currentRequirements()
-    }
+        appContext,
+        DefaultDownloadIndex(databaseProvider, "offline_media"),
+        DefaultDownloaderFactory(
+          CacheDataSource.Factory()
+            .setCache(cache)
+            .setUpstreamDataSourceFactory(upstreamFactory)
+            .setCacheKeyFactory { dataSpec -> dataSpec.key ?: dataSpec.uri.toString() }
+            .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR),
+          downloaderExecutor,
+        ),
+      )
+      .apply {
+        maxParallelDownloads = 2
+        minRetryCount = 4
+        requirements = currentRequirements()
+      }
 
   init {
     if (storageAvailable()) scope.launch { recoverPersistedWork() }
@@ -149,7 +152,8 @@ class OfflineMediaManager private constructor(context: Context) {
         )
       )
     val storageManager = appContext.getSystemService(StorageManager::class.java)
-    appContext.getExternalFilesDirs(null)
+    appContext
+      .getExternalFilesDirs(null)
       .asSequence()
       .filterNotNull()
       .filter { directory ->
@@ -159,12 +163,26 @@ class OfflineMediaManager private constructor(context: Context) {
       }
       .distinctBy(File::getAbsolutePath)
       .forEachIndexed { index, directory ->
-        val volume = runCatching { storageManager?.getStorageVolume(directory) }.getOrNull()
-        val volumeKey = volume?.uuid?.takeIf(String::isNotBlank) ?: directory.absolutePath.hashCode().toString()
+        val volume =
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            runCatching { storageManager?.getStorageVolume(directory) }.getOrNull()
+          } else {
+            null
+          }
+        val volumeKey =
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            volume?.uuid?.takeIf(String::isNotBlank)
+          } else {
+            null
+          } ?: directory.absolutePath.hashCode().toString()
         val id = "sd:$volumeKey"
         val root = File(directory, OFFLINE_DIRECTORY_NAME)
         val description =
-          runCatching { volume?.getDescription(appContext) }.getOrNull().orEmpty().trim()
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            runCatching { volume?.getDescription(appContext) }.getOrNull().orEmpty().trim()
+          } else {
+            ""
+          }
         locations +=
           OfflineStorageLocation(
             id = id,
@@ -181,77 +199,75 @@ class OfflineMediaManager private constructor(context: Context) {
   suspend fun migrateStorage(
     target: OfflineStorageLocation,
     onProgress: (OfflineStorageMigrationProgress) -> Unit,
-  ): Result<Unit> =
-    migrationMutex.withLock {
-      withContext(Dispatchers.IO) {
-        runCatching {
-          check(target.id == OfflineMediaStore.INTERNAL_STORAGE_ID || target.removable) {
-            "不支持的缓存位置"
+  ): Result<Unit> = migrationMutex.withLock {
+    withContext(Dispatchers.IO) {
+      runCatching {
+        check(target.id == OfflineMediaStore.INTERNAL_STORAGE_ID || target.removable) {
+          "不支持的缓存位置"
+        }
+        val knownTarget =
+          availableStorageLocations().firstOrNull { it.id == target.id } ?: error("目标 SD 卡当前不可用")
+        val sourceRoot = activeRootDirectory
+        val targetRoot = File(knownTarget.rootPath)
+        if (sourceRoot.absolutePath == targetRoot.absolutePath) return@runCatching
+        check(migrationInProgress.compareAndSet(false, true)) { "缓存正在迁移" }
+        var componentsReleased = false
+        var targetActivated = false
+        val temporaryRoot =
+          File(targetRoot.parentFile ?: error("目标路径无效"), "${OFFLINE_DIRECTORY_NAME}_migrating")
+        try {
+          val sourceBytes = directoryBytes(sourceRoot)
+          check(knownTarget.availableBytes > sourceBytes + MIGRATION_FREE_SPACE_RESERVE_BYTES) {
+            "目标存储空间不足"
           }
-          val knownTarget =
-            availableStorageLocations().firstOrNull { it.id == target.id }
-              ?: error("目标 SD 卡当前不可用")
-          val sourceRoot = activeRootDirectory
-          val targetRoot = File(knownTarget.rootPath)
-          if (sourceRoot.absolutePath == targetRoot.absolutePath) return@runCatching
-          check(migrationInProgress.compareAndSet(false, true)) { "缓存正在迁移" }
-          var componentsReleased = false
-          var targetActivated = false
-          val temporaryRoot =
-            File(targetRoot.parentFile ?: error("目标路径无效"), "${OFFLINE_DIRECTORY_NAME}_migrating")
-          try {
-            val sourceBytes = directoryBytes(sourceRoot)
-            check(knownTarget.availableBytes > sourceBytes + MIGRATION_FREE_SPACE_RESERVE_BYTES) {
-              "目标存储空间不足"
-            }
-            activeDownloadManager.pauseDownloads()
-            preparationJobs.values.forEach(Job::cancel)
-            preparationJobs.clear()
-            appContext.stopService(Intent(appContext, OfflineDownloadService::class.java))
-            delay(MIGRATION_QUIET_PERIOD_MS)
+          activeDownloadManager.pauseDownloads()
+          preparationJobs.values.forEach(Job::cancel)
+          preparationJobs.clear()
+          appContext.stopService(Intent(appContext, OfflineDownloadService::class.java))
+          delay(MIGRATION_QUIET_PERIOD_MS)
+          synchronized(componentLock) {
+            activeDownloadManager.release()
+            mediaCache.release()
+            componentsReleased = true
+          }
+          if (temporaryRoot.exists()) temporaryRoot.deleteRecursively()
+          check(temporaryRoot.mkdirs()) { "无法创建迁移目录" }
+          copyDirectoryWithProgress(sourceRoot, temporaryRoot, sourceBytes, onProgress)
+          check(directoryBytes(temporaryRoot) == sourceBytes) { "缓存校验失败" }
+          if (targetRoot.exists()) {
+            check(targetRoot.listFiles().isNullOrEmpty()) { "目标位置已有缓存内容" }
+            check(targetRoot.delete()) { "无法准备目标缓存目录" }
+          }
+          check(temporaryRoot.renameTo(targetRoot)) { "无法完成缓存迁移" }
+          store.storageLocationId = knownTarget.id
+          store.storageRootPath = targetRoot.absolutePath
+          synchronized(componentLock) {
+            activeRootDirectory = targetRoot
+            cacheBackendRoot = targetRoot
+            mediaCache = createMediaCache(targetRoot)
+            activeDownloadManager = createDownloadManager(mediaCache)
+            targetActivated = true
+          }
+          if (sourceRoot.exists()) sourceRoot.deleteRecursively()
+          onProgress(OfflineStorageMigrationProgress(sourceBytes, sourceBytes))
+          recoverPersistedWork()
+        } catch (error: Throwable) {
+          if (componentsReleased && !targetActivated) {
             synchronized(componentLock) {
-              activeDownloadManager.release()
-              mediaCache.release()
-              componentsReleased = true
-            }
-            if (temporaryRoot.exists()) temporaryRoot.deleteRecursively()
-            check(temporaryRoot.mkdirs()) { "无法创建迁移目录" }
-            copyDirectoryWithProgress(sourceRoot, temporaryRoot, sourceBytes, onProgress)
-            check(directoryBytes(temporaryRoot) == sourceBytes) { "缓存校验失败" }
-            if (targetRoot.exists()) {
-              check(targetRoot.listFiles().isNullOrEmpty()) { "目标位置已有缓存内容" }
-              check(targetRoot.delete()) { "无法准备目标缓存目录" }
-            }
-            check(temporaryRoot.renameTo(targetRoot)) { "无法完成缓存迁移" }
-            store.storageLocationId = knownTarget.id
-            store.storageRootPath = targetRoot.absolutePath
-            synchronized(componentLock) {
-              activeRootDirectory = targetRoot
-              cacheBackendRoot = targetRoot
-              mediaCache = createMediaCache(targetRoot)
+              cacheBackendRoot = usableBackendRoot(sourceRoot)
+              mediaCache = createMediaCache(cacheBackendRoot)
               activeDownloadManager = createDownloadManager(mediaCache)
-              targetActivated = true
             }
-            if (sourceRoot.exists()) sourceRoot.deleteRecursively()
-            onProgress(OfflineStorageMigrationProgress(sourceBytes, sourceBytes))
             recoverPersistedWork()
-          } catch (error: Throwable) {
-            if (componentsReleased && !targetActivated) {
-              synchronized(componentLock) {
-                cacheBackendRoot = usableBackendRoot(sourceRoot)
-                mediaCache = createMediaCache(cacheBackendRoot)
-                activeDownloadManager = createDownloadManager(mediaCache)
-              }
-              recoverPersistedWork()
-            }
-            if (!targetActivated && temporaryRoot.exists()) temporaryRoot.deleteRecursively()
-            throw error
-          } finally {
-            migrationInProgress.set(false)
           }
+          if (!targetActivated && temporaryRoot.exists()) temporaryRoot.deleteRecursively()
+          throw error
+        } finally {
+          migrationInProgress.set(false)
         }
       }
     }
+  }
 
   fun entries(): List<OfflineMediaEntry> = store.entries()
 
@@ -259,7 +275,8 @@ class OfflineMediaManager private constructor(context: Context) {
 
   fun entryFromPlaybackUri(uri: String): OfflineMediaEntry? {
     if (!isOfflineUri(uri)) return null
-    val id = runCatching { Uri.parse(uri).lastPathSegment?.let(Uri::decode) }.getOrNull() ?: return null
+    val id =
+      runCatching { Uri.parse(uri).lastPathSegment?.let(Uri::decode) }.getOrNull() ?: return null
     return store.entry(id)
   }
 
@@ -280,8 +297,7 @@ class OfflineMediaManager private constructor(context: Context) {
                 fontSize = item.optInt("fontSize", 25),
                 color = item.optInt("color", 0xFFFFFF),
                 content = item.optString("content"),
-                sourceId =
-                  item.optString("sourceId").takeIf { it.isNotBlank() && it != "null" },
+                sourceId = item.optString("sourceId").takeIf { it.isNotBlank() && it != "null" },
                 colorful = item.optInt("colorful"),
               )
             )
@@ -397,7 +413,10 @@ class OfflineMediaManager private constructor(context: Context) {
       return
     }
     val downloads = trackIds(id).mapNotNull(::download)
-    if (downloads.any { it.state == Download.STATE_FAILED } || downloads.size < requiredTrackCount(entry)) {
+    if (
+      downloads.any { it.state == Download.STATE_FAILED } ||
+        downloads.size < requiredTrackCount(entry)
+    ) {
       store.upsert(entry.copy(preparationError = "", videoUrl = "", audioUrl = ""))
       startPreparation(entry.copy(preparationError = ""))
       return
@@ -438,9 +457,8 @@ class OfflineMediaManager private constructor(context: Context) {
   }
 
   /**
-   * Reconciles locally cached premium media only with a confirmed online account response.
-   * Logout and account switching lock cards without deleting bytes; a confirmed expiry for the
-   * same account revokes the media bytes while retaining card metadata and the cover.
+   * 只用已确认的在线账号响应来核对本地缓存的会员媒体。登出和切换账号会锁定卡片而
+   * 不删除字节；同一账号被确认过期时撤销媒体字节，但保留卡片元数据和封面。
    */
   fun reconcileEntitlements(userInfo: UserInfo?) {
     val entries = store.entries().filter(OfflineMediaEntry::requiresVip)
@@ -488,23 +506,23 @@ class OfflineMediaManager private constructor(context: Context) {
         currentCoroutineContext().ensureActive()
         val rawPlayData =
           when (seed.kind) {
-            OfflineMediaKind.VIDEO -> BiliApi.getPlayUrl(seed.bvid, seed.cid)
-            OfflineMediaKind.BANGUMI -> BiliApi.getBangumiPlayUrl(seed.episodeId, seed.cid)
+            OfflineMediaKind.VIDEO -> BiliVideoApi.getPlayUrl(seed.bvid, seed.cid)
+            OfflineMediaKind.BANGUMI -> BiliVideoApi.getBangumiPlayUrl(seed.episodeId, seed.cid)
           } ?: error("当前账号无法获取该视频的播放地址")
         val stream = selectStream(rawPlayData, seed.qualityId)
         val audio = rawPlayData.dashAudio
         val metadataDirectory = File(rootDirectory, "metadata/${seed.id}").apply { mkdirs() }
         val coverPath = downloadCover(seed.coverUrl, metadataDirectory)
         val danmakuPath =
-          if (seed.includeDanmaku) runCatching { saveDanmaku(seed, metadataDirectory) }.getOrDefault("")
+          if (seed.includeDanmaku)
+            runCatching { saveDanmaku(seed, metadataDirectory) }.getOrDefault("")
           else ""
         val subtitles =
           if (seed.includeSubtitles) saveSubtitles(seed, metadataDirectory) else emptyList()
         currentCoroutineContext().ensureActive()
         val latest = store.entry(seed.id) ?: return@runCatching
-        if (
-          latest.entitlementState == OfflineEntitlementState.REVOKED || latest.preparationPaused
-        ) return@runCatching
+        if (latest.entitlementState == OfflineEntitlementState.REVOKED || latest.preparationPaused)
+          return@runCatching
         val entry =
           seed.copy(
             coverRelativePath = coverPath.ifBlank { latest.coverRelativePath },
@@ -544,8 +562,8 @@ class OfflineMediaManager private constructor(context: Context) {
       }
       .onFailure { error ->
         if (error is CancellationException) throw error
-        // A delete or entitlement revocation may race with an in-flight metadata request. Never
-        // recreate a card after that terminal local action.
+        // 删除或撤销权益可能与进行中的元数据请求竞争。终局性本地操作之后绝不
+        // 重建卡片。
         val latest = store.entry(seed.id) ?: return@onFailure
         if (latest.entitlementState == OfflineEntitlementState.REVOKED) return@onFailure
         removeTrackDownloads(seed.id)
@@ -643,15 +661,22 @@ class OfflineMediaManager private constructor(context: Context) {
     val total = downloads.sumOf { it.contentLength.coerceAtLeast(0L) }
     val progress =
       if (total > 0L) (bytes.toFloat() / total.toFloat() * 100f).coerceIn(0f, 100f)
-      else downloads.map { it.percentDownloaded }.filter { it >= 0f }.average().toFloat().coerceAtLeast(0f)
+      else
+        downloads
+          .map { it.percentDownloaded }
+          .filter { it >= 0f }
+          .average()
+          .toFloat()
+          .coerceAtLeast(0f)
     val state =
       when {
         downloads.any { it.state == Download.STATE_FAILED } -> OfflineTransferState.FAILED
         downloads.all { it.state == Download.STATE_COMPLETED } &&
           downloads.size == requiredTrackCount(entry) -> OfflineTransferState.COMPLETED
         downloads.any { it.state == Download.STATE_DOWNLOADING } -> OfflineTransferState.DOWNLOADING
-        downloads.any { it.state == Download.STATE_STOPPED && it.stopReason == USER_PAUSE_STOP_REASON } ->
-          OfflineTransferState.PAUSED
+        downloads.any {
+          it.state == Download.STATE_STOPPED && it.stopReason == USER_PAUSE_STOP_REASON
+        } -> OfflineTransferState.PAUSED
         else -> OfflineTransferState.QUEUED
       }
     return OfflineMediaSnapshot(
@@ -668,14 +693,13 @@ class OfflineMediaManager private constructor(context: Context) {
     runCatching { downloadManager.downloadIndex.getDownload(id) }.getOrNull()
 
   private fun currentRequirements(): Requirements =
-    Requirements(
-      if (store.wifiOnly) Requirements.NETWORK_UNMETERED else Requirements.NETWORK
-    )
+    Requirements(if (store.wifiOnly) Requirements.NETWORK_UNMETERED else Requirements.NETWORK)
 
   private fun requirementsMet(): Boolean =
     currentRequirements().getNotMetRequirements(appContext) == 0
 
-  private fun requiredTrackCount(entry: OfflineMediaEntry): Int = if (entry.audioUrl.isBlank()) 1 else 2
+  private fun requiredTrackCount(entry: OfflineMediaEntry): Int =
+    if (entry.audioUrl.isBlank()) 1 else 2
 
   private fun revokePremiumMedia(entry: OfflineMediaEntry) {
     preparationJobs.remove(entry.id)?.cancel()
@@ -724,7 +748,7 @@ class OfflineMediaManager private constructor(context: Context) {
   }
 
   private fun saveDanmaku(entry: OfflineMediaEntry, directory: File): String {
-    val items = BiliApi.getDanmaku(entry.cid, entry.durationMs / 1_000L)
+    val items = BiliDanmakuApi.getDanmaku(entry.cid, entry.durationMs / 1_000L)
     val array = JSONArray()
     items.forEach { item -> array.put(encodeDanmaku(item)) }
     val file = File(directory, "danmaku.json")
@@ -762,7 +786,8 @@ class OfflineMediaManager private constructor(context: Context) {
       .put("sourceId", item.sourceId)
       .put("colorful", item.colorful)
 
-  private fun safeFileName(value: String): String = value.filter(Char::isLetterOrDigit).take(48).ifBlank { "track" }
+  private fun safeFileName(value: String): String =
+    value.filter(Char::isLetterOrDigit).take(48).ifBlank { "track" }
 
   private fun initialRootDirectory(): File {
     if (store.storageLocationId == OfflineMediaStore.INTERNAL_STORAGE_ID) {
@@ -776,8 +801,7 @@ class OfflineMediaManager private constructor(context: Context) {
     val usable =
       store.storageLocationId == OfflineMediaStore.INTERNAL_STORAGE_ID ||
         requestedRoot.parentFile?.let { it.exists() && it.canWrite() } == true
-    return if (usable) requestedRoot
-    else File(appContext.cacheDir, "offline_media_unavailable")
+    return if (usable) requestedRoot else File(appContext.cacheDir, "offline_media_unavailable")
   }
 
   private fun ensureStorageBackend() {

@@ -35,6 +35,24 @@ class LiveHeroVisibilityTest {
   }
 
   @Test
+  fun rejectsAPlayerInsideTheGridButBehindTheHomeHeaderClearance() {
+    assertFalse(
+      isLiveHeroPreviewFullyVisible(
+        previewBounds = Rect(left = 16f, top = 145f, right = 760f, bottom = 575f),
+        viewportBounds = viewport,
+        topClearancePx = 64f,
+      )
+    )
+    assertTrue(
+      isLiveHeroPreviewFullyVisible(
+        previewBounds = Rect(left = 16f, top = 165f, right = 760f, bottom = 595f),
+        viewportBounds = viewport,
+        topClearancePx = 64f,
+      )
+    )
+  }
+
+  @Test
   fun rejectsMissingLayoutBounds() {
     assertFalse(isLiveHeroPreviewFullyVisible(Rect.Zero, viewport))
     assertFalse(isLiveHeroPreviewFullyVisible(Rect(0f, 0f, 100f, 100f), Rect.Zero))

@@ -1,6 +1,7 @@
 package dev.openbili.webdemo.live
 
 import android.app.Activity
+import android.view.KeyEvent
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -13,6 +14,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -28,11 +30,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -43,12 +43,13 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledIconButton
@@ -57,7 +58,6 @@ import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -79,10 +79,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -116,16 +121,26 @@ import dev.openbili.webdemo.api.UserInfo
 import dev.openbili.webdemo.feed.FeedItem
 import dev.openbili.webdemo.settings.AppSettings
 import dev.openbili.webdemo.ui.VideoShapeTokens
+import dev.openbili.webdemo.ui.LocalControlMode
+import dev.openbili.webdemo.ui.controlFocusOutline
+import dev.openbili.webdemo.ui.isControlConfirmKey
 import dev.openbili.webdemo.video.AdaptiveVideoPanes
 import dev.openbili.webdemo.video.BiliRichText
 import dev.openbili.webdemo.video.CommentEmoteMarkerRegistry
 import dev.openbili.webdemo.video.CommentTextEditor
+import dev.openbili.webdemo.video.ControllerPlaybackActionItem
+import dev.openbili.webdemo.video.ControllerPlaybackControls
+import dev.openbili.webdemo.video.ControllerPlaybackOverlay
 import dev.openbili.webdemo.video.DanmakuControlIcon
 import dev.openbili.webdemo.video.DanmakuOverlayView
 import dev.openbili.webdemo.video.FullscreenControlIcon
 import dev.openbili.webdemo.video.GestureIndicator
+import dev.openbili.webdemo.video.GestureIndicatorKind
 import dev.openbili.webdemo.video.GestureIndicatorOverlay
+import dev.openbili.webdemo.video.GESTURE_INDICATOR_FADE_IN_MS
+import dev.openbili.webdemo.video.GESTURE_INDICATOR_FADE_OUT_MS
 import dev.openbili.webdemo.video.PlaybackHeader
+import dev.openbili.webdemo.video.PlaybackHeaderControlFocus
 import dev.openbili.webdemo.video.PlaybackHeaderUiModel
 import dev.openbili.webdemo.video.PlaybackPageGlassBackdrop
 import dev.openbili.webdemo.video.PlaybackPageGlassSurface
@@ -134,10 +149,10 @@ import dev.openbili.webdemo.video.RecommendationCard
 import dev.openbili.webdemo.video.floatingPlayerLayout
 import dev.openbili.webdemo.video.formatCompactCount
 import dev.openbili.webdemo.video.videoPageLayoutForPane
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
-import kotlin.math.roundToInt
 
 @Composable
 internal fun LiveRoomScreen(
@@ -161,6 +176,7 @@ internal fun LiveRoomScreen(
   settings: AppSettings,
   onSettingsChange: ((AppSettings) -> AppSettings) -> Unit,
   onPlayerBoundsChanged: (Rect) -> Unit = {},
+  onFirstVideoFrameRendered: (Long) -> Unit = {},
   headerForegroundColor: Color = MaterialTheme.colorScheme.onBackground,
   contentForegroundColor: Color = MaterialTheme.colorScheme.onBackground,
   glassBackdrop: PlaybackPageGlassBackdrop = PlaybackPageGlassBackdrop(),
@@ -168,6 +184,30 @@ internal fun LiveRoomScreen(
   viewModel: LiveRoomViewModel = viewModel(),
 ) {
   val state by viewModel.state.collectAsStateWithLifecycle()
+  val controlMode = LocalControlMode.current
+  val controlHeaderFocusRequester = remember(entry.roomId) { FocusRequester() }
+  val controlHeaderHomeFocusRequester = remember(entry.roomId) { FocusRequester() }
+  val controlHeaderOwnerFocusRequester = remember(entry.roomId) { FocusRequester() }
+  val controlHeaderFollowFocusRequester = remember(entry.roomId) { FocusRequester() }
+  val controlHeaderSelectionFocusRequester = remember(entry.roomId) { FocusRequester() }
+  val controlHeaderDetailsFocusRequester = remember(entry.roomId) { FocusRequester() }
+  val controlPlayerFocusRequester = remember(entry.roomId) { FocusRequester() }
+  val controlHeaderFocus =
+    remember {
+      PlaybackHeaderControlFocus(
+        back = controlHeaderFocusRequester,
+        home = controlHeaderHomeFocusRequester,
+        owner = controlHeaderOwnerFocusRequester,
+        follow = controlHeaderFollowFocusRequester,
+        selection = controlHeaderSelectionFocusRequester,
+        details = controlHeaderDetailsFocusRequester,
+        player = controlPlayerFocusRequester,
+      )
+    }
+  var controllerLevel by
+    remember(entry.roomId, navigationEntryId) {
+      mutableStateOf(LiveRoomControllerLevel.PAGE_NAVIGATION)
+    }
   val context = LocalContext.current
   val lifecycleOwner = LocalLifecycleOwner.current
   val view = LocalView.current
@@ -250,7 +290,10 @@ internal fun LiveRoomScreen(
     val listener =
       object : Player.Listener {
         override fun onRenderedFirstFrame() {
-          firstVideoFrameRendered = true
+          if (!firstVideoFrameRendered) {
+            firstVideoFrameRendered = true
+            onFirstVideoFrameRendered(navigationEntryId)
+          }
           startDanmakuWhenReady()
         }
 
@@ -285,9 +328,22 @@ internal fun LiveRoomScreen(
     viewModel.setForeground(active)
     if (!active) player?.pause()
   }
-  DisposableEffect(view, active, settings.keepScreenOn) {
+  LaunchedEffect(controlMode, active, entry.roomId, controllerLevel) {
+    if (
+      controlMode &&
+        active &&
+        controllerLevel == LiveRoomControllerLevel.PAGE_NAVIGATION &&
+        settings.controllerTouchPlaybackPage &&
+        !settings.alwaysControllerPlaybackPage
+    ) {
+      androidx.compose.runtime.withFrameNanos {}
+      runCatching { controlHeaderDetailsFocusRequester.requestFocus() }
+    }
+  }
+  DisposableEffect(view, active, settings.keepScreenOn, controlMode) {
     val previousKeepScreenOn = view.keepScreenOn
-    view.keepScreenOn = active && settings.keepScreenOn
+    // 控制器接管页面时保持常亮；未接管时沿用原有的播放页设置。
+    view.keepScreenOn = active && (controlMode || settings.keepScreenOn)
     onDispose { view.keepScreenOn = previousKeepScreenOn }
   }
   LaunchedEffect(account) { viewModel.updateAccount(account) }
@@ -306,7 +362,7 @@ internal fun LiveRoomScreen(
   DisposableEffect(lifecycleOwner, entry.roomId) {
     val observer = LifecycleEventObserver { _, event ->
       when (event) {
-          Lifecycle.Event.ON_START -> viewModel.setForeground(active)
+        Lifecycle.Event.ON_START -> viewModel.setForeground(active)
         Lifecycle.Event.ON_STOP -> {
           viewModel.setForeground(false)
           player?.pause()
@@ -364,8 +420,7 @@ internal fun LiveRoomScreen(
     onDispose {
       WindowCompat.setDecorFitsSystemWindows(window, false)
       WindowInsetsControllerCompat(window, window.decorView).apply {
-        systemBarsBehavior =
-          WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         hide(WindowInsetsCompat.Type.systemBars())
       }
     }
@@ -386,163 +441,221 @@ internal fun LiveRoomScreen(
       }
       .joinToString("  ·  ")
 
-  Box(Modifier.fillMaxSize()) {
-  Surface(Modifier.fillMaxSize(), color = Color.Transparent) {
-    Box(Modifier.fillMaxSize()) {
-      Column(Modifier.fillMaxSize()) {
-        PlaybackHeader(
-          model =
-            PlaybackHeaderUiModel(
-              stableId = "live:${room?.roomId ?: entry.roomId}",
-              title = room?.title ?: entry.title,
-              ownerMid = anchor?.uid ?: room?.anchorUid ?: entry.uid,
-              ownerName = anchor?.name ?: entry.uname,
-              ownerFace = anchor?.faceUrl ?: entry.faceUrl,
-              description = room?.description.orEmpty(),
-              metadata = metadata,
-            ),
-          onBack = onBack,
-          onHome = onHome,
-          onOwnerProfileClick = onAnchorProfile,
-          showFollowButton =
-            (anchor?.uid ?: room?.anchorUid ?: entry.uid) > 0L &&
-              (anchor?.uid ?: room?.anchorUid ?: entry.uid) != account.mid,
-          followed = state.followed,
-          followBusy = state.followBusy,
-          followingGroups = state.followingGroups,
-          followingGroupsLoading = state.followingGroupsLoading,
-          loggedIn = account.isLogin,
-          onLoadFollowingGroups = viewModel::loadFollowingGroups,
-          onSelectFollowingGroup = viewModel::selectFollowingGroup,
-          onUnfollow = viewModel::unfollow,
-          onLogin = onLogin,
-          onShowInfo = { showInfo = true },
-          showDeviceStatus = settings.showPlaybackDeviceStatus,
-          foregroundColor = headerForegroundColor,
-          glassBackdrop = glassBackdrop,
-        )
-        AdaptiveVideoPanes(
-          modifier = Modifier.fillMaxSize().padding(12.dp),
-          primary = {
-            LivePrimaryPane(
-              state = state,
-              player = player,
-              playerView = playerView,
-              showPlayer = !fullscreenLayerVisible,
-              showDanmaku = showDanmaku,
-              onShowDanmaku = { enabled ->
-                onSettingsChange { it.copy(liveShowDanmaku = enabled) }
-              },
-              danmakuBlockWordCount = danmakuBlockWords.size,
-              onOpenDanmakuBlockWords = { showDanmakuBlockWords = true },
-              danmaku = renderedLiveDanmaku,
-              danmakuStartedAtElapsedMs = danmakuStartedAtElapsedMs,
-              danmakuRenderingEnabled = danmakuRenderStartPositionMs != null,
-              danmakuTransitionSuppressed =
-                fullscreenTransitionBusy ||
-                  pageTransitionSuppressed ||
-                  recommendationTransitionRequested,
-              settings = settings,
-              onSettingsChange = onSettingsChange,
-              onPlayerBoundsChanged = { bounds ->
-                embeddedPlayerBounds = bounds
-                onPlayerBoundsChanged(bounds)
-              },
-              onToggleFullscreen = ::enterFullscreenAnimated,
-              onQuality = viewModel::loadPlayback,
-              onRetryPlayback = {
-                viewModel.loadPlayback(state.playback?.currentQn ?: 10_000)
-              },
-              onPlaybackError = viewModel::onPlaybackError,
-              onPlaybackReady = viewModel::onPlaybackReady,
-              onSeekLiveEdge = onSeekLiveEdge,
-              onRecommendedRoom = { room, bounds ->
-                recommendationTransitionRequested = true
-                onRecommendedRoom(room, bounds)
-              },
-              onRecommendedRoomBoundsChanged = onRecommendedRoomBoundsChanged,
-              hiddenRecommendationCoverItemId = hiddenRecommendationCoverItemId,
-              onRetryRecommendations = viewModel::retryRecommendations,
-              foregroundColor = contentForegroundColor,
-            )
-          },
-          secondary = {
-            LiveSecondaryPane(
-              state = state,
-              account = account,
-              selectedTab = secondaryTab,
-              onSelectedTabChange = { secondaryTab = it },
-              onText = viewModel::setComposerText,
-              onSend = viewModel::sendText,
-              onToggleEmoji = viewModel::toggleEmojiPanel,
-              onSelectEmojiPack = viewModel::selectEmojiPack,
-              onEmoji = viewModel::sendEmoji,
-              onJoinLottery = viewModel::joinInteractiveLottery,
-              onLogin = onLogin,
-              onRankTab = viewModel::selectRankTab,
-              onAudienceRank = viewModel::selectAudienceRank,
-              onGuardType = viewModel::selectGuardType,
-              onLoadMoreGuards = viewModel::loadMoreGuards,
-              foregroundColor = contentForegroundColor,
-              glassBackdrop = glassBackdrop,
-            )
-          },
-        )
-      }
+  if (settings.alwaysControllerPlaybackPage || (controlMode && !settings.controllerTouchPlaybackPage)) {
+    LiveRoomControllerPlaybackScreen(
+      entry = entry,
+      state = state,
+      account = account,
+      player = player,
+      playerView = playerView,
+      firstFrameRendered = firstVideoFrameRendered,
+      showDanmaku = showDanmaku,
+      danmakuBlockWordCount = danmakuBlockWords.size,
+      danmaku = renderedLiveDanmaku,
+      danmakuStartedAtElapsedMs = danmakuStartedAtElapsedMs,
+      danmakuRenderingEnabled = danmakuRenderStartPositionMs != null,
+      danmakuTransitionSuppressed = pageTransitionSuppressed,
+      settings = settings,
+      onSettingsChange = onSettingsChange,
+      onShowDanmaku = { enabled -> onSettingsChange { it.copy(liveShowDanmaku = enabled) } },
+      onOpenDanmakuBlockWords = { showDanmakuBlockWords = true },
+      onQuality = viewModel::loadPlayback,
+      onRetryPlayback = { viewModel.loadPlayback(state.playback?.currentQn ?: LIVE_ORIGINAL_QN) },
+      onPlaybackError = viewModel::onPlaybackError,
+      onPlaybackReady = viewModel::onPlaybackReady,
+      onPlaybackStall = viewModel::onPlaybackStall,
+      onSeekLiveEdge = onSeekLiveEdge,
+      onPlayerBoundsChanged = onPlayerBoundsChanged,
+      onBack = onBack,
+      onText = viewModel::setComposerText,
+      onSend = viewModel::sendText,
+      onToggleEmoji = viewModel::toggleEmojiPanel,
+      onSelectEmojiPack = viewModel::selectEmojiPack,
+      onEmoji = viewModel::sendEmoji,
+      onJoinLottery = viewModel::joinInteractiveLottery,
+      onLogin = onLogin,
+      onRankTab = viewModel::selectRankTab,
+      onAudienceRank = viewModel::selectAudienceRank,
+      onGuardType = viewModel::selectGuardType,
+      onLoadMoreGuards = viewModel::loadMoreGuards,
+      glassBackdrop = glassBackdrop,
+    )
+    return
+  }
 
-      if (fullscreenLayerVisible) {
-        Box(
-          Modifier.fillMaxSize()
-            .zIndex(80f)
-            .graphicsLayer { alpha = fullscreenProgress.value.coerceIn(0f, 1f) }
-            .background(Color.Black)
-        )
-        val progress = fullscreenProgress.value.coerceIn(0f, 1f)
-        LivePlayerCard(
-          state = state,
-          player = player,
-          playerView = playerView,
-          showDanmaku = showDanmaku,
-          onShowDanmaku = { enabled ->
-            onSettingsChange { it.copy(liveShowDanmaku = enabled) }
-          },
-          danmakuBlockWordCount = danmakuBlockWords.size,
-          onOpenDanmakuBlockWords = { showDanmakuBlockWords = true },
-          danmaku = renderedLiveDanmaku,
-          danmakuStartedAtElapsedMs = danmakuStartedAtElapsedMs,
-          danmakuRenderingEnabled = danmakuRenderStartPositionMs != null,
-          danmakuTransitionSuppressed =
-            fullscreenTransitionBusy ||
-              pageTransitionSuppressed ||
-              recommendationTransitionRequested,
-          settings = settings,
-          onSettingsChange = onSettingsChange,
-          fullscreen = true,
-          fullscreenProgress = progress,
-          onToggleFullscreen = ::exitFullscreenAnimated,
-          onQuality = viewModel::loadPlayback,
-          onRetryPlayback = {
-            viewModel.loadPlayback(state.playback?.currentQn ?: 10_000)
-          },
-          onPlaybackError = viewModel::onPlaybackError,
-          onPlaybackReady = viewModel::onPlaybackReady,
-          onSeekLiveEdge = onSeekLiveEdge,
-          modifier =
-            Modifier.fillMaxSize()
-              .floatingPlayerLayout(
-                progress = progress,
-                sourceBounds = frozenEmbeddedPlayerBounds,
-                targetInsetPx = 0,
+  Box(Modifier.fillMaxSize()) {
+    Surface(Modifier.fillMaxSize(), color = Color.Transparent) {
+      Box(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize()) {
+          PlaybackHeader(
+            model =
+              PlaybackHeaderUiModel(
+                stableId = "live:${room?.roomId ?: entry.roomId}",
+                title = room?.title ?: entry.title,
+                ownerMid = anchor?.uid ?: room?.anchorUid ?: entry.uid,
+                ownerName = anchor?.name ?: entry.uname,
+                ownerFace = anchor?.faceUrl ?: entry.faceUrl,
+                description = room?.description.orEmpty(),
+                metadata = metadata,
+              ),
+            onBack = onBack,
+            onHome = onHome,
+            onOwnerProfileClick = onAnchorProfile,
+            showFollowButton =
+              (anchor?.uid ?: room?.anchorUid ?: entry.uid) > 0L &&
+                (anchor?.uid ?: room?.anchorUid ?: entry.uid) != account.mid,
+            followed = state.followed,
+            followBusy = state.followBusy,
+            followingGroups = state.followingGroups,
+            followingGroupsLoading = state.followingGroupsLoading,
+            loggedIn = account.isLogin,
+            onLoadFollowingGroups = viewModel::loadFollowingGroups,
+            onSelectFollowingGroup = viewModel::selectFollowingGroup,
+            onUnfollow = viewModel::unfollow,
+            onLogin = onLogin,
+            onShowInfo = { showInfo = true },
+            showDeviceStatus = settings.showPlaybackDeviceStatus,
+            foregroundColor = headerForegroundColor,
+            glassBackdrop = glassBackdrop,
+            controlFocus = controlHeaderFocus.takeIf { controlMode },
+          )
+          AdaptiveVideoPanes(
+            modifier = Modifier.fillMaxSize().padding(12.dp),
+            primary = {
+              LivePrimaryPane(
+                state = state,
+                player = player,
+                playerView = playerView,
+                showPlayer = !fullscreenLayerVisible,
+                showDanmaku = showDanmaku,
+                onShowDanmaku = { enabled ->
+                  onSettingsChange { it.copy(liveShowDanmaku = enabled) }
+                },
+                danmakuBlockWordCount = danmakuBlockWords.size,
+                onOpenDanmakuBlockWords = { showDanmakuBlockWords = true },
+                danmaku = renderedLiveDanmaku,
+                danmakuStartedAtElapsedMs = danmakuStartedAtElapsedMs,
+                danmakuRenderingEnabled = danmakuRenderStartPositionMs != null,
+                danmakuTransitionSuppressed =
+                  fullscreenTransitionBusy ||
+                    pageTransitionSuppressed ||
+                    recommendationTransitionRequested,
+                settings = settings,
+                onSettingsChange = onSettingsChange,
+                onPlayerBoundsChanged = { bounds ->
+                  embeddedPlayerBounds = bounds
+                  onPlayerBoundsChanged(bounds)
+                },
+                controllerLevel = controllerLevel,
+                onControllerLevelChanged = { controllerLevel = it },
+                controlPlayerFocusRequester = controlPlayerFocusRequester,
+                onControlReturnToHeader = {
+                  controllerLevel = LiveRoomControllerLevel.PAGE_NAVIGATION
+                  runCatching { controlHeaderDetailsFocusRequester.requestFocus() }
+                },
+                onToggleFullscreen = ::enterFullscreenAnimated,
+                onQuality = viewModel::loadPlayback,
+                onRetryPlayback = {
+                  viewModel.loadPlayback(state.playback?.currentQn ?: 10_000)
+                },
+                onPlaybackError = viewModel::onPlaybackError,
+                onPlaybackReady = viewModel::onPlaybackReady,
+                onPlaybackStall = viewModel::onPlaybackStall,
+                onSeekLiveEdge = onSeekLiveEdge,
+                onRecommendedRoom = { room, bounds ->
+                  recommendationTransitionRequested = true
+                  onRecommendedRoom(room, bounds)
+                },
+                onRecommendedRoomBoundsChanged = onRecommendedRoomBoundsChanged,
+                hiddenRecommendationCoverItemId = hiddenRecommendationCoverItemId,
+                onRetryRecommendations = viewModel::retryRecommendations,
+                foregroundColor = contentForegroundColor,
               )
-              .zIndex(90f)
-              .graphicsLayer {
-                shape = RoundedCornerShape(VideoShapeTokens.CornerRadius * (1f - progress))
-                clip = true
-              },
-        )
+            },
+            secondary = {
+              LiveSecondaryPane(
+                state = state,
+                account = account,
+                selectedTab = secondaryTab,
+                onSelectedTabChange = { secondaryTab = it },
+                onText = viewModel::setComposerText,
+                onSend = viewModel::sendText,
+                onToggleEmoji = viewModel::toggleEmojiPanel,
+                onSelectEmojiPack = viewModel::selectEmojiPack,
+                onEmoji = viewModel::sendEmoji,
+                onJoinLottery = viewModel::joinInteractiveLottery,
+                onLogin = onLogin,
+                onRankTab = viewModel::selectRankTab,
+                onAudienceRank = viewModel::selectAudienceRank,
+                onGuardType = viewModel::selectGuardType,
+                onLoadMoreGuards = viewModel::loadMoreGuards,
+                glassBackdrop = glassBackdrop,
+              )
+            },
+          )
+        }
+
+        if (fullscreenLayerVisible) {
+          Box(
+            Modifier.fillMaxSize()
+              .zIndex(80f)
+              .graphicsLayer { alpha = fullscreenProgress.value.coerceIn(0f, 1f) }
+              .background(Color.Black)
+          )
+          val progress = fullscreenProgress.value.coerceIn(0f, 1f)
+          LivePlayerCard(
+            state = state,
+            player = player,
+            playerView = playerView,
+            showDanmaku = showDanmaku,
+            onShowDanmaku = { enabled ->
+              onSettingsChange { it.copy(liveShowDanmaku = enabled) }
+            },
+            danmakuBlockWordCount = danmakuBlockWords.size,
+            onOpenDanmakuBlockWords = { showDanmakuBlockWords = true },
+            danmaku = renderedLiveDanmaku,
+            danmakuStartedAtElapsedMs = danmakuStartedAtElapsedMs,
+            danmakuRenderingEnabled = danmakuRenderStartPositionMs != null,
+            danmakuTransitionSuppressed =
+              fullscreenTransitionBusy ||
+                pageTransitionSuppressed ||
+                recommendationTransitionRequested,
+            settings = settings,
+            onSettingsChange = onSettingsChange,
+            fullscreen = true,
+            fullscreenProgress = progress,
+            onToggleFullscreen = ::exitFullscreenAnimated,
+            onQuality = viewModel::loadPlayback,
+            onRetryPlayback = {
+              viewModel.loadPlayback(state.playback?.currentQn ?: 10_000)
+            },
+            onPlaybackError = viewModel::onPlaybackError,
+            onPlaybackReady = viewModel::onPlaybackReady,
+            onPlaybackStall = viewModel::onPlaybackStall,
+            onSeekLiveEdge = onSeekLiveEdge,
+            controllerLevel = controllerLevel,
+            onControllerLevelChanged = { controllerLevel = it },
+            controlPlayerFocusRequester = controlPlayerFocusRequester,
+            onControlReturnToHeader = {
+              controllerLevel = LiveRoomControllerLevel.PAGE_NAVIGATION
+              runCatching { controlHeaderDetailsFocusRequester.requestFocus() }
+            },
+            modifier =
+              Modifier.fillMaxSize()
+                .floatingPlayerLayout(
+                  progress = progress,
+                  sourceBounds = frozenEmbeddedPlayerBounds,
+                  targetInsetPx = 0,
+                )
+                .zIndex(90f)
+                .graphicsLayer {
+                  shape = RoundedCornerShape(VideoShapeTokens.CornerRadius * (1f - progress))
+                  clip = true
+                },
+          )
+        }
       }
     }
-  }
   }
 
   if (showInfo) {
@@ -593,7 +706,12 @@ private fun LivePrimaryPane(
   onRetryPlayback: () -> Unit,
   onPlaybackError: (Int, PlaybackException) -> Unit,
   onPlaybackReady: (Int) -> Unit,
+  onPlaybackStall: (Int) -> Unit,
   onSeekLiveEdge: () -> Unit,
+  controllerLevel: LiveRoomControllerLevel,
+  onControllerLevelChanged: (LiveRoomControllerLevel) -> Unit,
+  controlPlayerFocusRequester: FocusRequester,
+  onControlReturnToHeader: () -> Unit,
   onRecommendedRoom: (LiveSearchRoom, Rect) -> Unit,
   onRecommendedRoomBoundsChanged: (LiveSearchRoom, Rect) -> Unit,
   hiddenRecommendationCoverItemId: String?,
@@ -605,64 +723,69 @@ private fun LivePrimaryPane(
     color = Color.Transparent,
     contentColor = foregroundColor,
   ) {
-  BoxWithConstraints(Modifier.fillMaxSize()) {
-    val pageLayout = videoPageLayoutForPane(maxWidth.value, maxHeight.value)
-    val playerHeight = pageLayout.playerHeight.coerceAtLeast(96.dp)
-    Column(Modifier.fillMaxSize()) {
-      Box(
-        modifier = Modifier.fillMaxWidth().height(playerHeight),
-        contentAlignment = Alignment.Center,
-      ) {
-        if (showPlayer) {
-          LivePlayerCard(
-            state = state,
-            player = player,
-            playerView = playerView,
-            showDanmaku = showDanmaku,
-            onShowDanmaku = onShowDanmaku,
-            danmakuBlockWordCount = danmakuBlockWordCount,
-            onOpenDanmakuBlockWords = onOpenDanmakuBlockWords,
-            danmaku = danmaku,
-            danmakuStartedAtElapsedMs = danmakuStartedAtElapsedMs,
-            danmakuRenderingEnabled = danmakuRenderingEnabled,
-            danmakuTransitionSuppressed = danmakuTransitionSuppressed,
-            settings = settings,
-            onSettingsChange = onSettingsChange,
-            onPlayerBoundsChanged = onPlayerBoundsChanged,
-            fullscreen = false,
-            fullscreenProgress = 0f,
-            onToggleFullscreen = onToggleFullscreen,
-            onQuality = onQuality,
-            onRetryPlayback = onRetryPlayback,
-            onPlaybackError = onPlaybackError,
-            onPlaybackReady = onPlaybackReady,
-            onSeekLiveEdge = onSeekLiveEdge,
-            modifier = Modifier.fillMaxHeight().aspectRatio(16f / 9f),
-          )
-        } else {
-          Box(
-            Modifier.fillMaxHeight()
-              .aspectRatio(16f / 9f)
-              .clip(VideoShapeTokens.Player)
-              .background(Color.Black)
-          )
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+      val pageLayout = videoPageLayoutForPane(maxWidth.value, maxHeight.value)
+      val playerHeight = pageLayout.playerHeight.coerceAtLeast(96.dp)
+      Column(Modifier.fillMaxSize()) {
+        Box(
+          modifier = Modifier.fillMaxWidth().height(playerHeight),
+          contentAlignment = Alignment.Center,
+        ) {
+          if (showPlayer) {
+            LivePlayerCard(
+              state = state,
+              player = player,
+              playerView = playerView,
+              showDanmaku = showDanmaku,
+              onShowDanmaku = onShowDanmaku,
+              danmakuBlockWordCount = danmakuBlockWordCount,
+              onOpenDanmakuBlockWords = onOpenDanmakuBlockWords,
+              danmaku = danmaku,
+              danmakuStartedAtElapsedMs = danmakuStartedAtElapsedMs,
+              danmakuRenderingEnabled = danmakuRenderingEnabled,
+              danmakuTransitionSuppressed = danmakuTransitionSuppressed,
+              settings = settings,
+              onSettingsChange = onSettingsChange,
+              onPlayerBoundsChanged = onPlayerBoundsChanged,
+              fullscreen = false,
+              fullscreenProgress = 0f,
+              onToggleFullscreen = onToggleFullscreen,
+              onQuality = onQuality,
+              onRetryPlayback = onRetryPlayback,
+              onPlaybackError = onPlaybackError,
+              onPlaybackReady = onPlaybackReady,
+              onPlaybackStall = onPlaybackStall,
+              onSeekLiveEdge = onSeekLiveEdge,
+              controllerLevel = controllerLevel,
+              onControllerLevelChanged = onControllerLevelChanged,
+              controlPlayerFocusRequester = controlPlayerFocusRequester,
+              onControlReturnToHeader = onControlReturnToHeader,
+              modifier = Modifier.fillMaxHeight().aspectRatio(16f / 9f),
+            )
+          } else {
+            Box(
+              Modifier.fillMaxHeight()
+                .aspectRatio(16f / 9f)
+                .clip(VideoShapeTokens.Player)
+                .background(Color.Black)
+            )
+          }
         }
+        Spacer(Modifier.height(8.dp))
+        LiveRecommendationSection(
+          state = state,
+          onRoom = onRecommendedRoom,
+          onRoomBoundsChanged = onRecommendedRoomBoundsChanged,
+          hiddenCoverItemId = hiddenRecommendationCoverItemId,
+          onRetry = onRetryRecommendations,
+          cardWidth = pageLayout.recommendationCardWidth,
+          compactHorizontal = pageLayout.compactHorizontalRecommendations,
+          compactHeight = pageLayout.compactRecommendationCardHeight,
+          foregroundColor = foregroundColor,
+          modifier = Modifier.fillMaxWidth().weight(1f),
+        )
       }
-      Spacer(Modifier.height(8.dp))
-      LiveRecommendationSection(
-        state = state,
-        onRoom = onRecommendedRoom,
-        onRoomBoundsChanged = onRecommendedRoomBoundsChanged,
-        hiddenCoverItemId = hiddenRecommendationCoverItemId,
-        onRetry = onRetryRecommendations,
-        cardWidth = pageLayout.recommendationCardWidth,
-        compactHorizontal = pageLayout.compactHorizontalRecommendations,
-        compactHeight = pageLayout.compactRecommendationCardHeight,
-        foregroundColor = foregroundColor,
-        modifier = Modifier.fillMaxWidth().weight(1f),
-      )
     }
-  }
   }
 }
 
@@ -688,7 +811,12 @@ private fun LivePlayerCard(
   onRetryPlayback: () -> Unit,
   onPlaybackError: (Int, PlaybackException) -> Unit,
   onPlaybackReady: (Int) -> Unit,
+  onPlaybackStall: (Int) -> Unit,
   onSeekLiveEdge: () -> Unit,
+  controllerLevel: LiveRoomControllerLevel = LiveRoomControllerLevel.PAGE_NAVIGATION,
+  onControllerLevelChanged: (LiveRoomControllerLevel) -> Unit = {},
+  controlPlayerFocusRequester: FocusRequester? = null,
+  onControlReturnToHeader: () -> Unit = {},
   onPlayerBoundsChanged: (Rect) -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
@@ -698,14 +826,23 @@ private fun LivePlayerCard(
   var danmakuMenu by remember { mutableStateOf(false) }
   var liveOffsetMs by remember { mutableLongStateOf(C.TIME_UNSET) }
   var controlsVisible by remember(state.entryRoomId) { mutableStateOf(true) }
+  val controlMode = LocalControlMode.current
+  val playerFocusRequester = controlPlayerFocusRequester ?: remember { FocusRequester() }
+  val controlActionFocusRequester = remember { FocusRequester() }
+  var controlPlayerFocused by remember(state.entryRoomId, fullscreen) { mutableStateOf(false) }
   var gestureFeedback by remember { mutableStateOf<GestureIndicator?>(null) }
   var gestureFeedbackVisible by remember { mutableStateOf(false) }
   var gestureFeedbackVersion by remember { mutableLongStateOf(0L) }
 
   val sourceIndex = state.activeSourceIndex
+  var bufferingForRecovery by
+    remember(player, state.generation, sourceIndex, state.playback?.currentQn) {
+      mutableStateOf(player?.playbackState == Player.STATE_BUFFERING)
+    }
   DisposableEffect(player, state.generation, sourceIndex) {
     isPlaying = player?.isPlaying == true
     buffering = player.isLiveBuffering()
+    bufferingForRecovery = player?.playbackState == Player.STATE_BUFFERING
     val listener =
       object : Player.Listener {
         override fun onIsPlayingChanged(value: Boolean) {
@@ -714,6 +851,7 @@ private fun LivePlayerCard(
 
         override fun onPlaybackStateChanged(playbackState: Int) {
           buffering = playbackState == Player.STATE_BUFFERING || playbackState == Player.STATE_IDLE
+          bufferingForRecovery = playbackState == Player.STATE_BUFFERING
           if (playbackState == Player.STATE_READY) onPlaybackReady(sourceIndex)
         }
 
@@ -724,10 +862,30 @@ private fun LivePlayerCard(
     player?.addListener(listener)
     onDispose { player?.removeListener(listener) }
   }
+  LaunchedEffect(player, sourceIndex, state.playback?.currentQn, bufferingForRecovery) {
+    val activePlayer = player ?: return@LaunchedEffect
+    if (!bufferingForRecovery || !activePlayer.playWhenReady) return@LaunchedEffect
+    delay(3_000L)
+    if (activePlayer.playbackState == Player.STATE_BUFFERING && activePlayer.playWhenReady) {
+      onPlaybackStall(sourceIndex)
+    }
+  }
   LaunchedEffect(player, state.playback?.currentQn) {
     while (true) {
       liveOffsetMs = player?.currentLiveOffset?.takeUnless { it == C.TIME_UNSET } ?: C.TIME_UNSET
       delay(1_000L)
+    }
+  }
+  LaunchedEffect(controlMode, state.entryRoomId, fullscreen, controllerLevel) {
+    if (controlMode && controllerLevel != LiveRoomControllerLevel.PAGE_NAVIGATION) {
+      androidx.compose.runtime.withFrameNanos {}
+      runCatching { playerFocusRequester.requestFocus() }
+    }
+  }
+  LaunchedEffect(controllerLevel) {
+    if (controllerLevel == LiveRoomControllerLevel.PLAYER_CONTROLS) {
+      androidx.compose.runtime.withFrameNanos {}
+      runCatching { controlActionFocusRequester.requestFocus() }
     }
   }
   LaunchedEffect(
@@ -737,7 +895,13 @@ private fun LivePlayerCard(
     isPlaying,
     settings.controlsTimeoutSeconds,
   ) {
-    if (controlsVisible && isPlaying && !qualityMenu && !danmakuMenu) {
+    if (
+      controlsVisible &&
+        isPlaying &&
+        !qualityMenu &&
+        !danmakuMenu &&
+        (!controlMode || controlPlayerFocused)
+    ) {
       delay(settings.controlsTimeoutSeconds * 1_000L)
       controlsVisible = false
     }
@@ -753,17 +917,79 @@ private fun LivePlayerCard(
       gestureFeedback = null
     }
   }
+  BackHandler(enabled = controlMode && controllerLevel != LiveRoomControllerLevel.PAGE_NAVIGATION) {
+    if (controllerLevel == LiveRoomControllerLevel.PLAYER_CONTROLS) {
+      onControllerLevelChanged(LiveRoomControllerLevel.PLAYER_DIRECT)
+      runCatching { playerFocusRequester.requestFocus() }
+    } else if (fullscreen) {
+      onToggleFullscreen()
+      onControlReturnToHeader()
+    } else {
+      onControlReturnToHeader()
+    }
+  }
 
   Surface(
     modifier =
-      modifier.then(
-        if (fullscreen) Modifier
-        else
-          Modifier.onGloballyPositioned { coordinates ->
-            val bounds = coordinates.boundsInRoot()
-            if (bounds.width > 0f && bounds.height > 0f) onPlayerBoundsChanged(bounds)
-          }
-      ),
+      modifier
+        .then(
+          if (fullscreen) Modifier
+          else
+            Modifier.onGloballyPositioned { coordinates ->
+              val bounds = coordinates.boundsInRoot()
+              if (bounds.width > 0f && bounds.height > 0f) onPlayerBoundsChanged(bounds)
+            }
+        )
+        .then(
+          if (controlMode) {
+            Modifier.focusRequester(playerFocusRequester)
+              .onFocusChanged { controlPlayerFocused = it.isFocused }
+              .controlFocusOutline(
+                shape = if (fullscreen) RoundedCornerShape(0.dp) else VideoShapeTokens.Player,
+                color = MaterialTheme.colorScheme.primary,
+                width = 3.dp,
+              )
+              .onPreviewKeyEvent { event ->
+                if (
+                  !controlPlayerFocused ||
+                    controllerLevel == LiveRoomControllerLevel.PAGE_NAVIGATION ||
+                    controllerLevel == LiveRoomControllerLevel.PLAYER_CONTROLS ||
+                    event.type != KeyEventType.KeyDown ||
+                    event.nativeKeyEvent.repeatCount > 0
+                ) {
+                  return@onPreviewKeyEvent false
+                }
+                when {
+                  isControlConfirmKey(event.nativeKeyEvent.keyCode) -> {
+                    if (!fullscreen) {
+                      onToggleFullscreen()
+                    } else if (controlsVisible) {
+                      if (player?.isPlaying == true) player.pause() else player?.play()
+                    } else {
+                      controlsVisible = true
+                    }
+                    true
+                  }
+                  event.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_DPAD_UP -> {
+                    onControlReturnToHeader()
+                    true
+                  }
+                  event.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_MENU -> {
+                    onControllerLevelChanged(LiveRoomControllerLevel.PLAYER_CONTROLS)
+                    controlsVisible = true
+                    true
+                  }
+                  event.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_DPAD_DOWN -> {
+                    onControllerLevelChanged(LiveRoomControllerLevel.PLAYER_CONTROLS)
+                    controlsVisible = true
+                    true
+                  }
+                  else -> false
+                }
+              }
+              .focusable()
+          } else Modifier
+        ),
     shape = if (fullscreen) RoundedCornerShape(0.dp) else VideoShapeTokens.Player,
     color = Color.Black,
     shadowElevation = 0.dp,
@@ -798,6 +1024,45 @@ private fun LivePlayerCard(
         enabledTwoFingerSeek = false,
         modifier = Modifier.fillMaxSize().zIndex(1.5f),
       )
+      if (controlMode && controllerLevel == LiveRoomControllerLevel.PLAYER_CONTROLS) {
+        ControllerPlaybackControls(
+          title = state.roomInfo?.title ?: "直播间",
+          positionMs = 0L,
+          durationMs = 0L,
+          isPlaying = isPlaying,
+          actions = buildList {
+            add(ControllerPlaybackActionItem("play", if (isPlaying) "暂停" else "播放"))
+            add(ControllerPlaybackActionItem("refresh", "刷新"))
+            if (liveOffsetMs != C.TIME_UNSET && liveOffsetMs > 8_000L) {
+              add(ControllerPlaybackActionItem("live_edge", "回到直播"))
+            }
+            add(ControllerPlaybackActionItem("quality", "清晰度"))
+            add(ControllerPlaybackActionItem("danmaku", "弹幕"))
+            add(ControllerPlaybackActionItem("fullscreen", "全屏"))
+          },
+          overlay = dev.openbili.webdemo.video.ControllerPlaybackOverlay.ACTIONS,
+          initialActionFocusRequester = controlActionFocusRequester,
+          showProgress = false,
+          statusText = "LIVE",
+          onAction = { action ->
+            when (action.key) {
+              "play" -> if (player?.isPlaying == true) player.pause() else player?.play()
+              "refresh" -> onRetryPlayback()
+              "live_edge" -> onSeekLiveEdge()
+              "quality" -> {
+                qualityMenu = true
+                controlsVisible = true
+              }
+              "danmaku" -> {
+                danmakuMenu = true
+                controlsVisible = true
+              }
+              "fullscreen" -> onToggleFullscreen()
+            }
+          },
+          modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().zIndex(6f),
+        )
+      }
       if ((state.playbackLoading || buffering) && state.playbackError == null) {
         CircularProgressIndicator(
           modifier = Modifier.align(Alignment.Center).size(34.dp),
@@ -881,10 +1146,10 @@ private fun LivePlayerCard(
         Row(
           modifier =
             Modifier.fillMaxWidth()
-            .background(
-              Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = .78f)))
-            )
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+              .background(
+                Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = .78f)))
+              )
+              .padding(horizontal = 12.dp, vertical = 8.dp),
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
@@ -985,7 +1250,7 @@ private fun LivePlayerCard(
                 verticalArrangement = Arrangement.spacedBy(2.dp),
               ) {
                 Text(
-                  "显示区域  ${(settings.liveDanmakuDisplayArea * 100).toInt()}%",
+                  "显示区域  ${liveDanmakuPercentLabel(settings.liveDanmakuDisplayArea)}",
                   style = MaterialTheme.typography.labelMedium,
                 )
                 Slider(
@@ -1009,7 +1274,7 @@ private fun LivePlayerCard(
                   steps = 3,
                 )
                 Text(
-                  "不透明度  ${(settings.liveDanmakuOpacity * 100).toInt()}%",
+                  "不透明度  ${liveDanmakuPercentLabel(settings.liveDanmakuOpacity)}",
                   style = MaterialTheme.typography.labelMedium,
                 )
                 Slider(
@@ -1021,7 +1286,7 @@ private fun LivePlayerCard(
                   steps = 7,
                 )
                 Text(
-                  "弹幕字号  ${(settings.liveDanmakuFontScale * 100).toInt()}%",
+                  "弹幕字号  ${liveDanmakuPercentLabel(settings.liveDanmakuFontScale)}",
                   style = MaterialTheme.typography.labelMedium,
                 )
                 Slider(
@@ -1058,9 +1323,18 @@ private fun LivePlayerCard(
       }
       AnimatedVisibility(
         visible = gestureFeedbackVisible && gestureFeedback != null,
-        modifier = Modifier.align(Alignment.Center).zIndex(4f),
-        enter = fadeIn(tween(90)),
-        exit = fadeOut(tween(140)),
+        modifier =
+          Modifier.align(
+              when (gestureFeedback?.kind) {
+                GestureIndicatorKind.BRIGHTNESS -> Alignment.CenterStart
+                GestureIndicatorKind.VOLUME -> Alignment.CenterEnd
+                else -> Alignment.Center
+              }
+            )
+            .padding(horizontal = 28.dp)
+            .zIndex(4f),
+        enter = fadeIn(tween(GESTURE_INDICATOR_FADE_IN_MS)),
+        exit = fadeOut(tween(GESTURE_INDICATOR_FADE_OUT_MS)),
       ) {
         gestureFeedback?.let { GestureIndicatorOverlay(it) }
       }
@@ -1068,8 +1342,10 @@ private fun LivePlayerCard(
   }
 }
 
+private fun liveDanmakuPercentLabel(value: Float): String = "${(value * 100f).roundToInt()}%"
+
 @Composable
-private fun LiveDanmakuLayer(
+internal fun LiveDanmakuLayer(
   items: List<DanmakuItem>,
   startedAtElapsedMs: Long,
   enabled: Boolean,
@@ -1112,11 +1388,6 @@ private fun LiveDanmakuLayer(
   )
 }
 
-private enum class LiveSecondaryTab(val title: String) {
-  CHAT("聊天"),
-  RANK("榜单"),
-}
-
 @Composable
 private fun LiveRecommendationSection(
   state: LiveRoomUiState,
@@ -1131,895 +1402,62 @@ private fun LiveRecommendationSection(
   modifier: Modifier = Modifier,
 ) {
   CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides foregroundColor) {
-  Column(
-    modifier = modifier,
-    verticalArrangement = Arrangement.spacedBy(4.dp),
-  ) {
-    Text(
-      "推荐直播",
-      modifier = Modifier.padding(horizontal = 12.dp),
-      style = MaterialTheme.typography.titleMedium,
-      fontWeight = FontWeight.Bold,
-    )
-    Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-      when {
-        state.recommendationsLoading && state.recommendations.isEmpty() ->
-          CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
-        state.recommendationsError != null && state.recommendations.isEmpty() ->
-          Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-              state.recommendationsError,
-              color = MaterialTheme.colorScheme.error,
-              maxLines = 2,
-              overflow = TextOverflow.Ellipsis,
-            )
-            TextButton(onClick = onRetry) { Text("重试") }
-          }
-        state.recommendations.isEmpty() ->
-          Text("暂时没有更多推荐", color = foregroundColor.copy(alpha = .72f))
-        else ->
-          LazyRow(
-            modifier = Modifier.fillMaxSize(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-          ) {
-            items(state.recommendations, key = LiveSearchRoom::stableId) { room ->
-              val coverUrl = room.keyframeUrl ?: room.coverUrl.orEmpty()
-              RecommendationCard(
-                item =
-                  FeedItem(
-                    id = room.stableId,
-                    title = room.title,
-                    videoUrl = "",
-                    coverUrl = coverUrl,
-                    uploader = room.uname,
-                    playCount = null,
-                    duration = null,
-                  ),
-                coverVisible = room.stableId != hiddenCoverItemId,
-                onCoverBoundsChanged = { bounds -> onRoomBoundsChanged(room, bounds) },
-                onClick = { bounds -> onRoom(room, bounds) },
-                onLongClick = {},
-                cardWidth = cardWidth,
-                compactHorizontal = compactHorizontal,
-                compactHeight = compactHeight,
-              )
-            }
-          }
-      }
-    }
-  }
-  }
-}
-
-private data class AudienceRankOption(
-  val title: String,
-  val type: String,
-  val switch: String,
-)
-
-private val audienceRankOptions =
-  listOf(
-    AudienceRankOption("在线·贡献", "online_rank", "contribution_rank"),
-    AudienceRankOption("在线·进房", "online_rank", "entry_time_rank"),
-    AudienceRankOption("今日", "daily_rank", "today_rank"),
-    AudienceRankOption("昨日", "daily_rank", "yesterday_rank"),
-    AudienceRankOption("本周", "weekly_rank", "current_week_rank"),
-    AudienceRankOption("上周", "weekly_rank", "last_week_rank"),
-    AudienceRankOption("本月", "monthly_rank", "current_month_rank"),
-    AudienceRankOption("上月", "monthly_rank", "last_month_rank"),
-  )
-
-@Composable
-private fun LiveRankSection(
-  state: LiveRoomUiState,
-  onRankTab: (LiveRankTab) -> Unit,
-  onAudienceRank: (String, String) -> Unit,
-  onGuardType: (Int) -> Unit,
-  onLoadMoreGuards: () -> Unit,
-  foregroundColor: Color,
-  modifier: Modifier = Modifier,
-) {
-  Surface(
-    modifier = modifier,
-    shape = VideoShapeTokens.Card,
-    color = Color.Transparent,
-    contentColor = foregroundColor,
-  ) {
-    val chipColors = liveAdaptiveFilterChipColors(foregroundColor)
-    Column(Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 7.dp)) {
-      LazyRow(
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        items(LiveRankTab.entries) { tab ->
-          FilterChip(
-            selected = state.rankTab == tab,
-            onClick = { onRankTab(tab) },
-            colors = chipColors,
-            label = {
-              val suffix =
-                when (tab) {
-                  LiveRankTab.AUDIENCE -> state.audienceRank.countText
-                  LiveRankTab.GUARD ->
-                    state.guardRank.totalCount.takeIf { it > 0 }?.toString().orEmpty()
-                }
-              Text(if (suffix.isBlank()) tab.title else "${tab.title} $suffix")
-            },
-          )
-        }
-        if (state.rankTab == LiveRankTab.AUDIENCE) {
-          items(audienceRankOptions) { option ->
-            FilterChip(
-              selected =
-                state.audienceRank.type == option.type &&
-                  state.audienceRank.switch == option.switch,
-              onClick = { onAudienceRank(option.type, option.switch) },
-              colors = chipColors,
-              label = { Text(option.title) },
-            )
-          }
-        } else {
-          items(listOf(3 to "周榜", 4 to "月榜", 5 to "陪伴榜")) { (type, label) ->
-            FilterChip(
-              selected = state.guardRank.typ == type,
-              onClick = { onGuardType(type) },
-              colors = chipColors,
-              label = { Text(label) },
-            )
-          }
-        }
-      }
-      val loading =
-        if (state.rankTab == LiveRankTab.AUDIENCE) state.audienceRank.isLoading
-        else state.guardRank.isLoading && state.guardRank.items.isEmpty()
-      val error =
-        if (state.rankTab == LiveRankTab.AUDIENCE) state.audienceRank.error
-        else state.guardRank.error
-      val users =
-        if (state.rankTab == LiveRankTab.AUDIENCE) state.audienceRank.items
-        else state.guardRank.items
+    Column(
+      modifier = modifier,
+      verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+      Text(
+        "推荐直播",
+        modifier = Modifier.padding(horizontal = 12.dp),
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Bold,
+      )
       Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
         when {
-          loading -> CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
-          error != null && users.isEmpty() -> Text(error, color = MaterialTheme.colorScheme.error)
-          users.isEmpty() -> Text("暂时没有榜单数据", color = foregroundColor.copy(alpha = .72f))
+          state.recommendationsLoading && state.recommendations.isEmpty() ->
+            CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+          state.recommendationsError != null && state.recommendations.isEmpty() ->
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+              Text(
+                state.recommendationsError,
+                color = MaterialTheme.colorScheme.error,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+              )
+              TextButton(onClick = onRetry) { Text("重试") }
+            }
+          state.recommendations.isEmpty() ->
+            Text("暂时没有更多推荐", color = foregroundColor.copy(alpha = .72f))
           else ->
             LazyRow(
               modifier = Modifier.fillMaxSize(),
-              contentPadding = PaddingValues(top = 5.dp),
-              horizontalArrangement = Arrangement.spacedBy(9.dp),
+              horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-              itemsIndexed(users, key = { _, user -> user.uid }) { index, user ->
-                LiveRankUserCard(user, foregroundColor)
-                if (state.rankTab == LiveRankTab.GUARD && index >= users.lastIndex - 3) {
-                  LaunchedEffect(user.uid, state.guardRank.nextPage) { onLoadMoreGuards() }
-                }
-              }
-              if (state.rankTab == LiveRankTab.GUARD && state.guardRank.isLoading) {
-                item {
-                  Box(Modifier.width(50.dp).fillMaxHeight(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
-                  }
-                }
-              }
-            }
-        }
-      }
-    }
-  }
-}
-
-@Composable
-private fun LiveRankUserCard(user: LiveRankUser, foregroundColor: Color) {
-  Surface(
-    modifier = Modifier.width(188.dp).fillMaxHeight(),
-    shape = RoundedCornerShape(16.dp),
-    color = MaterialTheme.colorScheme.surface.copy(alpha = .26f),
-    contentColor = foregroundColor,
-    border = BorderStroke(1.dp, foregroundColor.copy(alpha = .16f)),
-  ) {
-    Row(
-      Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 8.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(9.dp),
-    ) {
-      Box(contentAlignment = Alignment.BottomEnd) {
-        AsyncImage(
-          model = user.faceUrl,
-          contentDescription = user.name,
-          modifier =
-            Modifier.size(44.dp)
-              .clip(CircleShape)
-              .background(MaterialTheme.colorScheme.surfaceVariant),
-          contentScale = ContentScale.Crop,
-        )
-        Surface(
-          shape = CircleShape,
-          color = MaterialTheme.colorScheme.primary,
-          contentColor = MaterialTheme.colorScheme.onPrimary,
-        ) {
-          Text(
-            "#${user.rank}",
-            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
-            style = MaterialTheme.typography.labelSmall,
-          )
-        }
-      }
-      Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-        Text(
-          user.name,
-          fontWeight = FontWeight.SemiBold,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
-        user.fanMedal?.let { FanMedalChip(it) }
-        val detail =
-          when {
-            user.accompanyDays != null -> "陪伴 ${user.accompanyDays} 天"
-            user.score != null -> "${formatCompactCount(user.score)} 贡献"
-            user.guardLevel != null -> guardLevelName(user.guardLevel)
-            else -> null
-          }
-        detail?.let {
-          Text(
-            it,
-            style = MaterialTheme.typography.labelSmall,
-            color = foregroundColor.copy(alpha = .72f),
-            maxLines = 1,
-          )
-        }
-      }
-    }
-  }
-}
-
-@Composable
-private fun LiveSecondaryPane(
-  state: LiveRoomUiState,
-  account: UserInfo,
-  selectedTab: LiveSecondaryTab,
-  onSelectedTabChange: (LiveSecondaryTab) -> Unit,
-  onText: (String, Int) -> Unit,
-  onSend: () -> Unit,
-  onToggleEmoji: () -> Unit,
-  onSelectEmojiPack: (String) -> Unit,
-  onEmoji: (LiveEmoji) -> Unit,
-  onJoinLottery: () -> Unit,
-  onLogin: () -> Unit,
-  onRankTab: (LiveRankTab) -> Unit,
-  onAudienceRank: (String, String) -> Unit,
-  onGuardType: (Int) -> Unit,
-  onLoadMoreGuards: () -> Unit,
-  foregroundColor: Color,
-  glassBackdrop: PlaybackPageGlassBackdrop,
-) {
-  val animatedForeground by
-    animateColorAsState(foregroundColor, tween(220), label = "liveSecondaryForeground")
-  val chipColors = liveAdaptiveFilterChipColors(animatedForeground)
-  PlaybackPageGlassSurface(
-    backdrop = glassBackdrop,
-    modifier = Modifier.fillMaxSize(),
-    shape = VideoShapeTokens.Card,
-    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = .18f),
-    fallbackColor = MaterialTheme.colorScheme.surface.copy(alpha = .92f),
-    border = BorderStroke(1.dp, animatedForeground.copy(alpha = .18f)),
-    blurRadius = 18.dp,
-  ) {
-  CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides animatedForeground) {
-  Column(
-    Modifier.fillMaxSize().padding(8.dp),
-    verticalArrangement = Arrangement.spacedBy(8.dp),
-  ) {
-    Surface(
-      modifier = Modifier.fillMaxWidth(),
-      shape = RoundedCornerShape(18.dp),
-      color = MaterialTheme.colorScheme.surface.copy(alpha = .18f),
-      contentColor = animatedForeground,
-      border = BorderStroke(1.dp, animatedForeground.copy(alpha = .14f)),
-    ) {
-      Row(
-        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 5.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-      ) {
-        LiveSecondaryTab.entries.forEach { tab ->
-          FilterChip(
-            selected = selectedTab == tab,
-            onClick = { onSelectedTabChange(tab) },
-            colors = chipColors,
-            label = { Text(tab.title) },
-          )
-        }
-      }
-    }
-    Box(Modifier.fillMaxWidth().weight(1f)) {
-      when (selectedTab) {
-        LiveSecondaryTab.CHAT ->
-          LiveMessagePane(
-            state = state,
-            account = account,
-            onText = onText,
-            onSend = onSend,
-            onToggleEmoji = onToggleEmoji,
-            onSelectEmojiPack = onSelectEmojiPack,
-            onEmoji = onEmoji,
-            onJoinLottery = onJoinLottery,
-            onLogin = onLogin,
-            foregroundColor = animatedForeground,
-          )
-        LiveSecondaryTab.RANK ->
-          LiveRankSection(
-            state = state,
-            onRankTab = onRankTab,
-            onAudienceRank = onAudienceRank,
-            onGuardType = onGuardType,
-            onLoadMoreGuards = onLoadMoreGuards,
-            foregroundColor = animatedForeground,
-            modifier = Modifier.fillMaxSize(),
-          )
-      }
-    }
-  }
-  }
-  }
-}
-
-@Composable
-private fun LiveMessagePane(
-  state: LiveRoomUiState,
-  account: UserInfo,
-  onText: (String, Int) -> Unit,
-  onSend: () -> Unit,
-  onToggleEmoji: () -> Unit,
-  onSelectEmojiPack: (String) -> Unit,
-  onEmoji: (LiveEmoji) -> Unit,
-  onJoinLottery: () -> Unit,
-  onLogin: () -> Unit,
-  foregroundColor: Color,
-) {
-  val listState = rememberLazyListState()
-  val lastMessageId = state.messages.lastOrNull()?.stableId
-  LaunchedEffect(lastMessageId) {
-    if (state.messages.isNotEmpty()) {
-      listState.animateScrollToItem(state.messages.lastIndex)
-    }
-  }
-  Surface(
-    Modifier.fillMaxSize(),
-    shape = VideoShapeTokens.Card,
-    color = Color.Transparent,
-    contentColor = foregroundColor,
-    tonalElevation = 2.dp,
-  ) {
-    Column(Modifier.fillMaxSize()) {
-      LiveMessageHeader(state.connectionError)
-      LazyColumn(
-        state = listState,
-        modifier = Modifier.fillMaxWidth().weight(1f),
-        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(7.dp),
-      ) {
-        items(state.messages, key = LiveChatMessage::stableId) { message ->
-          LiveMessageCard(message, foregroundColor)
-        }
-      }
-      state.interactiveLottery?.let { lottery ->
-        LiveInteractiveLotteryCard(
-          lottery = lottery,
-          onJoin = onJoinLottery,
-          foregroundColor = foregroundColor,
-        )
-      }
-      if (state.composer.emojiPanelVisible) {
-        LiveEmojiPanel(
-          state = state,
-          onSelectPack = onSelectEmojiPack,
-          onEmoji = onEmoji,
-          foregroundColor = foregroundColor,
-        )
-      }
-      Box(Modifier.imePadding().navigationBarsPadding()) {
-        LiveComposer(
-          state = state,
-          account = account,
-          onText = onText,
-          onSend = onSend,
-          onToggleEmoji = onToggleEmoji,
-          onLogin = onLogin,
-          foregroundColor = foregroundColor,
-        )
-      }
-    }
-  }
-}
-
-@Composable
-private fun LiveMessageHeader(error: String?) {
-  Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp)) {
-    Text(
-      "直播消息",
-      style = MaterialTheme.typography.titleMedium,
-      fontWeight = FontWeight.Bold,
-    )
-    error?.takeIf(String::isNotBlank)?.let {
-      Text(
-        it,
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.error,
-        maxLines = 2,
-      )
-    }
-  }
-}
-
-@Composable
-private fun LiveInteractiveLotteryCard(
-  lottery: LiveInteractiveLottery,
-  onJoin: () -> Unit,
-  foregroundColor: Color,
-) {
-  var remainingMs by remember(lottery.id, lottery.endAtEpochMs) {
-    mutableLongStateOf((lottery.endAtEpochMs - System.currentTimeMillis()).coerceAtLeast(0L))
-  }
-  LaunchedEffect(lottery.id, lottery.endAtEpochMs, lottery.status) {
-    while (
-      remainingMs > 0L &&
-        lottery.status in setOf(
-          LiveLotteryStatus.ACTIVE,
-          LiveLotteryStatus.JOINING,
-          LiveLotteryStatus.JOINED,
-        )
-    ) {
-      delay(1_000L)
-      remainingMs = (lottery.endAtEpochMs - System.currentTimeMillis()).coerceAtLeast(0L)
-    }
-  }
-  val statusText =
-    when (lottery.status) {
-      LiveLotteryStatus.ACTIVE ->
-        if (remainingMs > 0L) "剩余 ${((remainingMs + 999L) / 1_000L)} 秒" else "等待开奖"
-      LiveLotteryStatus.JOINING -> "正在参与"
-      LiveLotteryStatus.JOINED -> "已参与，等待开奖"
-      LiveLotteryStatus.ENDED -> "已结束"
-      LiveLotteryStatus.AWARDED -> "已开奖"
-      LiveLotteryStatus.INVALID -> "已失效"
-    }
-  Surface(
-    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 5.dp),
-    shape = RoundedCornerShape(16.dp),
-    color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = .34f),
-    contentColor = foregroundColor,
-    border = BorderStroke(1.dp, foregroundColor.copy(alpha = .16f)),
-  ) {
-    Row(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 11.dp, vertical = 9.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(9.dp),
-    ) {
-      if (!lottery.awardImageUrl.isNullOrBlank()) {
-        AsyncImage(
-          model = lottery.awardImageUrl,
-          contentDescription = lottery.awardName,
-          modifier = Modifier.size(42.dp),
-          contentScale = ContentScale.Fit,
-        )
-      }
-      Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(
-          "天选时刻 · ${lottery.awardName} ×${lottery.awardNum}",
-          style = MaterialTheme.typography.labelLarge,
-          fontWeight = FontWeight.SemiBold,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
-        Text(
-          lottery.requireText.ifBlank {
-            lottery.command.takeIf(String::isNotBlank) ?: "发送指定弹幕参与"
-          },
-          style = MaterialTheme.typography.labelSmall,
-          color = foregroundColor.copy(alpha = .82f),
-          maxLines = 2,
-        )
-        Text(
-          lottery.error ?: statusText,
-          style = MaterialTheme.typography.labelSmall,
-          color =
-            if (lottery.error == null) foregroundColor.copy(alpha = .72f)
-            else MaterialTheme.colorScheme.error,
-          maxLines = 2,
-        )
-      }
-      if (lottery.status == LiveLotteryStatus.ACTIVE) {
-        TextButton(
-          onClick = onJoin,
-          enabled = remainingMs > 0L && !lottery.requiresPayment,
-        ) {
-          Text(if (lottery.requiresPayment) "不支持付费参与" else "参与")
-        }
-      }
-    }
-  }
-}
-
-@Composable
-private fun LiveMessageCard(message: LiveChatMessage, foregroundColor: Color) {
-  val pending = message.delivery is LiveMessageDelivery.Pending
-  Surface(
-    modifier = Modifier.fillMaxWidth(),
-    shape = RoundedCornerShape(16.dp),
-    color =
-      if (message.content is LiveChatContent.System)
-        MaterialTheme.colorScheme.secondaryContainer.copy(alpha = .38f)
-      else MaterialTheme.colorScheme.surface.copy(alpha = .22f),
-    contentColor = foregroundColor,
-    border = BorderStroke(1.dp, foregroundColor.copy(alpha = .14f)),
-  ) {
-    if (message.content is LiveChatContent.System) {
-      Text(
-        message.content.text,
-        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-        style = MaterialTheme.typography.bodySmall,
-        color = foregroundColor,
-      )
-    } else {
-      Row(
-        Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.Top,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-      ) {
-        AsyncImage(
-          model = message.faceUrl,
-          contentDescription = message.uname,
-          modifier =
-            Modifier.size(34.dp)
-              .clip(CircleShape)
-              .background(MaterialTheme.colorScheme.surfaceVariant),
-          contentScale = ContentScale.Crop,
-        )
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-          ) {
-            Text(
-              message.uname ?: "用户",
-              modifier = Modifier.weight(1f, fill = false),
-              style = MaterialTheme.typography.labelMedium,
-              fontWeight = FontWeight.SemiBold,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-            )
-            message.fanMedal?.let { FanMedalChip(it) }
-            if (pending) {
-              CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 1.5.dp)
-            }
-          }
-          when (val content = message.content) {
-            is LiveChatContent.Text ->
-              BiliRichText(
-                text = content.text,
-                emotes =
-                  content.emotes.mapValues { (token, url) ->
-                    BiliEmote(text = token, url = url)
-                  },
-                style = MaterialTheme.typography.bodyMedium,
-              )
-            is LiveChatContent.Emoji ->
-              Column {
-                AsyncImage(
-                  model = content.imageUrl,
-                  contentDescription = content.displayName,
-                  modifier = Modifier.size(if (content.isBulge) 76.dp else 44.dp),
-                  contentScale = ContentScale.Fit,
-                )
-                if (content.imageUrl.isNullOrBlank()) {
-                  Text(content.displayName, style = MaterialTheme.typography.bodyMedium)
-                }
-              }
-            is LiveChatContent.System -> Unit
-          }
-        }
-      }
-    }
-  }
-}
-
-@Composable
-private fun FanMedalChip(medal: FanMedalBadge) {
-  val start = liveColor(medal.startColor ?: medal.color, MaterialTheme.colorScheme.primary)
-  val end = liveColor(medal.endColor ?: medal.borderColor ?: medal.color, start)
-  Text(
-    "${medal.name} ${medal.level}",
-    modifier =
-      Modifier.clip(RoundedCornerShape(7.dp))
-        .background(Brush.horizontalGradient(listOf(start, end)))
-        .padding(horizontal = 6.dp, vertical = 2.dp),
-    color = Color.White,
-    style = MaterialTheme.typography.labelSmall,
-    maxLines = 1,
-  )
-}
-
-@Composable
-private fun LiveEmojiPanel(
-  state: LiveRoomUiState,
-  onSelectPack: (String) -> Unit,
-  onEmoji: (LiveEmoji) -> Unit,
-  foregroundColor: Color,
-) {
-  val chipColors = liveAdaptiveFilterChipColors(foregroundColor)
-  Surface(
-    modifier = Modifier.fillMaxWidth().heightIn(min = 160.dp, max = 236.dp),
-    color = MaterialTheme.colorScheme.surface.copy(alpha = .28f),
-    contentColor = foregroundColor,
-    tonalElevation = 4.dp,
-  ) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 7.dp)) {
-      LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-        items(state.emojiPacks, key = LiveEmojiPack::id) { pack ->
-          FilterChip(
-            selected = state.composer.selectedEmojiPackId == pack.id,
-            onClick = { onSelectPack(pack.id) },
-            colors = chipColors,
-            label = {
-              Text(
-                when (pack.kind) {
-                  LiveEmojiKind.ROOM_EXCLUSIVE -> "${pack.title ?: "专属"} · 本房"
-                  else -> pack.title ?: "表情"
-                }
-              )
-            },
-          )
-        }
-      }
-      val selected =
-        state.emojiPacks.firstOrNull { it.id == state.composer.selectedEmojiPackId }
-          ?: state.emojiPacks.firstOrNull()
-      when {
-        state.emojiLoading ->
-          Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
-          }
-        state.emojiError != null ->
-          Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-            Text(state.emojiError, color = MaterialTheme.colorScheme.error)
-          }
-        selected == null ->
-          Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-            Text("暂无可用表情")
-          }
-        else ->
-          LazyVerticalGrid(
-            columns = GridCells.Adaptive(48.dp),
-            modifier = Modifier.fillMaxWidth().weight(1f),
-            contentPadding = PaddingValues(vertical = 5.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-          ) {
-            gridItems(selected.emojis, key = { it.fileId ?: it.sendToken }) { emoji ->
-              Column(
-                modifier =
-                  Modifier.clip(RoundedCornerShape(10.dp))
-                    .clickable(enabled = emoji.available) { onEmoji(emoji) }
-                    .padding(4.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-              ) {
-                AsyncImage(
-                  model = emoji.imageUrl,
-                  contentDescription = emoji.displayName,
-                  modifier = Modifier.size(38.dp),
-                  contentScale = ContentScale.Fit,
-                  alpha = if (emoji.available) 1f else .35f,
-                )
-                Text(
-                  emoji.displayName,
-                  style = MaterialTheme.typography.labelSmall,
-                  maxLines = 1,
-                  overflow = TextOverflow.Ellipsis,
+              items(state.recommendations, key = LiveSearchRoom::stableId) { room ->
+                val coverUrl = room.keyframeUrl ?: room.coverUrl.orEmpty()
+                RecommendationCard(
+                  item =
+                    FeedItem(
+                      id = room.stableId,
+                      title = room.title,
+                      videoUrl = "",
+                      coverUrl = coverUrl,
+                      uploader = room.uname,
+                      playCount = null,
+                      duration = null,
+                    ),
+                  coverVisible = room.stableId != hiddenCoverItemId,
+                  onCoverBoundsChanged = { bounds -> onRoomBoundsChanged(room, bounds) },
+                  onClick = { bounds -> onRoom(room, bounds) },
+                  onLongClick = {},
+                  cardWidth = cardWidth,
+                  compactHorizontal = compactHorizontal,
+                  compactHeight = compactHeight,
                 )
               }
             }
-          }
-      }
-    }
-  }
-}
-
-@Composable
-private fun LiveComposer(
-  state: LiveRoomUiState,
-  account: UserInfo,
-  onText: (String, Int) -> Unit,
-  onSend: () -> Unit,
-  onToggleEmoji: () -> Unit,
-  onLogin: () -> Unit,
-  foregroundColor: Color,
-) {
-  val editorState = rememberTextFieldState()
-  val focusRequester = remember { FocusRequester() }
-  val emoteRegistry = remember(state.entryRoomId) { CommentEmoteMarkerRegistry() }
-  val inputEmotes =
-    remember(state.emojiPacks) {
-      state.emojiPacks
-        .flatMap(LiveEmojiPack::emojis)
-        .filter { !it.directSend && it.inputText.isNotBlank() && it.imageUrl.isNotBlank() }
-        .distinctBy(LiveEmoji::inputText)
-        .map { BiliEmote(text = it.inputText, url = it.imageUrl) }
-    }
-  val markerSnapshot = remember(inputEmotes) { emoteRegistry.snapshot(inputEmotes) }
-  val latestComposer by rememberUpdatedState(state.composer)
-  val latestOnText by rememberUpdatedState(onText)
-  LaunchedEffect(state.composer.text, state.composer.selectionStart, markerSnapshot) {
-    val encoded = markerSnapshot.encode(state.composer.text)
-    val selection =
-      markerSnapshot.encodedOffset(state.composer.text, state.composer.selectionStart)
-        .coerceIn(0, encoded.length)
-    if (
-      editorState.text.toString() != encoded ||
-        editorState.selection.start != selection ||
-        editorState.selection.end != selection
-    ) {
-      editorState.edit {
-        replace(0, length, encoded)
-        this.selection = TextRange(selection)
-      }
-    }
-  }
-  LaunchedEffect(editorState, markerSnapshot) {
-    snapshotFlow { editorState.text.toString() to editorState.selection.start }
-      .collectLatest { (encoded, selection) ->
-        val decoded = markerSnapshot.decode(encoded)
-        val decodedSelection = markerSnapshot.decodedOffset(encoded, selection)
-        if (
-          decoded != latestComposer.text ||
-            decodedSelection != latestComposer.selectionStart
-        ) {
-          latestOnText(decoded, decodedSelection)
-        }
-      }
-  }
-  Surface(
-    modifier = Modifier.fillMaxWidth(),
-    color = MaterialTheme.colorScheme.surface.copy(alpha = .28f),
-    contentColor = foregroundColor,
-    tonalElevation = 5.dp,
-  ) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 9.dp, vertical = 7.dp)) {
-      state.composer.error?.let {
-        Text(
-          it,
-          modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
-          style = MaterialTheme.typography.labelSmall,
-          color = MaterialTheme.colorScheme.error,
-          maxLines = 2,
-        )
-      }
-      Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
-      ) {
-        state.activeMedal?.let { FanMedalChip(it) }
-        IconButton(onClick = onToggleEmoji) {
-          Text("☺", style = MaterialTheme.typography.titleLarge)
-        }
-        Surface(
-          modifier = Modifier.weight(1f),
-          shape = RoundedCornerShape(16.dp),
-          color = MaterialTheme.colorScheme.surface.copy(alpha = .34f),
-          border = BorderStroke(1.dp, foregroundColor.copy(alpha = .18f)),
-        ) {
-          CommentTextEditor(
-            state = editorState,
-            placeholder = if (account.isLogin) "发个弹幕呗~" else "登录后发送弹幕",
-            emoteMarkers = markerSnapshot.markerToEmote,
-            focusRequester = focusRequester,
-            enabled = account.isLogin && !state.composer.sending,
-            contentColor = foregroundColor,
-            placeholderColor = foregroundColor.copy(alpha = .68f),
-            maxLines = 1,
-            modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp, max = 54.dp),
-          )
-        }
-        FilledIconButton(
-          onClick = if (account.isLogin) onSend else onLogin,
-          enabled =
-            !state.composer.sending && (!account.isLogin || state.composer.text.isNotBlank()),
-        ) {
-          if (state.composer.sending) {
-            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-          } else {
-            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "发送")
-          }
         }
       }
     }
   }
 }
-
-@Composable
-private fun LiveRoomInfoDialog(
-  state: LiveRoomUiState,
-  onDismiss: () -> Unit,
-) {
-  val room = state.roomInfo
-  val anchor = state.anchorInfo
-  Dialog(
-    onDismissRequest = onDismiss,
-    properties = DialogProperties(usePlatformDefaultWidth = false),
-  ) {
-    Surface(
-      modifier = Modifier.fillMaxWidth(.72f).heightIn(max = 580.dp),
-      shape = RoundedCornerShape(28.dp),
-      color = MaterialTheme.colorScheme.surface,
-      tonalElevation = 8.dp,
-      shadowElevation = 0.dp,
-    ) {
-      Column(
-        Modifier.padding(horizontal = 26.dp, vertical = 22.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-      ) {
-        Text(
-          room?.title ?: "直播间",
-          style = MaterialTheme.typography.headlineSmall,
-          fontWeight = FontWeight.SemiBold,
-        )
-        Row(verticalAlignment = Alignment.CenterVertically) {
-          AsyncImage(
-            model = anchor?.faceUrl,
-            contentDescription = anchor?.name,
-            modifier =
-              Modifier.size(40.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.surfaceVariant),
-            contentScale = ContentScale.Crop,
-          )
-          Text(
-            anchor?.name ?: "主播",
-            modifier = Modifier.padding(start = 10.dp),
-            style = MaterialTheme.typography.titleMedium,
-          )
-        }
-        Text(
-          listOfNotNull(room?.parentAreaName, room?.areaName, room?.roomId?.let { "房间号 $it" })
-            .joinToString("  ·  "),
-          style = MaterialTheme.typography.bodyMedium,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(
-          room?.description?.ifBlank { "这个直播间暂时没有填写简介。" } ?: "这个直播间暂时没有填写简介。",
-          modifier = Modifier.weight(1f, fill = false),
-          style = MaterialTheme.typography.bodyLarge,
-        )
-        TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
-          Text("关闭")
-        }
-      }
-    }
-  }
-}
-
-private fun liveColor(value: Long?, fallback: Color): Color =
-  value?.takeIf { it > 0L }?.let { Color((0xff000000L or (it and 0x00ffffffL)).toInt()) }
-    ?: fallback
-
-@Composable
-private fun liveAdaptiveFilterChipColors(foregroundColor: Color) =
-  FilterChipDefaults.filterChipColors(
-    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = .18f),
-    labelColor = foregroundColor,
-    iconColor = foregroundColor,
-    selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = .72f),
-    selectedLabelColor = MaterialTheme.colorScheme.onPrimary,
-    selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimary,
-    selectedTrailingIconColor = MaterialTheme.colorScheme.onPrimary,
-  )
-
-private fun guardLevelName(level: Int): String =
-  when (level) {
-    1 -> "总督"
-    2 -> "提督"
-    3 -> "舰长"
-    else -> "大航海"
-  }
-
-private fun Player?.isLiveBuffering(): Boolean =
-  this == null || playbackState == Player.STATE_IDLE || playbackState == Player.STATE_BUFFERING

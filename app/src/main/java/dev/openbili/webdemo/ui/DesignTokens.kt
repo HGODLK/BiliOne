@@ -5,7 +5,7 @@ import androidx.compose.material3.Shapes
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 
-/** Shared visual constants for the Compose shell. */
+/** Compose 外壳的共享视觉常量。 */
 object AppColors {
   val LightPrimary = Color(0xFF1A7B8B)
   val LightOnPrimary = Color(0xFFFFFFFF)
@@ -90,7 +90,7 @@ object LayoutTokens {
 
 internal const val PLAYER_CORNER_RADIUS_DP = 20f
 
-/** Shapes shared by video cards, cover transitions, and the embedded player. */
+/** 视频卡片、封面转场和内嵌播放器共享的形状。 */
 object VideoShapeTokens {
   val CornerRadius = PLAYER_CORNER_RADIUS_DP.dp
   val Card = RoundedCornerShape(CornerRadius)
@@ -118,8 +118,11 @@ object GlassTokens {
   val MediaLabelContent = Color(0xFFFFFFFF)
 }
 
-/** Alpha levels for video-page surfaces drawn above a user-selected page background. */
+/** 绘制在用户所选页面背景之上的视频页表面的透明度级别。 */
 object VideoPageSurfaceTokens {
+  /** 当前视频封面作为静态模糊背景时额外降低的亮度。 */
+  const val BlurredCoverBackgroundDimAlpha = 0.10f
+
   const val LightTopScrimAlpha = 0.62f
   const val DarkTopScrimAlpha = 0.58f
   const val LightAmbientScrimAlpha = 0.10f
@@ -148,6 +151,11 @@ object HomeGlassTokens {
   const val DarkControlAlpha = 0.48f
   const val LightBorderAlpha = 0.58f
   const val DarkBorderAlpha = 0.68f
+}
+
+/** 音乐页背景保持可辨认，同时为标题、频谱与控制区提供稳定对比度。 */
+object MusicPageVisualTokens {
+  const val BackgroundScrimAlpha = 0.05f
 }
 
 object MotionTokens {

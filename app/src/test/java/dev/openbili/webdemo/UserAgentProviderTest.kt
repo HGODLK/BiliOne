@@ -5,8 +5,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * JVM tests for the desktop-UA construction rules, using a fixed known Chrome version so no Android
- * context is needed.
+ * 桌面 UA 构造规则的 JVM 测试，使用固定的已知 Chrome 版本，
+ * 因此不需要 Android 上下文。
  */
 class UserAgentProviderTest {
 
@@ -58,12 +58,11 @@ class UserAgentProviderTest {
     assertTrue("UA should contain Safari/", ua.contains("Safari/"))
   }
 
-  // ── helpers ──────────────────────────────────────────────────────────────
+  // ── 辅助函数 ──────────────────────────────────────────────────────────────
 
   companion object {
     /**
-     * Mirror of the desktop-UA template used by UserAgentProvider, but callable without an Android
-     * context.
+     * UserAgentProvider 所用桌面 UA 模板的镜像，但无需 Android 上下文即可调用。
      */
     fun buildDesktopUa(chromeVersion: String): String =
       "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko)" +

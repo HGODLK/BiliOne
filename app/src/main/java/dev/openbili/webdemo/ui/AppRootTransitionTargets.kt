@@ -34,9 +34,8 @@ internal fun BiliOneStartupAnimation(
   modifier: Modifier = Modifier,
 ) {
   if (customImageUri.isNotBlank()) {
-    // A user-selected mask owns the complete startup interval. Do not mount the default logo
-    // behind it while Coil opens the persisted URI, and do not inherit the logo's scale/fade-in.
-    // The root startup layer still performs the single full-screen fade-out at the end.
+    // 用户选择的蒙版拥有完整的启动区间。Coil 打开持久化 URI 时不要在其后挂载默认
+    // logo，也不要继承 logo 的缩放/淡入。根启动层仍会在最后执行那一次整屏淡出。
     AsyncImage(
       model = customImageUri,
       contentDescription = null,
@@ -45,8 +44,8 @@ internal fun BiliOneStartupAnimation(
     )
     return
   }
-  // With no custom image, reuse the exact Android adaptive-icon foreground so the first visual
-  // impression and launcher identity cannot drift apart.
+  // 没有自定义图片时，复用完全相同的 Android 自适应图标前景，让第一视觉印象
+  // 与启动器身份不会漂移。
   val logoAlpha = remember(reduceMotion) { Animatable(if (reduceMotion) 1f else 0f) }
   val logoScale = remember(reduceMotion) { Animatable(if (reduceMotion) 1f else .9f) }
   LaunchedEffect(reduceMotion) {
@@ -72,9 +71,8 @@ internal fun BiliOneStartupAnimation(
 }
 
 /**
- * Measures only the poster destination used by a portrait-to-bangumi shared transition. Keeping
- * this layout independent from VideoScreen prevents the player, comments, and page effects from
- * being composed while the poster is in flight.
+ * 只测量竖屏转番剧共享转场所使用的海报目的地。让该布局独立于 VideoScreen，
+ * 避免海报飞行期间播放器、评论和页面效果被组合。
  */
 @Composable
 internal fun BangumiPosterTransitionTarget(onPosterBoundsChanged: (Rect) -> Unit) {
@@ -109,7 +107,7 @@ internal fun BangumiPosterTransitionTarget(onPosterBoundsChanged: (Rect) -> Unit
   }
 }
 
-/** Lightweight 16:9 destination used while a bangumi-home player/card flight owns the frame. */
+/** 番剧首页播放器/卡片飞行占据画面时使用的轻量 16:9 目的地。 */
 @Composable
 internal fun BangumiPlayerTransitionTarget(onPlayerBoundsChanged: (Rect) -> Unit) {
   BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -135,8 +133,8 @@ internal fun BangumiPlayerTransitionTarget(onPlayerBoundsChanged: (Rect) -> Unit
         fontScale = density.fontScale,
       )
     Box(
-      // Mirror VideoContent exactly: 76 dp BangumiHeader, then the content's 16 dp start padding.
-      // The real Surface uses playerWidth, not the complete primary pane width.
+      // 精确镜像 VideoContent：76 dp 的 BangumiHeader，然后是内容 16 dp 的起始内边距。
+      // 真实 Surface 使用 playerWidth，而不是完整的主窗格宽度。
       Modifier.offset(x = 16.dp, y = 76.dp)
         .size(width = pageLayout.playerWidth, height = pageLayout.playerHeight)
         .onGloballyPositioned { onPlayerBoundsChanged(it.boundsInRoot()) }

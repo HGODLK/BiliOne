@@ -12,7 +12,7 @@ import org.robolectric.RobolectricTestRunner
 class SpaceCollectionsParsingTest {
   @Test
   fun requestUsesAcceptedPageSize() {
-    val url = BiliApi.spaceCollectionsUrl(17679937L)
+    val url = BiliSpaceApi.spaceCollectionsUrl(17679937L)
 
     assertTrue(url.contains("page_size=20"))
     assertFalse(url.contains("page_size=30"))
@@ -52,7 +52,7 @@ class SpaceCollectionsParsingTest {
           .trimIndent()
       )
 
-    val cards = BiliApi.parseSpaceCollections(response)
+    val cards = BiliSpaceApi.parseSpaceCollections(response)
 
     assertEquals(listOf("seasons_list:8454680", "series_list:9527"), cards.map { it.id })
     assertEquals(listOf("合集·回家吃饭系列", "系列·测试系列"), cards.map { it.title })
@@ -86,7 +86,7 @@ class SpaceCollectionsParsingTest {
           .trimIndent()
       )
 
-    val card = BiliApi.parseSpaceCollections(response).single()
+    val card = BiliSpaceApi.parseSpaceCollections(response).single()
 
     assertEquals("series_list:42", card.id)
     assertEquals("旧结构系列", card.title)
@@ -110,8 +110,8 @@ class SpaceCollectionsParsingTest {
         collectionType = SpaceCollectionType.SERIES,
       )
 
-    val seasonUrl = BiliApi.spaceCollectionVideosUrl(17679937L, season, page = 2)
-    val seriesUrl = BiliApi.spaceCollectionVideosUrl(546195L, series, page = 3)
+    val seasonUrl = BiliSpaceApi.spaceCollectionVideosUrl(17679937L, season, page = 2)
+    val seriesUrl = BiliSpaceApi.spaceCollectionVideosUrl(546195L, series, page = 3)
 
     assertTrue(seasonUrl.contains("/seasons_archives_list"))
     assertTrue(seasonUrl.contains("season_id=8454680"))
@@ -147,7 +147,7 @@ class SpaceCollectionsParsingTest {
       )
 
     val page =
-      BiliApi.parseSpaceCollectionVideos(response, requestedPage = 1, requestedPageSize = 30)
+      BiliSpaceApi.parseSpaceCollectionVideos(response, requestedPage = 1, requestedPageSize = 30)
 
     assertEquals(1, page.cards.size)
     assertEquals("BV1DETAIL123", page.cards.single().bvid)
@@ -174,7 +174,7 @@ class SpaceCollectionsParsingTest {
       )
 
     val page =
-      BiliApi.parseSpaceCollectionVideos(response, requestedPage = 2, requestedPageSize = 30)
+      BiliSpaceApi.parseSpaceCollectionVideos(response, requestedPage = 2, requestedPageSize = 30)
 
     assertEquals(31, page.total)
     assertFalse(page.hasMore)

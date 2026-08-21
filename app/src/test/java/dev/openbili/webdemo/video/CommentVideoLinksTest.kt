@@ -63,4 +63,77 @@ class CommentVideoLinksTest {
       parsed.textWithMappedLinksRemoved(emptySet(), setOf(51562647L, 123456L)),
     )
   }
+
+  @Test
+  fun parsesBareBvidAndKeepsSourceOrder() {
+    val parsed =
+      parseCommentVideoLinks(
+        "视频 BV1ERTR6zECb，专栏 https://www.bilibili.com/read/cv51562647，再来 BV1Q5411W7Bf"
+      )
+
+    assertEquals(listOf("BV1ERTR6zECb", "BV1Q5411W7Bf"), parsed.links.map { it.bvid })
+    assertEquals(
+      listOf("BV1ERTR6zECb", "51562647", "BV1Q5411W7Bf"),
+      parsed.orderedReferences.map { it.sourceKey },
+    )
+  }
+
+  @Test
+  fun orderedMediaReferencesKeepOriginalTextRanges() {
+    val content =
+      "前言\nhttps://b23.tv/BV1ERTR6zECb\n中间\nhttps://www.bilibili.com/read/cv51562647\n结尾"
+    val parsed = parseCommentVideoLinks(content)
+    val references = parsed.orderedReferences
+
+    assertEquals(2, references.size)
+    assertEquals(
+      "https://b23.tv/BV1ERTR6zECb",
+      content.substring(references[0].startIndex, references[0].endIndex),
+    )
+    assertEquals(
+      "https://www.bilibili.com/read/cv51562647",
+      content.substring(references[1].startIndex, references[1].endIndex),
+    )
+    assertTrue(references[0].endIndex < references[1].startIndex)
+  }
+
+  @Test
+  fun parsesCommentTimestampsLikeBilibiliWeb() {
+    val timestamps = parseCommentTimestamps("37:27phony 1:22:03桃键 1：09：32 beyound")
+
+    assertEquals(listOf(2247L, 4923L, 4172L), timestamps.map { it.timeSeconds })
+  }
+
+  @Test
+  fun parsesTimestampWithVideoPartPrefix() {
+    val timestamp = parseCommentTimestamps("2#01:05").single()
+
+    assertEquals(65L, timestamp.timeSeconds)
+    assertEquals(2, timestamp.videoPart)
+  }
+
+  @Test
+  fun copiesCanonicalVideoLinkForRecognizedVideo() {
+    assertEquals(
+      "https://www.bilibili.com/video/BV1ERTR6zECb",
+      commentCopyPayload("推荐这个 https://b23.tv/BV1ERTR6zECb"),
+    )
+  }
+
+  @Test
+  fun copiesOriginalArticleOrWebLink() {
+    assertEquals(
+      "https://www.bilibili.com/opus/123456?from=comment",
+      commentCopyPayload("专栏 https://www.bilibili.com/opus/123456?from=comment"),
+    )
+    assertEquals(
+      "https://example.com/post?id=1",
+      commentCopyPayload("网页 https://example.com/post?id=1"),
+    )
+  }
+
+  @Test
+  fun copiesPlainCommentContentWhenNoLinkExists() {
+    assertEquals("这是一条评论", commentCopyPayload("这是一条评论"))
+  }
 }

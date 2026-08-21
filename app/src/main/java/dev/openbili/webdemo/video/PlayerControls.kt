@@ -1,5 +1,18 @@
 package dev.openbili.webdemo.video
 
+/**
+ * 播放器控制层 UI 组件集合。
+ *
+ * 本文件负责播放器叠层上的各类交互控件：
+ *  - [DanmakuComposer]：弹幕发送输入框，含颜色、滚动模式、字号选择；
+ *  - [ModernPlayerControls]：底部现代风控制条（播放/暂停、进度条、倍速/画质/字幕/弹幕菜单、全屏）；
+ *  - 字幕与弹幕菜单内的滑杆 [ControlMenuSlider]、字幕位置选项 [SubtitlePositionOption]；
+ *  - 中心播放/暂停按钮 [PlayerCenterPlayPauseButton]，以及时长/倍速/弹幕密度的格式化工具。
+ *
+ * 这些组件不持有播放器状态，仅通过回调把用户操作上抛给调用方处理。
+ */
+
+import android.view.KeyEvent as AndroidKeyEvent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -46,10 +59,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -60,8 +81,16 @@ import dev.openbili.webdemo.api.PlayUrlData
 import dev.openbili.webdemo.api.PremiumAudioMode
 import dev.openbili.webdemo.settings.SubtitleHorizontalPosition
 import dev.openbili.webdemo.settings.SubtitleStyle
+import dev.openbili.webdemo.ui.controlFocusOutline
 import kotlin.math.roundToInt
 
+/**
+ * 弹幕发送输入面板。
+ *
+ * 收集用户输入的弹幕文案、颜色（含 VIP 渐变色）、滚动模式与字号，并把发送请求上抛给
+ * [onSend]；颜色变更会即时通过 [onColorChanged] 回传。面板底部根据输入法高度自动上移，
+ * 避免被软键盘遮挡。
+ */
 @Composable
 internal fun DanmakuComposer(
   onSend: (String, Int, Int, Int, Int) -> Unit,
@@ -225,6 +254,7 @@ internal fun DanmakuComposer(
   }
 }
 
+/** 弹幕模式/字号选项按钮：选中态使用主题色高亮。 */
 @Composable
 private fun DanmakuComposerOption(text: String, selected: Boolean, onClick: () -> Unit) {
   TextButton(onClick = onClick) {
@@ -232,6 +262,7 @@ private fun DanmakuComposerOption(text: String, selected: Boolean, onClick: () -
   }
 }
 
+/** 弹幕发送面板提供的普通颜色列表（ARGB 整型，供 B 站弹幕协议使用）。 */
 private val DANMAKU_COLORS =
   listOf(
     0xFE0302,
@@ -250,6 +281,7 @@ private val DANMAKU_COLORS =
     0xFFFFFF,
   )
 
+/** VIP 弹幕渐变色中的各段颜色，按水平渐变顺序排列。 */
 private val VIP_DANMAKU_COLORS =
   listOf(
     Color(0xFFFF5A8F),
@@ -261,16 +293,90 @@ private val VIP_DANMAKU_COLORS =
     Color(0xFFC792EA),
   )
 
+/** 字幕字体可选颜色列表（ARGB 整型）。 */
 private val SUBTITLE_TEXT_COLORS =
   listOf(0xFFFFFF, 0xFFF176, 0x80DEEA, 0xA5D6A7, 0xF48FB1, 0xFFB74D, 0x212121)
 
+/** 字幕水平对齐选项按钮：控制器模式下额外绘制焦点描边。 */
 @Composable
-private fun SubtitlePositionOption(text: String, selected: Boolean, onClick: () -> Unit) {
-  TextButton(onClick = onClick) {
+private fun SubtitlePositionOption(
+  text: String,
+  selected: Boolean,
+  controlEnabled: Boolean,
+  onClick: () -> Unit,
+) {
+  TextButton(
+    onClick = onClick,
+    modifier =
+      Modifier.controlFocusOutline(
+        RoundedCornerShape(10.dp),
+        MaterialTheme.colorScheme.primary,
+        width = 3.dp,
+        enabled = controlEnabled,
+      ),
+  ) {
     Text(text, color = if (selected) MaterialTheme.colorScheme.primary else Color.Unspecified)
   }
 }
 
+/**
+ * 菜单内使用的滑杆。
+ *
+ * 在控制器模式下拦截方向键上下事件，把焦点移出滑杆（让用户在菜单项间上下移动），
+ * 并绘制焦点描边；这样滑杆本身不吞掉方向键，遥控器仍可遍历菜单。
+ */
+@Composable
+internal fun ControlMenuSlider(
+  value: Float,
+  onValueChange: (Float) -> Unit,
+  valueRange: ClosedFloatingPointRange<Float>,
+  steps: Int,
+  controlEnabled: Boolean,
+  modifier: Modifier = Modifier,
+) {
+  val focusManager = LocalFocusManager.current
+  Slider(
+    value = value,
+    onValueChange = onValueChange,
+    valueRange = valueRange,
+    steps = steps,
+    modifier =
+      modifier.onPreviewKeyEvent { event ->
+          if (!controlEnabled || event.type != KeyEventType.KeyDown) {
+            return@onPreviewKeyEvent false
+          }
+          when (event.nativeKeyEvent.keyCode) {
+            AndroidKeyEvent.KEYCODE_DPAD_UP -> {
+              if (event.nativeKeyEvent.repeatCount == 0) {
+                focusManager.moveFocus(FocusDirection.Up)
+              }
+              true
+            }
+            AndroidKeyEvent.KEYCODE_DPAD_DOWN -> {
+              if (event.nativeKeyEvent.repeatCount == 0) {
+                focusManager.moveFocus(FocusDirection.Down)
+              }
+              true
+            }
+            else -> false
+          }
+        }
+        .controlFocusOutline(
+          RoundedCornerShape(12.dp),
+          MaterialTheme.colorScheme.primary,
+          width = 3.dp,
+          enabled = controlEnabled,
+        ),
+  )
+}
+
+/**
+ * 现代风底部播放器控制条。
+ *
+ * 叠加在播放器画面上，含进度条、播放/暂停、时间、臻彩音质、选集、倍速/画质/字幕/弹幕
+ * 菜单与全屏按钮。全部操作通过回调上抛；控制器模式（遥控器/键盘）下会按 [controlRowKeys]
+ * 的顺序把控件串成一条可左右遍历的焦点链，方向键上下在进度条与控制行之间切换。
+ */
 @Composable
 internal fun ModernPlayerControls(
   playData: PlayUrlData,
@@ -318,21 +424,74 @@ internal fun ModernPlayerControls(
   fullscreenTitle: String? = null,
   onlineViewerText: String? = null,
   onOpenSelection: (() -> Unit)? = null,
+  controlEnabled: Boolean = false,
+  controlInitialFocusRequester: FocusRequester? = null,
 ) {
+  // ── 局部 UI 状态：菜单开关、滑杆预览位置、控制器焦点请求器 ─────────────────
   val displayedPositionMs = currentPositionMs()
   var speedMenu by remember { mutableStateOf(false) }
   var qualityMenu by remember { mutableStateOf(false) }
   var subtitleMenu by remember { mutableStateOf(false) }
   var danmakuMenu by remember { mutableStateOf(false) }
   var sliderPreviewMs by remember { mutableStateOf<Long?>(null) }
+  val controlSeekFocusRequester = remember { FocusRequester() }
+  val controlFallbackPlayFocusRequester = remember { FocusRequester() }
+  val controlPlayFocusRequester =
+    controlInitialFocusRequester ?: controlFallbackPlayFocusRequester
+  // ── 当前可用的臻彩音质模式，用于控制行按键序列与音质按钮 ───────────────────
+  val premiumModes =
+    PremiumAudioMode.entries.filter { premiumAudioVisible && playData.supportsPremiumAudio(it) }
+  // ── 控制器焦点链的按键序列：按显示顺序登记每个可聚焦控件 ───────────────────
+  val controlRowKeys =
+    buildList {
+      add("play")
+      premiumModes.forEach { add("audio_${it.name}") }
+      if (isFullscreen && onOpenSelection != null) add("selection")
+      add("speed")
+      add("quality")
+      if (subtitleState.tracks.isNotEmpty()) add("subtitle")
+      add("danmaku")
+      // 弹幕发送器保持纯触控：控制器焦点链有意跳过它。
+      add("fullscreen")
+    }
+  // 为每个控制行按键准备 FocusRequester，"play" 复用外部传入的初始焦点请求器。
+  val controlRowFocusRequesters =
+    remember(controlRowKeys, controlPlayFocusRequester) {
+      controlRowKeys.associateWith { key ->
+        if (key == "play") controlPlayFocusRequester else FocusRequester()
+      }
+    }
+  // ── 控制器模式下的行内左右导航：把相邻控件串成一条焦点链，上下则切到进度条 ──
+  fun Modifier.controlRowNavigation(key: String): Modifier {
+    if (!controlEnabled) return this
+    val index = controlRowKeys.indexOf(key)
+    val requester = controlRowFocusRequesters.getValue(key)
+    return focusRequester(requester).focusProperties {
+      left =
+        if (index > 0) controlRowFocusRequesters.getValue(controlRowKeys[index - 1])
+        else FocusRequester.Cancel
+      right =
+        if (index < controlRowKeys.lastIndex) {
+          controlRowFocusRequesters.getValue(controlRowKeys[index + 1])
+        } else {
+          FocusRequester.Cancel
+        }
+      up = controlSeekFocusRequester
+      down = FocusRequester.Cancel
+    }
+  }
+  // ── 菜单可见性上报：任一菜单展开即通知调用方暂停自动隐藏控制层 ─────────────
   LaunchedEffect(speedMenu, qualityMenu, subtitleMenu, danmakuMenu) {
     onMenuVisibilityChanged(speedMenu || qualityMenu || subtitleMenu || danmakuMenu)
   }
   LaunchedEffect(subtitleState.mediaId, subtitleState.tracks.isNotEmpty()) {
     if (subtitleState.tracks.isEmpty()) subtitleMenu = false
   }
+  // 组件销毁时复位菜单可见性，避免残留"菜单展开"状态影响自动隐藏逻辑。
   DisposableEffect(Unit) { onDispose { onMenuVisibilityChanged(false) } }
+  // ── 播放器控制叠层根容器 ─────────────────────────────────────────────────
   Box(modifier) {
+    // ── 全屏标题与在线人数（仅全屏显示） ─────────────────────────────────────
     if (isFullscreen && !fullscreenTitle.isNullOrBlank()) {
       Text(
         text = fullscreenTitle,
@@ -355,6 +514,7 @@ internal fun ModernPlayerControls(
         maxLines = 1,
       )
     }
+    // ── 中心播放/暂停按钮：暂停时保留在自动隐藏控制层之外 ───────────────────
     if (showCenterAction) {
       PlayerCenterPlayPauseButton(
         isPlaying = isPlaying,
@@ -362,6 +522,7 @@ internal fun ModernPlayerControls(
         modifier = Modifier.align(Alignment.Center),
       )
     }
+    // ── 底部控制面板：上方渐变遮罩，内部为进度条 + 控制行 ────────────────────
     Column(
       modifier =
         Modifier.align(Alignment.BottomCenter)
@@ -386,12 +547,26 @@ internal fun ModernPlayerControls(
         },
         onScrubStateChanged = onProgressScrubChanged,
         modifier = Modifier.fillMaxWidth(),
+        controlEnabled = controlEnabled,
+        controlFocusRequester = controlSeekFocusRequester,
+        controlDownFocusRequester = controlPlayFocusRequester,
       )
       Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
       ) {
-        IconButton(onClick = onPlayPause, modifier = Modifier.size(38.dp)) {
+        IconButton(
+          onClick = onPlayPause,
+          modifier =
+            Modifier.size(38.dp)
+              .controlRowNavigation("play")
+              .controlFocusOutline(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.primary,
+                width = 2.dp,
+                enabled = controlEnabled,
+              ),
+        ) {
           if (isPlaying) {
             Text("Ⅱ", color = Color.White, style = MaterialTheme.typography.titleMedium)
           } else {
@@ -414,7 +589,17 @@ internal fun ModernPlayerControls(
           Spacer(Modifier.width(10.dp))
           PremiumAudioMode.entries.forEach { mode ->
             if (playData.supportsPremiumAudio(mode)) {
-              TextButton(onClick = { onSwitchPremiumAudio(mode) }) {
+              TextButton(
+                onClick = { onSwitchPremiumAudio(mode) },
+                modifier =
+                  Modifier.controlRowNavigation("audio_${mode.name}")
+                    .controlFocusOutline(
+                      RoundedCornerShape(10.dp),
+                      MaterialTheme.colorScheme.primary,
+                      width = 3.dp,
+                      enabled = controlEnabled,
+                    ),
+              ) {
                 Text(
                   mode.label,
                   color =
@@ -428,16 +613,45 @@ internal fun ModernPlayerControls(
         }
         Spacer(Modifier.weight(1f))
         if (isFullscreen && onOpenSelection != null) {
-          TextButton(onClick = onOpenSelection) { Text("选集", color = Color.White) }
+          TextButton(
+            onClick = onOpenSelection,
+            modifier =
+              Modifier.controlRowNavigation("selection")
+                .controlFocusOutline(
+                  RoundedCornerShape(10.dp),
+                  MaterialTheme.colorScheme.primary,
+                  width = 3.dp,
+                  enabled = controlEnabled,
+                ),
+          ) {
+            Text("选集", color = Color.White)
+          }
         }
         Box {
-          TextButton(onClick = { speedMenu = true }) {
+          TextButton(
+            onClick = { speedMenu = true },
+            modifier =
+              Modifier.controlRowNavigation("speed")
+                .controlFocusOutline(
+                  RoundedCornerShape(10.dp),
+                  MaterialTheme.colorScheme.primary,
+                  width = 3.dp,
+                  enabled = controlEnabled,
+                ),
+          ) {
             Text(formatPlaybackSpeed(playbackSpeed), color = Color.White)
           }
           DropdownMenu(expanded = speedMenu, onDismissRequest = { speedMenu = false }) {
             PLAYER_SPEED_OPTIONS.forEach { speed ->
               DropdownMenuItem(
                 text = { Text(formatPlaybackSpeed(speed)) },
+                modifier =
+                  Modifier.controlFocusOutline(
+                    RoundedCornerShape(8.dp),
+                    MaterialTheme.colorScheme.primary,
+                    width = 3.dp,
+                    enabled = controlEnabled,
+                  ),
                 onClick = {
                   speedMenu = false
                   onPlaybackSpeedChange(speed)
@@ -447,7 +661,17 @@ internal fun ModernPlayerControls(
           }
         }
         Box {
-          TextButton(onClick = { qualityMenu = true }) {
+          TextButton(
+            onClick = { qualityMenu = true },
+            modifier =
+              Modifier.controlRowNavigation("quality")
+                .controlFocusOutline(
+                  RoundedCornerShape(10.dp),
+                  MaterialTheme.colorScheme.primary,
+                  width = 3.dp,
+                  enabled = controlEnabled,
+                ),
+          ) {
             Text(
               playData.streams.getOrNull(playData.currentStreamIndex)?.quality ?: "画质",
               color = Color.White,
@@ -457,6 +681,13 @@ internal fun ModernPlayerControls(
             playData.streams.forEachIndexed { index, stream ->
               DropdownMenuItem(
                 text = { Text(stream.quality) },
+                modifier =
+                  Modifier.controlFocusOutline(
+                    RoundedCornerShape(8.dp),
+                    MaterialTheme.colorScheme.primary,
+                    width = 3.dp,
+                    enabled = controlEnabled,
+                  ),
                 onClick = {
                   qualityMenu = false
                   onSwitchQuality(index)
@@ -467,7 +698,17 @@ internal fun ModernPlayerControls(
         }
         if (subtitleState.tracks.isNotEmpty()) {
           Box {
-            TextButton(onClick = { subtitleMenu = true }) {
+            TextButton(
+              onClick = { subtitleMenu = true },
+              modifier =
+                Modifier.controlRowNavigation("subtitle")
+                  .controlFocusOutline(
+                    RoundedCornerShape(10.dp),
+                    MaterialTheme.colorScheme.primary,
+                    width = 3.dp,
+                    enabled = controlEnabled,
+                  ),
+            ) {
               Text(
                 "字幕",
                 color =
@@ -482,6 +723,13 @@ internal fun ModernPlayerControls(
             ) {
               DropdownMenuItem(
                 text = { Text("关闭字幕") },
+                modifier =
+                  Modifier.controlFocusOutline(
+                    RoundedCornerShape(8.dp),
+                    MaterialTheme.colorScheme.primary,
+                    width = 3.dp,
+                    enabled = controlEnabled,
+                  ),
                 trailingIcon = {
                   Checkbox(checked = subtitleState.selectedTrackId == null, onCheckedChange = null)
                 },
@@ -493,6 +741,13 @@ internal fun ModernPlayerControls(
               subtitleState.tracks.forEach { track ->
                 DropdownMenuItem(
                   text = { Text(track.displayLabel) },
+                  modifier =
+                    Modifier.controlFocusOutline(
+                      RoundedCornerShape(8.dp),
+                      MaterialTheme.colorScheme.primary,
+                      width = 3.dp,
+                      enabled = controlEnabled,
+                    ),
                   trailingIcon = {
                     Checkbox(
                       checked = subtitleState.selectedTrackId == track.id,
@@ -513,33 +768,36 @@ internal fun ModernPlayerControls(
                   "背景不透明度  ${(subtitleStyle.backgroundOpacity * 100).roundToInt()}%",
                   style = MaterialTheme.typography.labelMedium,
                 )
-                Slider(
+                ControlMenuSlider(
                   value = subtitleStyle.backgroundOpacity,
                   onValueChange = {
                     onSubtitleStyleChange(subtitleStyle.copy(backgroundOpacity = it))
                   },
                   valueRange = 0f..1f,
                   steps = 9,
+                  controlEnabled = controlEnabled,
                 )
                 Text(
                   "字体不透明度  ${(subtitleStyle.textOpacity * 100).roundToInt()}%",
                   style = MaterialTheme.typography.labelMedium,
                 )
-                Slider(
+                ControlMenuSlider(
                   value = subtitleStyle.textOpacity,
                   onValueChange = { onSubtitleStyleChange(subtitleStyle.copy(textOpacity = it)) },
                   valueRange = .1f..1f,
                   steps = 8,
+                  controlEnabled = controlEnabled,
                 )
                 Text(
                   "字体大小  ${(subtitleStyle.fontScale * 100).roundToInt()}%",
                   style = MaterialTheme.typography.labelMedium,
                 )
-                Slider(
+                ControlMenuSlider(
                   value = subtitleStyle.fontScale,
                   onValueChange = { onSubtitleStyleChange(subtitleStyle.copy(fontScale = it)) },
                   valueRange = .4f..1.8f,
                   steps = 13,
+                  controlEnabled = controlEnabled,
                 )
                 Text("字体颜色", style = MaterialTheme.typography.labelMedium)
                 Row(
@@ -559,6 +817,12 @@ internal fun ModernPlayerControls(
                             else MaterialTheme.colorScheme.outline,
                           shape = CircleShape,
                         )
+                        .controlFocusOutline(
+                          CircleShape,
+                          MaterialTheme.colorScheme.primary,
+                          width = 3.dp,
+                          enabled = controlEnabled,
+                        )
                         .clickable {
                           onSubtitleStyleChange(subtitleStyle.copy(textColor = colorValue))
                         }
@@ -574,6 +838,7 @@ internal fun ModernPlayerControls(
                     SubtitlePositionOption(
                       text = position.label,
                       selected = subtitleStyle.horizontalPosition == position,
+                      controlEnabled = controlEnabled,
                       onClick = {
                         onSubtitleStyleChange(subtitleStyle.copy(horizontalPosition = position))
                       },
@@ -585,7 +850,18 @@ internal fun ModernPlayerControls(
           }
         }
         Box {
-          IconButton(onClick = { danmakuMenu = true }, modifier = Modifier.size(38.dp)) {
+          IconButton(
+            onClick = { danmakuMenu = true },
+            modifier =
+              Modifier.size(38.dp)
+                .controlRowNavigation("danmaku")
+                .controlFocusOutline(
+                  CircleShape,
+                  MaterialTheme.colorScheme.primary,
+                  width = 3.dp,
+                  enabled = controlEnabled,
+                ),
+          ) {
             DanmakuControlIcon(
               modifier = Modifier.size(23.dp),
               color = if (showDanmaku) Color.White else Color.White.copy(alpha = .48f),
@@ -598,6 +874,13 @@ internal fun ModernPlayerControls(
           ) {
             DropdownMenuItem(
               text = { Text(if (showDanmaku) "弹幕已开启" else "弹幕已关闭") },
+              modifier =
+                Modifier.controlFocusOutline(
+                  RoundedCornerShape(8.dp),
+                  MaterialTheme.colorScheme.primary,
+                  width = 3.dp,
+                  enabled = controlEnabled,
+                ),
               trailingIcon = { Checkbox(checked = showDanmaku, onCheckedChange = null) },
               onClick = onToggleDanmaku,
             )
@@ -615,6 +898,13 @@ internal fun ModernPlayerControls(
               trailingIcon = {
                 Switch(checked = danmakuSmartBlocking, onCheckedChange = null)
               },
+              modifier =
+                Modifier.controlFocusOutline(
+                  RoundedCornerShape(8.dp),
+                  MaterialTheme.colorScheme.primary,
+                  width = 3.dp,
+                  enabled = controlEnabled,
+                ),
               onClick = { onDanmakuSmartBlockingChange(!danmakuSmartBlocking) },
             )
             Column(
@@ -622,79 +912,96 @@ internal fun ModernPlayerControls(
               verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
               Text(
-                "显示区域  ${(danmakuDisplayArea * 100).toInt()}%",
+                "显示区域  ${danmakuPercentLabel(danmakuDisplayArea)}",
                 style = MaterialTheme.typography.labelMedium,
               )
-              Slider(
+              ControlMenuSlider(
                 value = danmakuDisplayArea,
                 onValueChange = onDanmakuDisplayAreaChange,
                 valueRange = .1f..1f,
                 steps = 8,
+                controlEnabled = controlEnabled,
               )
               Text(
                 "弹幕密度（左右）  ${danmakuDensityLabel(danmakuDensity)}",
                 style = MaterialTheme.typography.labelMedium,
               )
-              Slider(
+              ControlMenuSlider(
                 value = danmakuDensity.toFloat(),
-                onValueChange = { onDanmakuDensityChange(it.toInt().coerceIn(1, 5)) },
+                onValueChange = { onDanmakuDensityChange(it.roundToInt().coerceIn(1, 5)) },
                 valueRange = 1f..5f,
                 steps = 3,
+                controlEnabled = controlEnabled,
               )
               Text(
                 "屏蔽等级  ${danmakuBlockLevel.coerceIn(1, 5)}级",
                 style = MaterialTheme.typography.labelMedium,
               )
-              Slider(
+              ControlMenuSlider(
                 value = danmakuBlockLevel.toFloat(),
                 onValueChange = {
                   onDanmakuBlockLevelChange(it.roundToInt().coerceIn(1, 5))
                 },
                 valueRange = 1f..5f,
                 steps = 3,
+                controlEnabled = controlEnabled,
               )
               Text(
-                "不透明度  ${(danmakuOpacity * 100).toInt()}%",
+                "不透明度  ${danmakuPercentLabel(danmakuOpacity)}",
                 style = MaterialTheme.typography.labelMedium,
               )
-              Slider(
+              ControlMenuSlider(
                 value = danmakuOpacity,
                 onValueChange = onDanmakuOpacityChange,
                 valueRange = .2f..1f,
                 steps = 7,
+                controlEnabled = controlEnabled,
               )
               Text(
-                "弹幕字号  ${(danmakuFontScale * 100).toInt()}%",
+                "弹幕字号  ${danmakuPercentLabel(danmakuFontScale)}",
                 style = MaterialTheme.typography.labelMedium,
               )
-              Slider(
+              ControlMenuSlider(
                 value = danmakuFontScale,
                 onValueChange = onDanmakuFontScaleChange,
                 valueRange = .7f..1.5f,
                 steps = 7,
+                controlEnabled = controlEnabled,
               )
               Text(
                 "滚动速度  ${"%.1f".format(danmakuSpeed)}×",
                 style = MaterialTheme.typography.labelMedium,
               )
-              Slider(
+              ControlMenuSlider(
                 value = danmakuSpeed,
                 onValueChange = onDanmakuSpeedChange,
                 valueRange = .5f..2f,
                 steps = 14,
+                controlEnabled = controlEnabled,
               )
             }
           }
         }
         if (danmakuComposerEnabled) {
-          IconButton(onClick = onComposeDanmaku, modifier = Modifier.size(38.dp)) {
+          IconButton(
+            onClick = onComposeDanmaku,
+            modifier = Modifier.size(38.dp),
+          ) {
             Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "发送弹幕", tint = Color.White)
           }
         }
         IconButton(
           onClick = onFullscreen,
           modifier =
-            Modifier.size(38.dp).pointerInteropFilter { event ->
+            Modifier.size(38.dp)
+              .controlRowNavigation("fullscreen")
+              .controlFocusOutline(
+                CircleShape,
+                MaterialTheme.colorScheme.primary,
+                width = 3.dp,
+                enabled = controlEnabled,
+              )
+              .pointerInteropFilter { event ->
               if (event.actionMasked == android.view.MotionEvent.ACTION_DOWN) onFullscreenPress()
               false
             },
@@ -710,7 +1017,7 @@ internal fun ModernPlayerControls(
   }
 }
 
-/** Center action kept outside the auto-hiding control chrome while playback is paused. */
+/** 播放暂停时，中央操作按钮保持在自动隐藏的控制条之外。 */
 @Composable
 internal fun PlayerCenterPlayPauseButton(
   isPlaying: Boolean,
@@ -728,8 +1035,5 @@ internal fun PlayerCenterPlayPauseButton(
 }
 
 private val PLAYER_SPEED_OPTIONS = listOf(.5f, 1f, 1.5f, 2f)
-
-private fun danmakuDensityLabel(level: Int): String =
-  listOf("疏", "较疏", "标准", "较密", "最密")[level.coerceIn(1, 5) - 1]
 
 internal fun formatPlaybackSpeed(speed: Float): String = "%.1fX".format(speed)
