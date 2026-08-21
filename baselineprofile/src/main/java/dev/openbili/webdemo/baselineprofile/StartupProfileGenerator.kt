@@ -22,7 +22,10 @@ class StartupProfileGenerator {
 
   @Test
   fun captureStartupProfile() {
-    baselineProfileRule.collect("io.github.shuyunr.bilione") {
+    baselineProfileRule.collect(
+      packageName = "io.github.shuyunr.bilione",
+      includeInStartupProfile = true,
+    ) {
       // 冷启动：回到桌面后重新启动应用。
       pressHome()
       startActivityAndWait()

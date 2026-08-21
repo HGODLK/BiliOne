@@ -18,4 +18,4 @@ captures/
 /Agent.md
 /Agent111.md
 /app/src/release/baselineProfiles/
-/app/src/release/generated/
+# Release Baseline/Startup Profiles are checked in as reproducible release inputs.
