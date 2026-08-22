@@ -87,7 +87,7 @@ object BiliFollowApi {
   private fun parseFollowingUsers(array: org.json.JSONArray): List<FollowingUser> = buildList {
     for (i in 0 until array.length()) {
       val item = array.optJSONObject(i) ?: continue
-      val groups = item.optJSONArray("BiliApiCommon.TAG")
+      val groups = item.optJSONArray("tag")
       add(
         FollowingUser(
           item.optLong("mid"),

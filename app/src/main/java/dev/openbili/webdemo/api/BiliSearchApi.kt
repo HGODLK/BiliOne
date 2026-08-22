@@ -354,7 +354,11 @@ object BiliSearchApi {
     val resp = BiliHttpClient.getPublic(url)
     val body = resp.body?.string().orEmpty()
     resp.close()
-    val tags = JSONObject(body).optJSONObject("result")?.optJSONArray("BiliApiCommon.TAG") ?: return emptyList()
+    return parseSearchSuggestionsResponse(body)
+  }
+
+  internal fun parseSearchSuggestionsResponse(body: String): List<String> {
+    val tags = JSONObject(body).optJSONObject("result")?.optJSONArray("tag") ?: return emptyList()
     return buildList {
         for (index in 0 until tags.length()) {
           tags.optJSONObject(index)?.optString("term")?.takeIf(String::isNotBlank)?.let(::add)
