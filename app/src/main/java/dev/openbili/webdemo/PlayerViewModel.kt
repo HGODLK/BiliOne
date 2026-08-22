@@ -46,11 +46,9 @@ import dev.openbili.webdemo.offline.OfflineMediaEntry
 import dev.openbili.webdemo.offline.OfflineMediaManager
 import dev.openbili.webdemo.offline.OfflineTransferState
 import dev.openbili.webdemo.settings.AdvancedAudioPriority
-import dev.openbili.webdemo.settings.CdnRegionPreference
 import dev.openbili.webdemo.settings.DeviceMediaCapabilities
 import dev.openbili.webdemo.settings.PreferredResolutionMode
 import java.io.File
-import java.net.URI
 import kotlinx.coroutines.async
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
@@ -83,8 +81,6 @@ data class PlayerSubtitleState(
   val isLoading: Boolean = false,
   val message: String? = null,
 )
-
-internal const val STARTUP_PREFERRED_CDN_HOST = "d1--cn-gotcha208.bilivideo.com"
 
 @OptIn(UnstableApi::class)
 class PlayerViewModel(application: Application) : AndroidViewModel(application) {
@@ -128,14 +124,6 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
   private var foregroundTrackSelectionParameters: TrackSelectionParameters? = null
   private var backgroundAudioOnly = false
   private var appInForeground = true
-  private val playbackRoutingPrefs = application.getSharedPreferences(PLAYBACK_ROUTING_PREFS, 0)
-  private var preferredCdnRegion = readCdnRegionPreference(application)
-  private var preferredCdnHost = loadPersistedCdnHost(preferredCdnRegion)
-
-  init {
-    // 旧版本没有保存地区标记，无法判断旧主机是否符合新的地区偏好，因此从新默认线路开始。
-  }
-
   private val mediaCapabilities by lazy { DeviceMediaCapabilities.detect(getApplication()) }
   private val deviceStreamSupport = mutableMapOf<String, Boolean>()
   private val decoderCodecInfos by lazy {
@@ -1018,7 +1006,6 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     cdnFallbackJob = null
     playData = nextData
     _playerState.value = PlayerState.Ready(nextData)
-    persistPreferredCdn(replacement)
     Log.w(
       TAG,
       "buffering for ${SLOW_CDN_BUFFERING_TIMEOUT_MS}ms; switching ${stream.quality} to backup CDN",
@@ -1367,11 +1354,11 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
   }
 
   /**
-   * B 站的第一个备用主机在目标平板上被证明更稳定，因此它是默认路由。一旦欠载检测器
-   * 选择了另一个主机，该主机对之后的视频也生效。
+   * 地区设置对应的主线始终优先；主线不可用时，备用地址优先选择播放接口为当前出口
+   * 运营商返回的同线路节点。
    */
   private fun prioritizeCdnRoutes(data: PlayUrlData): PlayUrlData {
-    refreshConfiguredCdnPreference()
+    val preferredCdnHost = configuredCdnHost(getApplication())
     fun video(stream: VideoStream): VideoStream {
       val ordered = prioritizeCdnUrls(stream.url, stream.backupUrls, preferredCdnHost)
       return stream.copy(url = ordered.primary, backupUrls = ordered.backups)
@@ -1399,46 +1386,6 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     )
   }
 
-  private fun persistPreferredCdn(url: String) {
-    val host = runCatching { URI(url).host.orEmpty().lowercase() }.getOrDefault("")
-    if (host.isBlank() || host == preferredCdnHost) return
-    preferredCdnHost = host
-    playbackRoutingPrefs
-      .edit()
-      .putString(KEY_PREFERRED_CDN_HOST, host)
-      .putString(KEY_PREFERRED_CDN_REGION, preferredCdnRegion.name)
-      .apply()
-  }
-
-  private fun refreshConfiguredCdnPreference() {
-    val configuredRegion = readCdnRegionPreference(getApplication())
-    if (configuredRegion == preferredCdnRegion) return
-    preferredCdnRegion = configuredRegion
-    preferredCdnHost = configuredRegion.preferredHost
-    playbackRoutingPrefs
-      .edit()
-      .remove(KEY_PREFERRED_CDN_HOST)
-      .remove(KEY_PREFERRED_CDN_REGION)
-      .apply()
-  }
-
-  private fun loadPersistedCdnHost(region: CdnRegionPreference): String {
-    val persistedRegion =
-      runCatching {
-          CdnRegionPreference.valueOf(
-            playbackRoutingPrefs.getString(KEY_PREFERRED_CDN_REGION, null).orEmpty()
-          )
-        }
-        .getOrNull()
-    return if (persistedRegion == region) {
-      playbackRoutingPrefs.getString(KEY_PREFERRED_CDN_HOST, null).orEmpty().ifBlank {
-        region.preferredHost
-      }
-    } else {
-      region.preferredHost
-    }
-  }
-
   private fun preferredPremiumAudioMode(data: PlayUrlData): PremiumAudioMode? {
     if (!advancedAudioEnabled) return null
     val preferred =
@@ -1455,9 +1402,6 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     const val SLOW_CDN_BUFFERING_TIMEOUT_MS = 3_000L
     const val UNDEFINED_CDN_LOAD_TIMEOUT_MS = 6_000L
     const val TAG = "PlayerVM"
-    const val PLAYBACK_ROUTING_PREFS = "playback_routing"
-    const val KEY_PREFERRED_CDN_HOST = "preferred_cdn_host"
-    const val KEY_PREFERRED_CDN_REGION = "preferred_cdn_region"
   }
 
   private data class LoadedPlayback(
@@ -1535,26 +1479,6 @@ internal fun audioOnlyTrackSelectionParameters(
   parameters: TrackSelectionParameters
 ): TrackSelectionParameters =
   parameters.buildUpon().setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, true).build()
-
-internal data class PrioritizedCdnUrls(val primary: String, val backups: List<String>)
-
-internal fun prioritizeCdnUrls(
-  primary: String,
-  backups: List<String>,
-  preferredHost: String,
-): PrioritizedCdnUrls {
-  // 备用 #1 是新的基线路由。保留 API 主地址作为最终回退。
-  val candidates = (backups + primary).filter(String::isNotBlank).distinct()
-  if (candidates.isEmpty()) return PrioritizedCdnUrls(primary, emptyList())
-  val preferred =
-    preferredHost.takeIf(String::isNotBlank)?.let { expected ->
-      candidates.firstOrNull { url ->
-        runCatching { URI(url).host.equals(expected, ignoreCase = true) }.getOrDefault(false)
-      }
-    }
-  val selected = preferred ?: candidates.first()
-  return PrioritizedCdnUrls(selected, candidates.filterNot { it == selected })
-}
 
 internal fun resolvePlaybackPage(
   requestedPage: VideoPage?,

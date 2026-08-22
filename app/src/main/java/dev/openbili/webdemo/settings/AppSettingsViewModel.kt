@@ -40,37 +40,37 @@ enum class CdnRegionPreference(
 ) {
   MAINLAND_CHINA(
     "中国大陆",
-    "优先使用国内线路",
+    "主线优先使用国内节点，换线时优先当前运营商",
     "d1--cn-gotcha208.bilivideo.com",
   ),
   HONG_KONG_MACAO_TAIWAN(
     "港澳台",
-    "优先使用港澳台及东亚线路",
+    "主线优先使用港澳台及东亚节点",
     "d1--ov-gotcha07.bilivideo.com",
   ),
   JAPAN_KOREA(
     "日韩",
-    "优先使用日韩及东亚线路",
+    "主线优先使用日韩及东亚节点",
     "d1--ov-gotcha07.bilivideo.com",
   ),
   NORTH_AMERICA(
     "北美",
-    "优先使用北美线路",
+    "主线优先使用北美节点",
     "d1--ov-gotcha07.bilivideo.com",
   ),
   SOUTH_AMERICA(
     "南美",
-    "优先使用南美线路",
+    "主线优先使用南美节点",
     "d1--ov-gotcha209.bilivideo.com",
   ),
   EUROPE(
     "欧洲",
-    "优先使用欧洲线路",
+    "主线优先使用欧洲节点",
     "d1--ov-gotcha209.bilivideo.com",
   ),
   AFRICA(
     "非洲",
-    "优先使用非洲线路",
+    "主线优先使用非洲节点",
     "d1--ov-gotcha05.bilivideo.com",
   ),
 }
