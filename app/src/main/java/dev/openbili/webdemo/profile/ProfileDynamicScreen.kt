@@ -995,7 +995,10 @@ private fun DynamicLiveCard(
   val chromeAlpha = remember(room.stableId) { Animatable(1f) }
   val liveItem = room.toDynamicFeedItem("live-dynamic")
   LaunchedEffect(sourceVisible) {
-    if (sourceVisible && chromeAlpha.value < 1f) {
+    if (!sourceVisible) {
+      // 返回前重新隐藏信息层，避免进入完成后在直播页下方提前恢复，导致落地时直接出现。
+      chromeAlpha.snapTo(0f)
+    } else if (chromeAlpha.value < 1f) {
       chromeAlpha.animateTo(1f, tween(150, easing = FastOutSlowInEasing))
       opening = false
     }
