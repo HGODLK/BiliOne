@@ -162,6 +162,7 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
     }
   private var scheduled = emptyList<ScheduledDanmaku>()
   private var sourceItemsRef: List<DanmakuItem>? = null
+  private var submittedItems = emptyList<DanmakuItem>()
   private var sourceItems = emptyList<DanmakuItem>()
   private var maskTimeline: DanmakuMaskTimeline? = null
   private var videoViewport: RectF? = null
@@ -362,6 +363,8 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
     uiClockAdvancing = !paused
     samplePlaybackClock()
     synchronized(renderStateLock) {
+      val rawPositionMs = playbackClockSnapshot.positionAt(SystemClock.elapsedRealtimeNanos())
+      val clockEpochChanged = visualClockEpoch != positionEpoch
       val nextSpeed = speed.coerceIn(.5f, 2f)
       val speedChanged = this.speed != nextSpeed
       val nextOpacity = opacity.coerceIn(.2f, 1f)
@@ -388,12 +391,35 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
       maskTimeline = mask
       smartBlockingEnabled = smartBlocking
       this.highDynamicRange = highDynamicRange
+      var preservedLanes = emptyMap<DanmakuItem, Int>()
       if (itemsChanged) {
         sourceItemsRef = items
-        sourceItems = filterDanmakuByBlockLevel(items, nextBlockLevel).sortedBy(DanmakuItem::timeMs)
+        val nextSubmitted =
+          filterDanmakuByBlockLevel(items, nextBlockLevel).sortedBy(DanmakuItem::timeMs)
+        val slidingWindowReplacement =
+          !blockLevelChanged &&
+            !clockEpochChanged &&
+            isDanmakuSlidingWindowReplacement(submittedItems, nextSubmitted)
+        if (slidingWindowReplacement) {
+          preservedLanes = scheduled.associate { it.item to it.lane }
+          val activePositionMs =
+            if (visualClockInitialized) visualPositionMs else rawPositionMs
+          val activeScheduledItems =
+            prepared.asSequence().filter { it.endMs >= activePositionMs }.map { it.item }.toList()
+          sourceItems =
+            mergeActiveDanmakuSlidingWindow(
+              incoming = nextSubmitted,
+              activeScheduledItems = activeScheduledItems,
+            )
+        } else {
+          sourceItems = nextSubmitted
+        }
+        submittedItems = nextSubmitted
         requestImages(sourceItems)
       } else if (blockLevelChanged) {
-        sourceItems = filterDanmakuByBlockLevel(items, nextBlockLevel).sortedBy(DanmakuItem::timeMs)
+        submittedItems =
+          filterDanmakuByBlockLevel(items, nextBlockLevel).sortedBy(DanmakuItem::timeMs)
+        sourceItems = submittedItems
         requestImages(sourceItems)
       }
       var renderCacheInvalidated = false
@@ -417,15 +443,15 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
         renderCacheInvalidated = true
       }
       if (scheduleChanged) {
-        rebuildSchedule()
+        rebuildSchedule(
+          preferredLanes = if (scheduleGeometryChanged) emptyMap() else preservedLanes,
+        )
       }
       if (maskChanged || smartBlockingChanged) clearMaskClipCache()
       if (highDynamicRangeChanged) {
         clearRenderCache()
         renderCacheInvalidated = true
       }
-      val rawPositionMs = playbackClockSnapshot.positionAt(SystemClock.elapsedRealtimeNanos())
-      val clockEpochChanged = visualClockEpoch != positionEpoch
       val clockWasUninitialized = !visualClockInitialized
       if (scheduleGeometryChanged || clockEpochChanged || clockWasUninitialized) {
         resetVisualClock(rawPositionMs, positionEpoch)
@@ -1299,11 +1325,11 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
   private fun scrollingVisibleDurationMs(): Long =
     scrollingMotionDurationMs() + (SCROLL_EXIT_GUARD_MS / speed).toLong()
 
-  private fun rebuildSchedule() {
+  private fun rebuildSchedule(preferredLanes: Map<DanmakuItem, Int> = emptyMap()) {
     scheduledLaneHeight = estimatedLaneHeight()
     scheduledLaneCount = laneCountFor(displayArea)
     scheduledViewportWidth = renderWidth()
-    scheduled = schedule(sourceItems, scheduledLaneCount, densityLevel)
+    scheduled = schedule(sourceItems, scheduledLaneCount, densityLevel, preferredLanes)
     rebuildPreparedDanmaku()
   }
 
@@ -1344,6 +1370,7 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
     items: List<DanmakuItem>,
     laneCount: Int,
     densityLevel: Int,
+    preferredLanes: Map<DanmakuItem, Int>,
   ): List<ScheduledDanmaku> {
     val scrollingPrevious = arrayOfNulls<DanmakuItem>(laneCount)
     val topAvailableAt = LongArray(laneCount)
@@ -1356,14 +1383,20 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
             laneStep = scheduledLaneHeight,
             laneCount = laneCount,
           )
+        // 直播窗口裁掉旧前缀时，仍在屏上的弹幕必须沿用原轨道，不能从第零轨重新排布。
+        val preferredLane =
+          preferredLanes[item]?.takeIf { it >= 0 && it + laneSpan <= laneCount }
         val lane =
-          when (item.type) {
-            TYPE_TOP -> fixedLaneFor(item, topAvailableAt, laneSpan, densityLevel) ?: return@forEach
-            TYPE_BOTTOM ->
-              fixedLaneFor(item, bottomAvailableAt, laneSpan, densityLevel) ?: return@forEach
-            else ->
-              scrollingLaneFor(item, scrollingPrevious, laneSpan, densityLevel) ?: return@forEach
-          }
+          preferredLane
+            ?: when (item.type) {
+              TYPE_TOP ->
+                fixedLaneFor(item, topAvailableAt, laneSpan, densityLevel) ?: return@forEach
+              TYPE_BOTTOM ->
+                fixedLaneFor(item, bottomAvailableAt, laneSpan, densityLevel) ?: return@forEach
+              else ->
+                scrollingLaneFor(item, scrollingPrevious, laneSpan, densityLevel)
+                  ?: return@forEach
+            }
         add(ScheduledDanmaku(item, lane))
         val occupiedLanes = lane until lane + laneSpan
         when (item.type) {
@@ -2115,6 +2148,36 @@ internal fun danmakuLaneSpan(
 ): Int {
   if (laneCount <= 1 || laneStep <= 0f) return 1
   return ceil(contentHeight.coerceAtLeast(1f) / laneStep).toInt().coerceIn(1, laneCount)
+}
+
+/**
+ * 判断一次列表替换是否为直播有界窗口的“裁掉旧前缀并追加新后缀”。
+ *
+ * 纯追加不需要特殊处理；任意中段删除（例如修改屏蔽词）也不能被误认为窗口滑动。
+ */
+internal fun isDanmakuSlidingWindowReplacement(
+  previous: List<DanmakuItem>,
+  current: List<DanmakuItem>,
+): Boolean {
+  if (previous.size < 2 || current.size < 2) return false
+  val previousStart = previous.indexOf(current.first())
+  if (previousStart <= 0) return false
+  val overlapSize = minOf(previous.size - previousStart, current.size)
+  if (overlapSize <= 0 || current.size <= overlapSize) return false
+  return previous.subList(previousStart, previousStart + overlapSize) ==
+    current.subList(0, overlapSize)
+}
+
+/** 把仍在屏上的旧弹幕补回滑动窗口前端，直到其自然离场。 */
+internal fun mergeActiveDanmakuSlidingWindow(
+  incoming: List<DanmakuItem>,
+  activeScheduledItems: List<DanmakuItem>,
+): List<DanmakuItem> {
+  if (activeScheduledItems.isEmpty()) return incoming
+  val incomingItems = incoming.toHashSet()
+  val retainedPrefix = activeScheduledItems.filterNot(incomingItems::contains)
+  if (retainedPrefix.isEmpty()) return incoming
+  return (retainedPrefix + incoming).sortedBy(DanmakuItem::timeMs)
 }
 
 internal fun firstDanmakuLaneWindow(
