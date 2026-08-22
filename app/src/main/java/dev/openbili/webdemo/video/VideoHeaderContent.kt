@@ -545,9 +545,13 @@ fun VideoInfoTile(
   val displayedInfo = remember { info }
   val displayedOnlineViewerText = remember { onlineViewerText }
   val displayedDescription = remember { description }
+  val videoLink = remember(displayedInfo?.bvid, item.id, item.videoUrl) {
+    buildVideoShareUrl(displayedInfo, item)
+  }
   val revealProgress = remember { Animatable(0f) }
   var dismissing by remember { mutableStateOf(false) }
   val scope = rememberCoroutineScope()
+  val controlCopyFocusRequester = remember { FocusRequester() }
   val controlCacheFocusRequester = remember { FocusRequester() }
   val controlCloseFocusRequester = remember { FocusRequester() }
   fun dismissThen(action: () -> Unit) {
@@ -568,13 +572,16 @@ fun VideoInfoTile(
       tween(durationMillis = 260, easing = FastOutSlowInEasing),
     )
   }
-  LaunchedEffect(controlEnabled, onCacheClick != null) {
+  LaunchedEffect(controlEnabled, onCacheClick != null, videoLink) {
     if (controlEnabled) {
       withFrameNanos {}
       withFrameNanos {}
       runCatching {
-        if (onCacheClick != null) controlCacheFocusRequester.requestFocus()
-        else controlCloseFocusRequester.requestFocus()
+        when {
+          onCacheClick != null -> controlCacheFocusRequester.requestFocus()
+          videoLink.isNotBlank() -> controlCopyFocusRequester.requestFocus()
+          else -> controlCloseFocusRequester.requestFocus()
+        }
       }
     }
   }
@@ -747,6 +754,33 @@ fun VideoInfoTile(
             modifier = Modifier.align(Alignment.End),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
           ) {
+            if (videoLink.isNotBlank()) {
+              TextButton(
+                onClick = {
+                  clipboard.setText(AnnotatedString(videoLink))
+                  Toast.makeText(context, "已复制视频链接", Toast.LENGTH_SHORT).show()
+                },
+                modifier =
+                  Modifier.then(
+                    if (controlEnabled) {
+                      Modifier.focusRequester(controlCopyFocusRequester)
+                        .focusProperties {
+                          left = FocusRequester.Cancel
+                          right =
+                            if (onCacheClick != null) controlCacheFocusRequester
+                            else controlCloseFocusRequester
+                        }
+                        .controlFocusOutline(
+                          RoundedCornerShape(14.dp),
+                          MaterialTheme.colorScheme.primary,
+                          enabled = true,
+                        )
+                    } else Modifier
+                  ),
+              ) {
+                Text("复制视频链接")
+              }
+            }
             if (onCacheClick != null) {
               TextButton(
                 onClick = { dismissThen(onCacheClick) },
@@ -755,7 +789,9 @@ fun VideoInfoTile(
                     if (controlEnabled) {
                       Modifier.focusRequester(controlCacheFocusRequester)
                         .focusProperties {
-                          left = FocusRequester.Cancel
+                          left =
+                            if (videoLink.isNotBlank()) controlCopyFocusRequester
+                            else FocusRequester.Cancel
                           right = controlCloseFocusRequester
                         }
                         .controlFocusOutline(
@@ -777,8 +813,11 @@ fun VideoInfoTile(
                     Modifier.focusRequester(controlCloseFocusRequester)
                       .focusProperties {
                         left =
-                          if (onCacheClick != null) controlCacheFocusRequester
-                          else FocusRequester.Cancel
+                          when {
+                            onCacheClick != null -> controlCacheFocusRequester
+                            videoLink.isNotBlank() -> controlCopyFocusRequester
+                            else -> FocusRequester.Cancel
+                          }
                         right = FocusRequester.Cancel
                       }
                       .controlFocusOutline(

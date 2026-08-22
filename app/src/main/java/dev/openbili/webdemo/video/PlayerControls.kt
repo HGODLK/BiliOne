@@ -19,6 +19,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -72,6 +73,7 @@ import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.openbili.webdemo.PlayerSubtitleState
@@ -130,135 +132,207 @@ internal fun DanmakuComposer(
       0f
     }
   val imeOverlap = with(density) { imeOverlapPx.toDp() }
-  Surface(
-    modifier = modifier.padding(bottom = imeOverlap).widthIn(max = 720.dp),
-    shape = RoundedCornerShape(24.dp),
-    color = Color.Black.copy(alpha = .86f),
-    contentColor = Color.White,
-    tonalElevation = 6.dp,
+  BoxWithConstraints(
+    modifier =
+      modifier
+        .padding(bottom = imeOverlap)
+        .fillMaxWidth()
+        .widthIn(max = 720.dp)
+        .padding(horizontal = 8.dp),
   ) {
-    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-      Row(verticalAlignment = Alignment.CenterVertically) {
-        Surface(
-          modifier = Modifier.weight(1f),
-          shape = CircleShape,
-          color = Color.White.copy(alpha = .12f),
-        ) {
-          BasicTextField(
-            value = text,
-            onValueChange = { text = it.take(80) },
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-            textStyle = MaterialTheme.typography.bodyLarge.copy(color = Color.White),
-            singleLine = true,
-            decorationBox = { inner ->
-              if (text.isEmpty()) Text("发送一条弹幕", color = Color.White.copy(alpha = .62f))
-              inner()
-            },
-          )
-        }
-        TextButton(onClick = onDismiss) { Text("取消", color = Color.White) }
-        TextButton(
-          enabled = text.isNotBlank(),
-          onClick = {
-            val message = text.trim()
-            if (message.isNotEmpty()) {
-              val sendColorful =
-                if (vipActive && colorful == DANMAKU_COLORFUL_VIP_GRADIENT) {
-                  DANMAKU_COLORFUL_VIP_GRADIENT
-                } else {
-                  DANMAKU_COLORFUL_NONE
-                }
-              onSend(message, color, mode, fontSize, sendColorful)
-            }
-          },
-        ) {
-          Text("发送", color = if (text.isNotBlank()) Color.White else Color.Gray)
-        }
-      }
-      Text(
-        "颜色",
-        style = MaterialTheme.typography.labelMedium,
-        color = Color.White.copy(alpha = .72f),
-      )
-      Row(
-        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-        verticalAlignment = Alignment.CenterVertically,
+    val compact = maxWidth < 480.dp
+    val veryCompact = maxWidth < 360.dp
+    val panelPadding = if (compact) 8.dp else 12.dp
+    val optionScrollState = rememberScrollState()
+    Surface(
+      modifier = Modifier.fillMaxWidth(),
+      shape = RoundedCornerShape(if (compact) 20.dp else 24.dp),
+      color = Color.Black.copy(alpha = .86f),
+      contentColor = Color.White,
+      tonalElevation = 6.dp,
+    ) {
+      Column(
+        Modifier.padding(panelPadding),
+        verticalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 8.dp),
       ) {
-        DANMAKU_COLORS.forEach { value ->
-          val selected = colorful == DANMAKU_COLORFUL_NONE && color == value
-          Box(
-            Modifier.padding(end = 8.dp)
-              .size(if (selected) 26.dp else 22.dp)
-              .clip(CircleShape)
-              .background(Color(0xFF000000L or value.toLong()))
-              .border(
-                width = if (selected) 2.dp else 1.dp,
-                color = if (selected) Color.White else Color.White.copy(alpha = .35f),
-                shape = CircleShape,
-              )
-              .clickable {
-                color = value
-                colorful = DANMAKU_COLORFUL_NONE
-                onColorChanged(value, DANMAKU_COLORFUL_NONE)
-              }
-          )
-        }
-        val gradientSelected = colorful == DANMAKU_COLORFUL_VIP_GRADIENT
-        Box(
-          modifier =
-            Modifier.padding(end = 4.dp)
-              .size(height = if (gradientSelected) 26.dp else 22.dp, width = 48.dp)
-              .clip(CircleShape)
-              .background(
-                Brush.horizontalGradient(
-                  VIP_DANMAKU_COLORS.map { it.copy(alpha = if (vipActive) 1f else .28f) }
-                )
-              )
-              .border(
-                width = if (gradientSelected) 2.dp else 1.dp,
-                color =
-                  if (gradientSelected) Color.White
-                  else Color.White.copy(alpha = if (vipActive) .5f else .2f),
-                shape = CircleShape,
-              )
-              .clickable(enabled = vipActive) {
-                color = 0xFFFFFF
-                colorful = DANMAKU_COLORFUL_VIP_GRADIENT
-                onColorChanged(0xFFFFFF, DANMAKU_COLORFUL_VIP_GRADIENT)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+          Surface(
+            modifier = Modifier.weight(1f),
+            shape = CircleShape,
+            color = Color.White.copy(alpha = .12f),
+          ) {
+            BasicTextField(
+              value = text,
+              onValueChange = { text = it.take(80) },
+              modifier =
+                Modifier.fillMaxWidth()
+                  .padding(
+                    horizontal = if (compact) 12.dp else 16.dp,
+                    vertical = if (compact) 9.dp else 12.dp,
+                  ),
+              textStyle = MaterialTheme.typography.bodyLarge.copy(color = Color.White),
+              singleLine = true,
+              decorationBox = { inner ->
+                if (text.isEmpty()) Text("发送一条弹幕", color = Color.White.copy(alpha = .62f))
+                inner()
               },
-          contentAlignment = Alignment.Center,
+            )
+          }
+          TextButton(
+            onClick = onDismiss,
+            contentPadding =
+              androidx.compose.foundation.layout.PaddingValues(
+                horizontal = if (compact) 8.dp else 12.dp,
+                vertical = 0.dp,
+              ),
+          ) {
+            Text("取消", color = Color.White)
+          }
+          TextButton(
+            enabled = text.isNotBlank(),
+            contentPadding =
+              androidx.compose.foundation.layout.PaddingValues(
+                horizontal = if (compact) 8.dp else 12.dp,
+                vertical = 0.dp,
+              ),
+            onClick = {
+              val message = text.trim()
+              if (message.isNotEmpty()) {
+                val sendColorful =
+                  if (vipActive && colorful == DANMAKU_COLORFUL_VIP_GRADIENT) {
+                    DANMAKU_COLORFUL_VIP_GRADIENT
+                  } else {
+                    DANMAKU_COLORFUL_NONE
+                  }
+                onSend(message, color, mode, fontSize, sendColorful)
+              }
+            },
+          ) {
+            Text("发送", color = if (text.isNotBlank()) Color.White else Color.Gray)
+          }
+        }
+        Text(
+          "颜色",
+          style = MaterialTheme.typography.labelMedium,
+          color = Color.White.copy(alpha = .72f),
+        )
+        Row(
+          modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+          verticalAlignment = Alignment.CenterVertically,
         ) {
-          Text(
-            "VIP",
-            style = MaterialTheme.typography.labelSmall,
-            color = Color.White.copy(alpha = if (vipActive) 1f else .45f),
-          )
+          DANMAKU_COLORS.forEach { value ->
+            val selected = colorful == DANMAKU_COLORFUL_NONE && color == value
+            Box(
+              Modifier.padding(end = if (compact) 6.dp else 8.dp)
+                .size(if (selected) (if (compact) 24.dp else 26.dp) else 22.dp)
+                .clip(CircleShape)
+                .background(Color(0xFF000000L or value.toLong()))
+                .border(
+                  width = if (selected) 2.dp else 1.dp,
+                  color = if (selected) Color.White else Color.White.copy(alpha = .35f),
+                  shape = CircleShape,
+                )
+                .clickable {
+                  color = value
+                  colorful = DANMAKU_COLORFUL_NONE
+                  onColorChanged(value, DANMAKU_COLORFUL_NONE)
+                }
+            )
+          }
+          val gradientSelected = colorful == DANMAKU_COLORFUL_VIP_GRADIENT
+          Box(
+            modifier =
+              Modifier.padding(end = 4.dp)
+                .size(
+                  height = if (gradientSelected) (if (compact) 24.dp else 26.dp) else 22.dp,
+                  width = if (compact) 44.dp else 48.dp,
+                )
+                .clip(CircleShape)
+                .background(
+                  Brush.horizontalGradient(
+                    VIP_DANMAKU_COLORS.map { it.copy(alpha = if (vipActive) 1f else .28f) }
+                  )
+                )
+                .border(
+                  width = if (gradientSelected) 2.dp else 1.dp,
+                  color =
+                    if (gradientSelected) Color.White
+                    else Color.White.copy(alpha = if (vipActive) .5f else .2f),
+                  shape = CircleShape,
+                )
+                .clickable(enabled = vipActive) {
+                  color = 0xFFFFFF
+                  colorful = DANMAKU_COLORFUL_VIP_GRADIENT
+                  onColorChanged(0xFFFFFF, DANMAKU_COLORFUL_VIP_GRADIENT)
+                },
+            contentAlignment = Alignment.Center,
+          ) {
+            Text(
+              "VIP",
+              style = MaterialTheme.typography.labelSmall,
+              color = Color.White.copy(alpha = if (vipActive) 1f else .45f),
+            )
+          }
+          if (!vipActive) {
+            Text(
+              "大会员专属",
+              style = MaterialTheme.typography.labelSmall,
+              color = Color.White.copy(alpha = .45f),
+            )
+          }
         }
-        if (!vipActive) {
-          Text(
-            "大会员专属",
-            style = MaterialTheme.typography.labelSmall,
-            color = Color.White.copy(alpha = .45f),
-          )
+        Row(
+          modifier = Modifier.fillMaxWidth().horizontalScroll(optionScrollState),
+          horizontalArrangement = Arrangement.spacedBy(if (veryCompact) 2.dp else 4.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          DanmakuComposerOption("滚动", selected = mode == 1, compact = compact) { mode = 1 }
+          DanmakuComposerOption("顶部", selected = mode == 5, compact = compact) { mode = 5 }
+          DanmakuComposerOption("底部", selected = mode == 4, compact = compact) { mode = 4 }
+          Spacer(Modifier.width(if (compact) 6.dp else 18.dp))
+          DanmakuComposerOption("小", selected = fontSize == 18, compact = compact) { fontSize = 18 }
+          DanmakuComposerOption("标准", selected = fontSize == 25, compact = compact) { fontSize = 25 }
         }
-      }
-      Row(verticalAlignment = Alignment.CenterVertically) {
-        DanmakuComposerOption("滚动", selected = mode == 1) { mode = 1 }
-        DanmakuComposerOption("顶部", selected = mode == 5) { mode = 5 }
-        DanmakuComposerOption("底部", selected = mode == 4) { mode = 4 }
-        Spacer(Modifier.weight(1f))
-        DanmakuComposerOption("小", selected = fontSize == 18) { fontSize = 18 }
-        DanmakuComposerOption("标准", selected = fontSize == 25) { fontSize = 25 }
       }
     }
   }
 }
 
-/** 弹幕模式/字号选项按钮：选中态使用主题色高亮。 */
+/** 弹幕模式/字号选项胶囊：宽度随面板收缩，保留足够的触控高度。 */
 @Composable
-private fun DanmakuComposerOption(text: String, selected: Boolean, onClick: () -> Unit) {
-  TextButton(onClick = onClick) {
-    Text(text, color = if (selected) MaterialTheme.colorScheme.primary else Color.White)
+private fun DanmakuComposerOption(
+  text: String,
+  selected: Boolean,
+  compact: Boolean,
+  onClick: () -> Unit,
+) {
+  val shape = CircleShape
+  Surface(
+    modifier =
+      Modifier.clip(shape)
+        .clickable(role = Role.Button, onClick = onClick),
+    shape = shape,
+    color =
+      if (selected) MaterialTheme.colorScheme.primary.copy(alpha = .24f)
+      else Color.White.copy(alpha = .08f),
+    border =
+      androidx.compose.foundation.BorderStroke(
+        1.dp,
+        if (selected) MaterialTheme.colorScheme.primary.copy(alpha = .85f)
+        else Color.White.copy(alpha = .22f),
+      ),
+  ) {
+    Text(
+      text,
+      modifier =
+        Modifier.padding(
+          horizontal = if (compact) 9.dp else 12.dp,
+          vertical = 9.dp,
+        ),
+      color = if (selected) MaterialTheme.colorScheme.primary else Color.White,
+      style = MaterialTheme.typography.labelMedium,
+      maxLines = 1,
+    )
   }
 }
 

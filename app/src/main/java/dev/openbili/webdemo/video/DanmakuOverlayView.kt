@@ -151,6 +151,15 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
       strokeJoin = Paint.Join.ROUND
     }
   private val imagePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+  private val localHighlightPaint =
+    Paint(Paint.ANTI_ALIAS_FLAG).apply {
+      style = Paint.Style.FILL
+    }
+  private val localHighlightBorderPaint =
+    Paint(Paint.ANTI_ALIAS_FLAG).apply {
+      style = Paint.Style.STROKE
+      strokeJoin = Paint.Join.ROUND
+    }
   private var scheduled = emptyList<ScheduledDanmaku>()
   private var sourceItemsRef: List<DanmakuItem>? = null
   private var sourceItems = emptyList<DanmakuItem>()
@@ -834,6 +843,7 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
     val x =
       if (fixed) viewport.left + (viewport.width() - textWidth) / 2f
       else viewport.right - elapsed.toFloat() / motionDuration * (viewport.width() + textWidth)
+    drawLocalDanmakuHighlight(canvas, value, x, baseline)
     item.imageUrl?.let { imageUrl ->
       imageBitmaps[imageUrl]?.let { bitmap ->
         imagePaint.alpha = (opacity * 255f).toInt().coerceIn(0, 255)
@@ -877,6 +887,33 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
     }
     canvas.drawText(item.content, x, baseline, outlinePaint)
     canvas.drawText(item.content, x, baseline, textPaint)
+  }
+
+  /** 给本地刚发送的弹幕加一层随文字移动的标记，不修改弹幕内容和碰撞宽度。 */
+  private fun drawLocalDanmakuHighlight(
+    canvas: Canvas,
+    value: PreparedDanmaku,
+    x: Float,
+    baseline: Float,
+  ) {
+    if (!value.item.isLocal) return
+    val horizontalPadding = max(4f * density, value.textSize * .14f)
+    val verticalPadding = max(2f * density, value.textSize * .09f)
+    val bounds =
+      RectF(
+        x - horizontalPadding,
+        baseline + value.ascent - verticalPadding,
+        x + value.textWidth + horizontalPadding,
+        baseline + value.descent + verticalPadding,
+      )
+    val fillAlpha = (opacity * 150f).toInt().coerceIn(0, 255)
+    val borderAlpha = (opacity * 255f).toInt().coerceIn(0, 255)
+    localHighlightPaint.color = Color.argb(fillAlpha, 255, 92, 138)
+    localHighlightBorderPaint.color = Color.argb(borderAlpha, 255, 232, 240)
+    localHighlightBorderPaint.strokeWidth = max(1f * density, value.textSize * .045f)
+    val radius = minOf(bounds.height() / 2f, 8f * density)
+    canvas.drawRoundRect(bounds, radius, radius, localHighlightPaint)
+    canvas.drawRoundRect(bounds, radius, radius, localHighlightBorderPaint)
   }
 
   private fun drawInlineDanmaku(

@@ -673,10 +673,24 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     val data = playData ?: return
     if (!data.supportsPremiumAudio(mode)) return
     val nextData = data.copy(premiumAudioMode = mode.takeUnless { data.premiumAudioMode == it })
+    val player = exoPlayer
+    val resumePositionMs = player?.currentPosition?.coerceAtLeast(0L) ?: 0L
+    val shouldPlay = player?.playWhenReady == true
     playData = nextData
     _playerState.value = PlayerState.Ready(nextData)
     pendingAudioTrackId = BiliDashManifest.audioTrackId(nextData)
-    exoPlayer?.let { applyPendingTrackOverrides(it.currentTracks) }
+    if (
+      player != null &&
+        player.currentMediaItem != null &&
+        offlinePlaybackEntry == null
+    ) {
+      // 视频页切换高级音质时重建本地 DASH 清单，确保新的音轨真的重新请求并从当前位置继续。
+      resetCdnBufferingDetector()
+      playDash(nextData, resumePositionMs)
+      player.playWhenReady = shouldPlay
+    } else {
+      player?.let { applyPendingTrackOverrides(it.currentTracks) }
+    }
   }
 
   fun selectSubtitle(trackId: String?) {
