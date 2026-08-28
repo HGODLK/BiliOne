@@ -382,10 +382,14 @@ internal fun LiveRoomScreen(
     fullscreenTransitionBusy = true
     onFullscreenTransitionChanged(true)
     fullscreenScope.launch {
-      fullscreenProgress.animateTo(
-        1f,
-        tween(if (settings.reduceMotion) 100 else 360, easing = FastOutSlowInEasing),
-      )
+      if (settings.disableFullscreenAnimation) {
+        fullscreenProgress.snapTo(1f)
+      } else {
+        fullscreenProgress.animateTo(
+          1f,
+          tween(if (settings.reduceMotion) 100 else 360, easing = FastOutSlowInEasing),
+        )
+      }
       fullscreenTransitionBusy = false
       onFullscreenTransitionChanged(false)
     }
@@ -395,10 +399,14 @@ internal fun LiveRoomScreen(
     fullscreenTransitionBusy = true
     onFullscreenTransitionChanged(true)
     fullscreenScope.launch {
-      fullscreenProgress.animateTo(
-        0f,
-        tween(if (settings.reduceMotion) 100 else 300, easing = FastOutSlowInEasing),
-      )
+      if (settings.disableFullscreenAnimation) {
+        fullscreenProgress.snapTo(0f)
+      } else {
+        fullscreenProgress.animateTo(
+          0f,
+          tween(if (settings.reduceMotion) 100 else 300, easing = FastOutSlowInEasing),
+        )
+      }
       fullscreenLayerVisible = false
       fullscreenTransitionBusy = false
       onFullscreenTransitionChanged(false)

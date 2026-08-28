@@ -63,12 +63,7 @@ object BiliFollowApi {
     page: Int = 1,
     orderType: String = "",
   ): FollowingResponse {
-    val encodedOrderType = URLEncoder.encode(orderType, "UTF-8")
-    val resp =
-      BiliHttpClient.get(
-        "https://api.bilibili.com/x/relation/BiliApiCommon.TAG?tagid=$groupId&pn=$page&ps=50" +
-          "&order_type=$encodedOrderType"
-      )
+    val resp = BiliHttpClient.get(followingGroupMembersUrl(groupId, page, orderType))
     val json = JSONObject(resp.body?.string().orEmpty())
     resp.close()
     if (json.optInt("code") != 0) throw IllegalStateException(json.optString("message"))
@@ -84,7 +79,7 @@ object BiliFollowApi {
     return FollowingResponse(items, total, items.size >= 50)
   }
 
-  private fun parseFollowingUsers(array: org.json.JSONArray): List<FollowingUser> = buildList {
+  internal fun parseFollowingUsers(array: org.json.JSONArray): List<FollowingUser> = buildList {
     for (i in 0 until array.length()) {
       val item = array.optJSONObject(i) ?: continue
       val groups = item.optJSONArray("tag")
@@ -104,6 +99,16 @@ object BiliFollowApi {
         )
       )
     }
+  }
+
+  internal fun followingGroupMembersUrl(
+    groupId: Long,
+    page: Int,
+    orderType: String,
+  ): String {
+    val encodedOrderType = URLEncoder.encode(orderType, "UTF-8")
+    return "https://api.bilibili.com/x/relation/tag?tagid=$groupId&pn=$page&ps=50" +
+      "&order_type=$encodedOrderType"
   }
 
   /** 关注或取关：act=1 关注、act=2 取关。 */

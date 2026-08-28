@@ -118,6 +118,7 @@ data class AppSettings(
   val twoFingerSeekGesture: Boolean = true,
   val fullscreenInfoGesture: Boolean = true,
   val reduceMotion: Boolean = false,
+  val disableFullscreenAnimation: Boolean = false,
   val glassEffects: Boolean = true,
   val disableColorfulCards: Boolean = false,
   val limitImageLoadingSpeed: Boolean = false,
@@ -202,6 +203,7 @@ class AppSettingsViewModel(application: Application) : AndroidViewModel(applicat
       .putBoolean("two_finger_seek_gesture", value.twoFingerSeekGesture)
       .putBoolean("fullscreen_info_gesture", value.fullscreenInfoGesture)
       .putBoolean("reduce_motion", value.reduceMotion)
+      .putBoolean("disable_fullscreen_animation", value.disableFullscreenAnimation)
       .putBoolean("glass_effects", value.glassEffects)
       .putBoolean("disable_colorful_cards", value.disableColorfulCards)
       .putBoolean("limit_image_loading_speed", value.limitImageLoadingSpeed)
@@ -295,6 +297,7 @@ class AppSettingsViewModel(application: Application) : AndroidViewModel(applicat
         },
       fullscreenInfoGesture = prefs.getBoolean("fullscreen_info_gesture", true),
       reduceMotion = prefs.getBoolean("reduce_motion", false),
+      disableFullscreenAnimation = prefs.getBoolean("disable_fullscreen_animation", false),
       glassEffects = prefs.getBoolean("glass_effects", true),
       disableColorfulCards = prefs.getBoolean("disable_colorful_cards", false),
       limitImageLoadingSpeed = prefs.getBoolean("limit_image_loading_speed", false),

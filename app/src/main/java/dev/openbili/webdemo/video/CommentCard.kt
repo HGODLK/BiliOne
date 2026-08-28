@@ -44,6 +44,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -178,7 +179,7 @@ private object CommentMediaResolutionCache {
 @Composable
 internal fun CommentImageGallery(
   images: List<CommentImage>,
-  onPreview: (CommentImage, Rect) -> Unit,
+  onPreview: (List<CommentImage>, Int, Rect) -> Unit,
   trackBounds: Boolean = true,
   modifier: Modifier = Modifier,
 ) {
@@ -194,7 +195,7 @@ internal fun CommentImageGallery(
         CommentImageThumbnail(
           image = image,
           contentDescription = "评论图片",
-          onPreview = onPreview,
+          onPreview = { previewImage, bounds -> onPreview(listOf(previewImage), 0, bounds) },
           trackBounds = trackBounds,
           contentScale = ContentScale.Fit,
           modifier =
@@ -213,7 +214,16 @@ internal fun CommentImageGallery(
               CommentImageThumbnail(
                 image = image,
                 contentDescription = "评论图片 ${rowIndex * columns + columnIndex + 1}",
-                onPreview = onPreview,
+                onPreview = { previewImage, bounds ->
+                  val index = rowIndex * columns + columnIndex
+                  onPreview(
+                    images.mapIndexed { imageIndex, original ->
+                      if (imageIndex == index) previewImage else original
+                    },
+                    index,
+                    bounds,
+                  )
+                },
                 trackBounds = trackBounds,
                 modifier = Modifier.weight(1f).aspectRatio(1f),
               )
@@ -260,23 +270,34 @@ internal fun CommentImageThumbnail(
           crop = contentScale == ContentScale.Crop,
         )
       }
+    val originalUrl = remember(image.url) { fullResolutionCommentImageUrl(image.url) }
+    var useOriginalSource by remember(image.url, thumbnail.url) { mutableStateOf(false) }
+    val displayedUrl = if (useOriginalSource) originalUrl else thumbnail.url
     val request =
-      remember(context, thumbnail) {
+      remember(context, displayedUrl, thumbnail.widthPx, thumbnail.heightPx) {
         ImageRequest.Builder(context)
-          .data(thumbnail.url)
+          .data(displayedUrl)
           .size(thumbnail.widthPx, thumbnail.heightPx)
           .precision(Precision.INEXACT)
           .build()
       }
-    AsyncImage(
-      model = request,
-      contentDescription = contentDescription,
-      modifier =
-        Modifier.fillMaxSize().clickable {
-          onPreview(image.copy(url = thumbnail.url), bounds.rect())
+    // LazyColumn 会复用同 contentType 的评论槽位；把 Painter 状态绑定到实际 URL，避免
+    // 新评论加载时短暂沿用上一条评论的图片。样式缩略图失败时才回退原图，超长图仍
+    // 优先使用上面的限尺寸请求。
+    key(displayedUrl) {
+      AsyncImage(
+        model = request,
+        contentDescription = contentDescription,
+        modifier =
+          Modifier.fillMaxSize().clickable {
+            onPreview(image.copy(url = displayedUrl), bounds.rect())
+          },
+        contentScale = contentScale,
+        onError = {
+          if (!useOriginalSource && displayedUrl != originalUrl) useOriginalSource = true
         },
-      contentScale = contentScale,
-    )
+      )
+    }
   }
 }
 
@@ -304,7 +325,7 @@ internal fun CommentRow(
   onLike: (CommentItem) -> Unit,
   uploaderMid: Long,
   onProfileClick: (Long, CommentItem, CommentProfileAnchor) -> Unit,
-  onImagePreview: (CommentImage, Rect) -> Unit,
+  onImagePreview: (List<CommentImage>, Int, Rect) -> Unit,
   onReplies: (CommentItem, Rect) -> Unit,
   onReply: (CommentItem) -> Unit,
   replyEnabled: Boolean = true,
@@ -515,7 +536,28 @@ internal fun CommentRow(
           }
         }
     }
-  val parsedVideoLinks = remember(comment.content) { parseCommentVideoLinks(comment.content) }
+  val parsedCommentMediaLinks =
+    remember(comment.content, comment.jumpLinks) {
+      parseCommentVideoLinks(comment.content).withCommentJumpLinks(comment.jumpLinks)
+    }
+  val pendingShortVideoUrls =
+    remember(parsedCommentMediaLinks) {
+      parsedCommentMediaLinks.pendingVideoLinks.map { it.targetUrl }.distinct()
+    }
+  var resolvedShortVideoLinks by
+    remember(comment.rpid, pendingShortVideoUrls) { mutableStateOf(emptyMap<String, String>()) }
+  LaunchedEffect(pendingShortVideoUrls) {
+    resolvedShortVideoLinks =
+      withContext(Dispatchers.IO) {
+        pendingShortVideoUrls.mapNotNull { url ->
+          CommentShortVideoLinkResolver.resolve(url)?.let { reference -> url to reference }
+        }.toMap()
+      }
+  }
+  val parsedVideoLinks =
+    remember(parsedCommentMediaLinks, resolvedShortVideoLinks) {
+      parsedCommentMediaLinks.withResolvedShortLinks(resolvedShortVideoLinks)
+    }
   val linkedBvids =
     remember(parsedVideoLinks) { parsedVideoLinks.links.map { it.bvid }.distinct() }
   val linkedArticleRefs =

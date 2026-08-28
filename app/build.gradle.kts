@@ -57,8 +57,8 @@ android {
     minSdk = 23
     targetSdk = 37
     // Increment when launcher artwork changes so OEM launchers invalidate their icon cache.
-    versionCode = 8
-    versionName = "0.4.0"
+    versionCode = 9
+    versionName = "0.4.1"
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     vectorDrawables.useSupportLibrary = true
     buildConfigField(

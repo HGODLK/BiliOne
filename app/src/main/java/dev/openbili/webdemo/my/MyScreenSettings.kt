@@ -609,6 +609,15 @@ internal fun SettingsPane(
     }
     item {
       SettingsSwitch(
+        "关闭全屏动画",
+        "全屏动画在某些设备上表现不佳，可选择关闭",
+        settings.disableFullscreenAnimation,
+      ) {
+        onChange { value -> value.copy(disableFullscreenAnimation = it) }
+      }
+    }
+    item {
+      SettingsSwitch(
         "减少动态效果",
         "缩短或关闭页面切换、共享元素和播放器动效",
         settings.reduceMotion,

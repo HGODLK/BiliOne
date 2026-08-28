@@ -347,6 +347,8 @@ internal class AppRootFeedContext(
               state = searchState,
               gridState = searchGridState,
               columns = settings.homeGridColumns,
+              onQuery = searchViewModel::setQuery,
+              onSearch = searchViewModel::search,
               onCategory = searchViewModel::selectCategory,
               onOrder = searchViewModel::selectOrder,
               onArticleOrder = searchViewModel::selectArticleOrder,

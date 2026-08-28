@@ -4,6 +4,7 @@ import android.app.Application
 import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.net.Uri
+import android.os.SystemClock
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.lifecycle.AndroidViewModel
@@ -114,7 +115,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
   private var cdnFallbackJob: Job? = null
   private var undefinedCdnLoadJob: Job? = null
   private var cdnFallbackInProgress = false
-  private var skipNextCdnBufferingFallback = false
+  private val shortBufferingDetector = CdnShortBufferingDetector()
   private var unlockDolbyVision = false
   private var unlockDolbyAtmos = false
   private var unlockHiRes = false
@@ -479,13 +480,30 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
           if (playbackState == Player.STATE_BUFFERING && liveRoomId == null) {
             undefinedCdnLoadJob?.cancel()
             undefinedCdnLoadJob = null
-            if (!skipNextCdnBufferingFallback) scheduleCdnFallback(player)
+            when (
+              shortBufferingDetector.onBuffering(
+                startedAtMs = SystemClock.elapsedRealtime(),
+                countShortBuffering = player.playWhenReady,
+              )
+            ) {
+              ShortBufferingDecision.USER_SEEK_LOAD -> Unit
+              ShortBufferingDecision.SWITCH_CDN -> {
+                cdnFallbackJob?.cancel()
+                cdnFallbackJob = null
+                fallbackToNextCdn(
+                  player,
+                  "$SHORT_CDN_BUFFERING_WINDOW_MS ms 内短卡顿 $SHORT_CDN_BUFFERING_LIMIT 次",
+                )
+              }
+              ShortBufferingDecision.NOT_COUNTED,
+              ShortBufferingDecision.COUNTED -> scheduleCdnFallback(player)
+            }
           } else if (playbackState == Player.STATE_READY) {
             undefinedCdnLoadJob?.cancel()
             undefinedCdnLoadJob = null
             cdnFallbackJob?.cancel()
             cdnFallbackJob = null
-            skipNextCdnBufferingFallback = false
+            shortBufferingDetector.onReady()
             failedPlaybackPositionMs = 0L
           } else if (playbackState == Player.STATE_ENDED || playbackState == Player.STATE_IDLE) {
             resetCdnBufferingDetector()
@@ -642,8 +660,8 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
    * 播放区间。
    */
   fun resetCdnBufferingDetectorForUserSeek() {
-    skipNextCdnBufferingFallback = true
-    resetCdnBufferingDetector(clearSeekSuppression = false)
+    resetCdnBufferingDetector()
+    shortBufferingDetector.onUserSeek()
   }
 
   fun switchQuality(streamIndex: Int) {
@@ -957,13 +975,12 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
       delay(SLOW_CDN_BUFFERING_TIMEOUT_MS)
       if (
         cdnFallbackInProgress ||
-          skipNextCdnBufferingFallback ||
           player.playbackState != Player.STATE_BUFFERING ||
           !player.playWhenReady
       ) {
         return@launch
       }
-      fallbackToNextCdn(player)
+      fallbackToNextCdn(player, "连续缓冲 ${SLOW_CDN_BUFFERING_TIMEOUT_MS} ms")
     }
   }
 
@@ -974,18 +991,17 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
       delay(UNDEFINED_CDN_LOAD_TIMEOUT_MS)
       if (
         cdnFallbackInProgress ||
-          skipNextCdnBufferingFallback ||
           player.playbackState == Player.STATE_BUFFERING ||
           player.playbackState == Player.STATE_READY ||
           !player.playWhenReady
       ) {
         return@launch
       }
-      fallbackToNextCdn(player)
+      fallbackToNextCdn(player, "未进入明确缓冲状态 ${UNDEFINED_CDN_LOAD_TIMEOUT_MS} ms")
     }
   }
 
-  private fun fallbackToNextCdn(player: ExoPlayer) {
+  private fun fallbackToNextCdn(player: ExoPlayer, reason: String) {
     if (cdnFallbackInProgress) return
     val data = playData ?: return
     val index = data.currentStreamIndex
@@ -1004,11 +1020,12 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     cdnFallbackInProgress = true
     cdnFallbackJob = null
+    shortBufferingDetector.reset()
     playData = nextData
     _playerState.value = PlayerState.Ready(nextData)
     Log.w(
       TAG,
-      "buffering for ${SLOW_CDN_BUFFERING_TIMEOUT_MS}ms; switching ${stream.quality} to backup CDN",
+      "$reason，切换 ${stream.quality} 到备用 CDN",
     )
     playDash(nextData, resumePositionMs)
     player.playWhenReady = shouldPlay
@@ -1016,13 +1033,13 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     if (player.playbackState == Player.STATE_BUFFERING) scheduleCdnFallback(player)
   }
 
-  private fun resetCdnBufferingDetector(clearSeekSuppression: Boolean = true) {
+  private fun resetCdnBufferingDetector() {
     cdnFallbackJob?.cancel()
     cdnFallbackJob = null
     undefinedCdnLoadJob?.cancel()
     undefinedCdnLoadJob = null
     cdnFallbackInProgress = false
-    if (clearSeekSuppression) skipNextCdnBufferingFallback = false
+    shortBufferingDetector.reset()
   }
 
   private fun playCompatibilityStream(

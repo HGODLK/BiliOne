@@ -186,6 +186,7 @@ import dev.openbili.webdemo.ui.LocalControlFocusVisible
 import dev.openbili.webdemo.ui.LocalControlMode
 import dev.openbili.webdemo.ui.LocalColorfulCardsEnabled
 import dev.openbili.webdemo.ui.LocalVideoCardContentColors
+import dev.openbili.webdemo.ui.ReplyThreadUiState
 import dev.openbili.webdemo.ui.SessionPhase
 import dev.openbili.webdemo.ui.StableBoundsTracker
 import dev.openbili.webdemo.ui.TransitionPreparationBarrier
@@ -250,6 +251,7 @@ fun VideoScreen(
   replyItems: List<CommentItem>,
   replyHasMore: Boolean,
   repliesLoading: Boolean,
+  replyThreadUiState: ReplyThreadUiState,
   emotes: List<BiliEmote>,
   emotePackages: List<BiliEmotePackage>,
   mentionSuggestions: List<MentionSuggestion>,
@@ -299,8 +301,8 @@ fun VideoScreen(
   onLoadMoreComments: () -> Unit,
   onRefreshComments: () -> Unit,
   onCommentSort: (CommentSort) -> Unit,
-  onPostComment: (String, Uri?) -> Unit,
-  onPostReply: (CommentItem, CommentItem, String, Uri?) -> Unit,
+  onPostComment: suspend (String, Uri?) -> Boolean,
+  onPostReply: suspend (CommentItem, CommentItem, String, Uri?) -> Boolean,
   onLikeComment: (CommentItem) -> Unit,
   onDeleteComment: (CommentItem) -> Unit,
   onToggleCommentPin: (CommentItem) -> Unit = {},
@@ -313,6 +315,7 @@ fun VideoScreen(
   onLoadMoreReplies: () -> Unit,
   onRefreshReplies: () -> Unit,
   onDismissReplies: () -> Unit,
+  onReplyThreadScrollChanged: (Long, Int, Int) -> Unit,
   onCommentNavigationConsumed: () -> Unit,
   onProfileClick: (Long, String?, String?, Rect) -> Unit,
   onUploaderProfileClick: (Long, String?, String?, Rect) -> Unit,
@@ -878,10 +881,14 @@ fun VideoScreen(
     transitionScope.launch {
       // 让宿主在边界开始移动前隐藏独立的弹幕 Surface。
       withFrameNanos {}
-      fullscreenProgress.animateTo(
-        1f,
-        tween(transitionDuration, easing = FastOutSlowInEasing),
-      )
+      if (settings.disableFullscreenAnimation) {
+        fullscreenProgress.snapTo(1f)
+      } else {
+        fullscreenProgress.animateTo(
+          1f,
+          tween(transitionDuration, easing = FastOutSlowInEasing),
+        )
+      }
       fullscreenTransitionBusy = false
       onFullscreenTransitionChanged(false)
       if (controlMode) {
@@ -903,10 +910,14 @@ fun VideoScreen(
       showVideoInfo = false
       // SurfaceView 可见性在遍历期间应用：只在下一帧动画。
       withFrameNanos {}
-      fullscreenProgress.animateTo(
-        0f,
-        tween(if (settings.reduceMotion) 100 else 300, easing = FastOutSlowInEasing),
-      )
+      if (settings.disableFullscreenAnimation) {
+        fullscreenProgress.snapTo(0f)
+      } else {
+        fullscreenProgress.animateTo(
+          0f,
+          tween(if (settings.reduceMotion) 100 else 300, easing = FastOutSlowInEasing),
+        )
+      }
       fullscreenLayerVisible = false
       trackEmbeddedPlayerBounds = true
       // 全屏层在被移除前拥有指针流：交接后重建窗口手势闸门，让已完成的全屏手势
@@ -1807,6 +1818,7 @@ fun VideoScreen(
             replyItems = replyItems,
             replyHasMore = replyHasMore,
             repliesLoading = repliesLoading,
+            replyThreadUiState = replyThreadUiState,
             emotes = emotes,
             emotePackages = emotePackages,
             mentionSuggestions = mentionSuggestions,
@@ -1863,6 +1875,7 @@ fun VideoScreen(
             onLoadMoreReplies = onLoadMoreReplies,
             onRefreshReplies = onRefreshReplies,
             onDismissReplies = onDismissReplies,
+            onReplyThreadScrollChanged = onReplyThreadScrollChanged,
             onCommentNavigationConsumed = onCommentNavigationConsumed,
             onProfileClick = { mid, face, name, bounds ->
               leaveHdrPlaybackPage()
@@ -1914,13 +1927,14 @@ fun VideoScreen(
             onSwitchQuality = onSwitchQuality,
             premiumAudioVisible = premiumAudioVisible,
             commentImageEnabled = commentImageEnabled,
-            onCommentImagePreview = { image, bounds ->
+            onCommentImagePreview = { images, initialIndex, bounds ->
               openVideoCommentImagePreview(
                 previewState = commentImagePreviewState,
                 previewJobState = commentImagePreviewJobState,
                 scope = transitionScope,
                 reduceMotion = settings.reduceMotion,
-                image = image,
+                images = images,
+                initialIndex = initialIndex,
                 bounds = bounds,
               )
             },

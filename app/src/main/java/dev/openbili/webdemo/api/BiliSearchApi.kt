@@ -90,7 +90,7 @@ object BiliSearchApi {
             item.optLong("play"),
             item.optLong("video_review"),
             duration,
-            item.optLong("senddate"),
+            searchVideoPublishedAt(item),
             description =
               BiliArticleApi.decodePlatformHtmlText(item.optString("description")),
           )
@@ -99,6 +99,10 @@ object BiliSearchApi {
     }
     return FeedResponse(cards)
   }
+
+  /** 搜索卡片优先展示投稿时间；旧响应缺少该字段时才回退到发送时间。 */
+  internal fun searchVideoPublishedAt(item: JSONObject): Long =
+    item.optLong("pubdate").takeIf { it > 0L } ?: item.optLong("senddate")
 
   /** 搜索番剧/影视。 */
   fun searchBangumi(

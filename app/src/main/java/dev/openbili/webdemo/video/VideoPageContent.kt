@@ -111,6 +111,7 @@ import dev.openbili.webdemo.feed.LocalFeedImageLoadPolicy
 import dev.openbili.webdemo.feed.rememberListFeedImageLoadPolicy
 import dev.openbili.webdemo.settings.AppSettings
 import dev.openbili.webdemo.ui.PullRefreshContainer
+import dev.openbili.webdemo.ui.ReplyThreadUiState
 import dev.openbili.webdemo.ui.LocalControlFocusVisible
 import dev.openbili.webdemo.ui.StableBoundsTracker
 import dev.openbili.webdemo.ui.TransitionPreparationBarrier
@@ -161,6 +162,7 @@ internal fun VideoContent(
   replyItems: List<CommentItem>,
   replyHasMore: Boolean,
   repliesLoading: Boolean,
+  replyThreadUiState: ReplyThreadUiState,
   emotes: List<BiliEmote>,
   emotePackages: List<BiliEmotePackage>,
   mentionSuggestions: List<MentionSuggestion>,
@@ -199,8 +201,8 @@ internal fun VideoContent(
   onLoadMoreComments: () -> Unit,
   onRefreshComments: () -> Unit,
   onCommentSort: (CommentSort) -> Unit,
-  onPostComment: (String, Uri?) -> Unit,
-  onPostReply: (CommentItem, CommentItem, String, Uri?) -> Unit,
+  onPostComment: suspend (String, Uri?) -> Boolean,
+  onPostReply: suspend (CommentItem, CommentItem, String, Uri?) -> Boolean,
   onLikeComment: (CommentItem) -> Unit,
   onDeleteComment: (CommentItem) -> Unit,
   onToggleCommentPin: (CommentItem) -> Unit = {},
@@ -213,6 +215,7 @@ internal fun VideoContent(
   onLoadMoreReplies: () -> Unit,
   onRefreshReplies: () -> Unit,
   onDismissReplies: () -> Unit,
+  onReplyThreadScrollChanged: (Long, Int, Int) -> Unit,
   onCommentNavigationConsumed: () -> Unit,
   onProfileClick: (Long, String?, String?, Rect) -> Unit,
   onCommentProfileClick: (Long, CommentItem, CommentProfileAnchor) -> Unit,
@@ -240,7 +243,7 @@ internal fun VideoContent(
   onSwitchQuality: (Int) -> Unit,
   premiumAudioVisible: Boolean,
   commentImageEnabled: Boolean,
-  onCommentImagePreview: (CommentImage, Rect) -> Unit,
+  onCommentImagePreview: (List<CommentImage>, Int, Rect) -> Unit,
   onSwitchPremiumAudio: (PremiumAudioMode) -> Unit,
   subtitleState: PlayerSubtitleState,
   onSelectSubtitle: (String?) -> Unit,
@@ -522,6 +525,21 @@ internal fun VideoContent(
       replyPreparation = null
     } else if (root != null) {
       replyClosing = false
+      if (
+        replyThreadUiState.restoreExpanded &&
+          replyThreadUiState.openedRootRpid == root.rpid
+      ) {
+        replyPreparation?.cancel()
+        replyPreparation = null
+        displayedReplyRoot = root
+        replyTransitionProgress.snapTo(1f)
+        replyContentReady = true
+        if (controllerOwnsInteraction) {
+          withFrameNanos {}
+          runCatching { controlReplyEntryFocusRequester.requestFocus() }
+        }
+        return@LaunchedEffect
+      }
       val preparation =
         TransitionPreparationBarrier(
           setOf(
@@ -1402,6 +1420,17 @@ internal fun VideoContent(
                   onDismiss = {
                     if (!replyClosing) replyDismissRequestId += 1L
                   },
+                  initialFirstVisibleItemIndex =
+                    replyThreadUiState.firstVisibleItemIndex.takeIf {
+                      replyThreadUiState.openedRootRpid == root.rpid
+                    } ?: 0,
+                  initialFirstVisibleItemScrollOffset =
+                    replyThreadUiState.firstVisibleItemScrollOffset.takeIf {
+                      replyThreadUiState.openedRootRpid == root.rpid
+                    } ?: 0,
+                  onScrollPositionChanged = { index, offset ->
+                    onReplyThreadScrollChanged(root.rpid, index, offset)
+                  },
                   bottomClearancePx = commentComposerBounds.height,
                   hiddenCommentAvatarRpid = hiddenCommentAvatarRpid,
                   hiddenLinkedVideoCoverItemId = hiddenRecommendationCoverItemId,
@@ -1480,11 +1509,15 @@ internal fun VideoContent(
         imageEnabled = commentImageEnabled,
         onSend = { message, imageUri ->
           val target = replyTarget
-          if (target == null) onPostComment(message, imageUri)
-          else {
-            onPostReply(replyTargetRoot ?: target, target, message, imageUri)
-            replyTargetRoot = null
-            replyTarget = null
+          if (target == null) {
+            onPostComment(message, imageUri)
+          } else {
+            onPostReply(replyTargetRoot ?: target, target, message, imageUri).also { sent ->
+              if (sent) {
+                replyTargetRoot = null
+                replyTarget = null
+              }
+            }
           }
         },
         onDetachedModeChanged = { detached ->

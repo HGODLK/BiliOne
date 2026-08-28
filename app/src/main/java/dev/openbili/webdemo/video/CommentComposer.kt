@@ -61,6 +61,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -90,6 +91,7 @@ import dev.openbili.webdemo.api.MentionSuggestion
 import dev.openbili.webdemo.ui.VideoPageSurfaceTokens
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @Composable
 internal fun CommentComposer(
@@ -101,7 +103,7 @@ internal fun CommentComposer(
   targetName: String? = null,
   onClearTarget: () -> Unit = {},
   imageEnabled: Boolean,
-  onSend: (String, Uri?) -> Unit,
+  onSend: suspend (String, Uri?) -> Boolean,
   onDetachedModeChanged: (Boolean) -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
@@ -113,6 +115,8 @@ internal fun CommentComposer(
   var detachedByVisualLines by remember { mutableStateOf(false) }
   var detachedReleaseLength by remember { mutableIntStateOf(0) }
   var imageUri by remember { mutableStateOf<Uri?>(null) }
+  var sending by remember { mutableStateOf(false) }
+  val sendScope = rememberCoroutineScope()
   val imagePicker =
     rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { selected ->
       if (selected != null) {
@@ -411,28 +415,43 @@ internal fun CommentComposer(
           }
           Surface(
             shape = CircleShape,
-            color = if (text.isNotBlank()) MaterialTheme.colorScheme.primary else inputFieldColor,
+            color =
+              if (text.isNotBlank() && !sending) MaterialTheme.colorScheme.primary
+              else inputFieldColor,
           ) {
             IconButton(
               onClick = {
                 val message = emoteMarkers.decode(text).trim()
-                if (message.isNotEmpty()) {
-                  onSend(message, imageUri)
-                  editorState.edit { delete(0, length) }
-                  imageUri = null
-                  showTools = false
+                if (message.isNotEmpty() && !sending) {
+                  val pendingImageUri = imageUri
+                  sending = true
+                  sendScope.launch {
+                    try {
+                      if (onSend(message, pendingImageUri)) {
+                        editorState.edit { delete(0, length) }
+                        if (imageUri == pendingImageUri) imageUri = null
+                        showTools = false
+                      }
+                    } finally {
+                      sending = false
+                    }
+                  }
                 }
               },
-              enabled = text.isNotBlank(),
+              enabled = text.isNotBlank() && !sending,
               modifier = Modifier.size(54.dp),
             ) {
-              Icon(
-                Icons.AutoMirrored.Filled.Send,
-                "发表",
-                tint =
-                  if (text.isNotBlank()) MaterialTheme.colorScheme.onPrimary
-                  else MaterialTheme.colorScheme.onSurfaceVariant,
-              )
+              if (sending) {
+                CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+              } else {
+                Icon(
+                  Icons.AutoMirrored.Filled.Send,
+                  "发表",
+                  tint =
+                    if (text.isNotBlank()) MaterialTheme.colorScheme.onPrimary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+              }
             }
           }
         }

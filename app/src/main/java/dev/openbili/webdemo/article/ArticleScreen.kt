@@ -93,6 +93,7 @@ import dev.openbili.webdemo.api.ArticleBlock
 import dev.openbili.webdemo.api.ArticleDetail
 import dev.openbili.webdemo.api.ArticleItem
 import dev.openbili.webdemo.api.BiliCommentApi
+import dev.openbili.webdemo.api.BiliCommentWebRiskProvider
 import dev.openbili.webdemo.api.BiliEmote
 import dev.openbili.webdemo.api.BiliEmotePackage
 import dev.openbili.webdemo.api.BiliVideoApi
@@ -213,12 +214,16 @@ fun ArticleScreen(
     }
   }
 
-  fun openImage(image: CommentImage, bounds: Rect) {
+  fun openImages(images: List<CommentImage>, initialIndex: Int, bounds: Rect) {
     if (!interactionEnabled || bounds.width <= 0f || bounds.height <= 0f) return
     imagePreview =
-      CommentImagePreviewSession(image, bounds).also { session ->
+      CommentImagePreviewSession(images, initialIndex, bounds).also { session ->
         scope.launch { session.progress.animateTo(1f, tween(280)) }
       }
+  }
+
+  fun openImage(image: CommentImage, bounds: Rect) {
+    openImages(listOf(image), 0, bounds)
   }
 
   fun closeImage() {
@@ -691,7 +696,7 @@ fun ArticleScreen(
                   onLike = ::likeComment,
                   uploaderMid = shownArticle.authorMid,
                   onProfileClick = onCommentProfile,
-                  onImagePreview = ::openImage,
+                  onImagePreview = ::openImages,
                   onReplies = { target, bounds ->
                     replySourceBounds = bounds
                     replies = emptyList()
@@ -757,39 +762,47 @@ fun ArticleScreen(
         imageEnabled = false,
         onSend = { message, _ ->
           val target = replyTarget
-          scope.launch {
-            runCatching {
-                withContext(Dispatchers.IO) {
-                  if (target == null) BiliCommentApi.addComment(commentOid, message, commentType)
-                  else
-                    BiliCommentApi.addReply(
-                      commentOid,
-                      (replyTargetRoot ?: target).rpid,
-                      target.rpid,
-                      message,
-                      commentType,
-                    )
-                }
-              }
-              .onSuccess { added ->
+          try {
+            val riskParameters = BiliCommentWebRiskProvider.collect(context)
+            val added =
+              withContext(Dispatchers.IO) {
                 if (target == null) {
-                  comments = listOf(added) + comments
-                  commentTotal += 1
-                } else {
-                  val root = replyTargetRoot ?: target
-                  comments = comments.map { comment ->
-                    if (comment.rpid == root.rpid) {
-                      comment.copy(replyCount = comment.replyCount + 1)
-                    } else comment
-                  }
-                  replies = (replies + added).distinctBy { it.rpid }
+                  BiliCommentApi.addComment(
+                    commentOid,
+                    message,
+                    riskParameters,
+                    commentType,
+                  )
                 }
-                replyTarget = null
-                replyTargetRoot = null
+                else
+                  BiliCommentApi.addReply(
+                    commentOid,
+                    (replyTargetRoot ?: target).rpid,
+                    target.rpid,
+                    message,
+                    riskParameters,
+                    commentType,
+                  )
               }
-              .onFailure {
-                Toast.makeText(context, it.message ?: "发送失败", Toast.LENGTH_SHORT).show()
+            if (target == null) {
+              comments = listOf(added) + comments
+              commentTotal += 1
+            } else {
+              val root = replyTargetRoot ?: target
+              comments = comments.map { comment ->
+                if (comment.rpid == root.rpid) {
+                  comment.copy(replyCount = comment.replyCount + 1)
+                } else comment
               }
+              replies = (replies + added).distinctBy { it.rpid }
+            }
+            replyTarget = null
+            replyTargetRoot = null
+            true
+          } catch (error: Exception) {
+            if (error is kotlinx.coroutines.CancellationException) throw error
+            Toast.makeText(context, error.message ?: "发送失败", Toast.LENGTH_SHORT).show()
+            false
           }
         },
         modifier =
@@ -851,7 +864,7 @@ fun ArticleScreen(
             onLike = ::likeComment,
             uploaderMid = shownArticle.authorMid,
             onProfileClick = onCommentProfile,
-            onImagePreview = ::openImage,
+            onImagePreview = ::openImages,
             onReply = { rootComment, target ->
               replyTargetRoot = rootComment
               replyTarget = target

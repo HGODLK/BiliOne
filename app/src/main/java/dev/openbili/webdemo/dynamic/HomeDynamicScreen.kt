@@ -280,15 +280,18 @@ fun HomeDynamicScreen(
                 .firstOrNull { it.id == state.selectedDynamicId }
                 ?.let { dynamic -> onVideoClick(dynamic, video, bounds) }
             },
+            onFeedVideoClick = onVideoClick,
             onVideoLongClick = onVideoLongClick,
             onLiveClick = onLiveClick,
             hiddenCoverItemId =
-              state.selectedDynamicId
-                .takeIf { it != null && it == hiddenDynamicId }
-                ?.let { state.items.firstOrNull { item -> item.id == it }?.video?.bvid },
+              hiddenDynamicId?.let { hiddenId ->
+                state.items.firstOrNull { item -> item.id == hiddenId }?.video?.bvid
+              },
             hiddenLiveCoverItemId = hiddenLiveCoverItemId,
-            onVideoBoundsChanged = { _, bounds ->
-              state.selectedDynamicId?.let { onVideoBoundsChanged(it, bounds) }
+            onVideoBoundsChanged = { video, bounds ->
+              state.items
+                .firstOrNull { item -> item.video?.bvid == video.id }
+                ?.let { dynamic -> onVideoBoundsChanged(dynamic.id, bounds) }
             },
             onLiveBoundsChanged = onLiveBoundsChanged,
             onArticleClick = onArticleClick,

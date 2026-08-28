@@ -21,6 +21,7 @@ import dev.openbili.webdemo.api.AccountMessageUserStyle
 import dev.openbili.webdemo.api.ArticleItem
 import dev.openbili.webdemo.api.BangumiWatchProgress
 import dev.openbili.webdemo.api.BiliCommentApi
+import dev.openbili.webdemo.api.BiliCommentWebRiskProvider
 import dev.openbili.webdemo.api.BiliEmotePackage
 import dev.openbili.webdemo.api.BiliFavoriteApi
 import dev.openbili.webdemo.api.BiliFollowApi
@@ -1657,10 +1658,16 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
     viewModelScope.launch {
       _state.value = _state.value.copy(loading = true, error = null)
       try {
-        withContext(Dispatchers.IO) {
-          if (_state.value.section == MySection.MESSAGES || message.isPrivate)
+        if (_state.value.section == MySection.MESSAGES || message.isPrivate) {
+          withContext(Dispatchers.IO) {
             BiliPrivateMessageApi.sendPrivateMessage(mid, message.userMid, text)
-          else BiliPrivateMessageApi.replyToMessage(message, text)
+          }
+        } else {
+          val riskParameters =
+            BiliCommentWebRiskProvider.collect(getApplication<Application>())
+          withContext(Dispatchers.IO) {
+            BiliPrivateMessageApi.replyToMessage(message, text, riskParameters)
+          }
         }
         val sentAt = System.currentTimeMillis() / 1000L
         val current = _state.value

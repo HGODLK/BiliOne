@@ -10,6 +10,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
@@ -92,6 +93,7 @@ import coil3.imageLoader
 import coil3.request.ImageRequest
 import dev.openbili.webdemo.api.ArticleItem
 import dev.openbili.webdemo.api.BiliCommentApi
+import dev.openbili.webdemo.api.BiliCommentWebRiskProvider
 import dev.openbili.webdemo.api.BiliEmote
 import dev.openbili.webdemo.api.BiliEmotePackage
 import dev.openbili.webdemo.api.BiliFollowApi
@@ -132,7 +134,9 @@ import dev.openbili.webdemo.video.CommentImagePreviewOverlay
 import dev.openbili.webdemo.video.CommentImagePreviewSession
 import dev.openbili.webdemo.video.CommentProfileAnchor
 import dev.openbili.webdemo.video.CommentRow
+import dev.openbili.webdemo.video.closeVideoCommentImagePreview
 import dev.openbili.webdemo.video.formatCompactCount
+import dev.openbili.webdemo.video.openVideoCommentImagePreview
 import dev.openbili.webdemo.video.ReplyThreadPanel
 import dev.openbili.webdemo.video.ReplyThreadTransitionContainer
 import java.time.format.DateTimeFormatter
@@ -298,6 +302,7 @@ internal fun ProfileDynamicGrid(
   onDetailOverlayActiveChanged: (Boolean) -> Unit = {},
   onDetailTransitionRunningChanged: (Boolean) -> Unit = {},
   onVideoClick: (FeedItem, Rect) -> Unit,
+  onFeedVideoClick: ((SpaceDynamicItem, FeedItem, Rect) -> Unit)? = null,
   onVideoLongClick: (FeedItem) -> Unit,
   onLiveClick: (LiveSearchRoom, Rect) -> Unit = { _, _ -> },
   onLiveBoundsChanged: (LiveSearchRoom, Rect) -> Unit = { _, _ -> },
@@ -325,6 +330,7 @@ internal fun ProfileDynamicGrid(
   val state = rememberLazyStaggeredGridState()
   val imageLoadPolicy = rememberStaggeredFeedImageLoadPolicy(state)
   val context = LocalContext.current
+  val scope = rememberCoroutineScope()
   val prefetchedDynamicImages = remember { mutableSetOf<String>() }
   LaunchedEffect(searchQuery, scrollToTopKey) { state.scrollToItem(0) }
   val cardBounds = remember(profile?.mid) { mutableMapOf<String, Rect>() }
@@ -335,6 +341,10 @@ internal fun ProfileDynamicGrid(
   var transitionTargetBounds by remember(profile?.mid) { mutableStateOf(Rect.Zero) }
   var managedDynamicId by remember(profile?.mid) { mutableStateOf<String?>(null) }
   var deleteConfirmationId by remember(profile?.mid) { mutableStateOf<String?>(null) }
+  val cardImagePreviewState =
+    remember(profile?.mid) { mutableStateOf<CommentImagePreviewSession?>(null) }
+  val cardImagePreviewJobState = remember(profile?.mid) { mutableStateOf<Job?>(null) }
+  var previewRootBounds by remember(profile?.mid) { mutableStateOf(Rect.Zero) }
   var selectedFilter by rememberSaveable(profile?.mid) { mutableStateOf(ProfileDynamicFilter.ALL) }
   val filteredItems =
     remember(items, selectedFilter, searchQuery) {
@@ -362,11 +372,33 @@ internal fun ProfileDynamicGrid(
     remember(profile?.mid) { Animatable(if (selectedDynamicId == null) 0f else 1f) }
   var detailContentReady by remember(profile?.mid) { mutableStateOf(false) }
   val displayedItem = items.firstOrNull { it.id == displayedDynamicId }
-  DisposableEffect(displayedDynamicId) {
-    onDetailOverlayActiveChanged(displayedDynamicId != null)
+  val overlayActive = displayedDynamicId != null || cardImagePreviewState.value != null
+  DisposableEffect(overlayActive) {
+    onDetailOverlayActiveChanged(overlayActive)
     onDispose {
-      if (displayedDynamicId != null) onDetailOverlayActiveChanged(false)
+      if (overlayActive) onDetailOverlayActiveChanged(false)
     }
+  }
+
+  fun openCardImages(images: List<CommentImage>, initialIndex: Int, bounds: Rect) {
+    openVideoCommentImagePreview(
+      previewState = cardImagePreviewState,
+      previewJobState = cardImagePreviewJobState,
+      scope = scope,
+      reduceMotion = settings.reduceMotion,
+      images = images,
+      initialIndex = initialIndex,
+      bounds = bounds,
+    )
+  }
+
+  fun closeCardImages() {
+    closeVideoCommentImagePreview(
+      previewState = cardImagePreviewState,
+      previewJobState = cardImagePreviewJobState,
+      scope = scope,
+      reduceMotion = settings.reduceMotion,
+    )
   }
   LaunchedEffect(displayedDynamicId, detailContentReady) {
     if (displayedDynamicId != null && detailContentReady) {
@@ -429,7 +461,9 @@ internal fun ProfileDynamicGrid(
       onDetailTransitionRunningChanged(false)
     }
   }
-  Box(Modifier.fillMaxSize()) {
+  Box(
+    Modifier.fillMaxSize().onGloballyPositioned { previewRootBounds = it.boundsInRoot() }
+  ) {
     if (items.isEmpty()) {
       Column(Modifier.fillMaxSize()) {
         if (showFilterRow) {
@@ -625,6 +659,14 @@ internal fun ProfileDynamicGrid(
                     displayedDynamicId = item.id
                     onSelectedDynamicIdChange(item.id)
                   },
+                  onImagePreview = ::openCardImages,
+                  onVideoClick =
+                    onFeedVideoClick?.let { callback ->
+                      { video, bounds -> callback(item, video, bounds) }
+                    },
+                  onVideoLongClick = onVideoLongClick,
+                  hiddenCoverItemId = hiddenCoverItemId,
+                  onVideoBoundsChanged = onVideoBoundsChanged,
                   onLiveClick = onLiveClick,
                   onLiveBoundsChanged = onLiveBoundsChanged,
                   onAvatarClick = { bounds ->
@@ -741,6 +783,14 @@ internal fun ProfileDynamicGrid(
         }
       }
     }
+    cardImagePreviewState.value?.let { session ->
+      CommentImagePreviewOverlay(
+        session = session,
+        rootBounds = previewRootBounds,
+        onDismiss = ::closeCardImages,
+        modifier = Modifier.fillMaxSize().zIndex(30f),
+      )
+    }
   }
 }
 
@@ -820,6 +870,11 @@ private fun DynamicCard(
   profile: SpaceProfile?,
   onBoundsChanged: (Rect) -> Unit,
   onClick: () -> Unit,
+  onImagePreview: (List<CommentImage>, Int, Rect) -> Unit,
+  onVideoClick: ((FeedItem, Rect) -> Unit)?,
+  onVideoLongClick: (FeedItem) -> Unit,
+  hiddenCoverItemId: String?,
+  onVideoBoundsChanged: (FeedItem, Rect) -> Unit,
   onLiveClick: (LiveSearchRoom, Rect) -> Unit,
   onLiveBoundsChanged: (LiveSearchRoom, Rect) -> Unit,
   onAvatarClick: (Rect) -> Unit,
@@ -838,6 +893,8 @@ private fun DynamicCard(
   onControlKeyEvent: ((androidx.compose.ui.input.key.KeyEvent) -> Boolean)? = null,
 ) {
   var liveCoverBounds by remember(item.id) { mutableStateOf(Rect.Zero) }
+  var videoCoverBounds by remember(item.id) { mutableStateOf(Rect.Zero) }
+  val videoItem = remember(item.id, profile?.mid) { item.video?.toFeedItem(item, profile) }
   PressableVideoCard(
     onClick = {
       val room = item.live
@@ -877,15 +934,42 @@ private fun DynamicCard(
             },
             modifier = Modifier.fillMaxWidth(),
           )
-        } ?: item.video?.let {
+        } ?: item.video?.let { dynamicVideo ->
+          val video = videoItem ?: return@let
           VideoCardGradient(
-            coverUrl = it.coverUrl,
+            coverUrl = dynamicVideo.coverUrl,
             loadKey = item.id,
-            modifier = Modifier.fillMaxWidth().clip(VideoShapeTokens.Card),
+            modifier =
+              Modifier.fillMaxWidth()
+                .clip(VideoShapeTokens.Card)
+                .then(
+                  if (onVideoClick != null) {
+                    Modifier.combinedClickable(
+                      onClick = { onVideoClick(video, videoCoverBounds) },
+                      onLongClick = { onVideoLongClick(video) },
+                    )
+                  } else {
+                    Modifier
+                  }
+                ),
           ) {
-            DynamicVideoPreview(it, compact = true, loadKey = item.id)
+            DynamicVideoPreview(
+              video = dynamicVideo,
+              compact = true,
+              coverVisible = video.id != hiddenCoverItemId,
+              onCoverBoundsChanged = { bounds ->
+                videoCoverBounds = bounds
+                onVideoBoundsChanged(video, bounds)
+              },
+              loadKey = item.id,
+            )
           }
-        } ?: DynamicImageGrid(item.images, compact = true, loadKey = item.id)
+        } ?: DynamicImageGrid(
+          images = item.images,
+          compact = true,
+          onPreview = onImagePreview,
+          loadKey = item.id,
+        )
         DynamicStats(item, onLike)
       }
       if (item.pinned) {
@@ -1184,11 +1268,13 @@ internal fun DynamicImageGrid(
   images: List<SpaceDynamicImage>,
   compact: Boolean,
   visibleHeight: Dp? = null,
-  onPreview: ((CommentImage, Rect) -> Unit)? = null,
+  onPreview: ((List<CommentImage>, Int, Rect) -> Unit)? = null,
   loadKey: String = "",
 ) {
   if (images.isEmpty()) return
-  val shown = images.take(if (compact) 4 else 9)
+  val shown = images
+  val previewImages =
+    remember(images) { images.map { CommentImage(it.url, it.width, it.height) } }
   if (shown.size == 1) {
     val image = shown.first()
     var imageBounds by remember(image.url) { mutableStateOf(Rect.Zero) }
@@ -1219,7 +1305,7 @@ internal fun DynamicImageGrid(
             .then(
               if (onPreview != null)
                 Modifier.clickable {
-                  onPreview(CommentImage(image.url, image.width, image.height), imageBounds)
+                  onPreview(previewImages, 0, imageBounds)
                 }
               else Modifier
             ),
@@ -1251,9 +1337,10 @@ internal fun DynamicImageGrid(
       modifier = Modifier.width(gridWidth),
       verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-      shown.chunked(columns).forEach { row ->
+      shown.chunked(columns).forEachIndexed { rowIndex, row ->
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-          row.forEach { image ->
+          row.forEachIndexed { columnIndex, image ->
+            val imageIndex = rowIndex * columns + columnIndex
             var imageBounds by remember(image.url) { mutableStateOf(Rect.Zero) }
             CoverImage(
               coverUrl = image.url,
@@ -1265,10 +1352,7 @@ internal fun DynamicImageGrid(
                   .then(
                     if (onPreview != null)
                       Modifier.clickable {
-                        onPreview(
-                          CommentImage(image.url, image.width, image.height),
-                          imageBounds,
-                        )
+                        onPreview(previewImages, imageIndex, imageBounds)
                       }
                     else Modifier
                   ),
@@ -1521,9 +1605,9 @@ private fun DynamicDetail(
     }
   }
 
-  fun openImage(image: CommentImage, bounds: Rect) {
+  fun openImages(images: List<CommentImage>, initialIndex: Int, bounds: Rect) {
     if (bounds.width <= 0f || bounds.height <= 0f || imagePreview != null) return
-    val session = CommentImagePreviewSession(image, bounds)
+    val session = CommentImagePreviewSession(images, initialIndex, bounds)
     imagePreview = session
     imagePreviewJob?.cancel()
     imagePreviewJob = scope.launch {
@@ -1735,7 +1819,7 @@ private fun DynamicDetail(
                   compact = false,
                   visibleHeight =
                     rootBounds.height.takeIf { it > 0f }?.let { with(density) { it.toDp() } },
-                  onPreview = ::openImage,
+                  onPreview = ::openImages,
                 )
               }
             }
@@ -1813,7 +1897,7 @@ private fun DynamicDetail(
                 onLike = ::likeComment,
                 uploaderMid = item.authorMid,
                 onProfileClick = onCommentProfileClick,
-                onImagePreview = ::openImage,
+                onImagePreview = ::openImages,
                 onReplies = { root, bounds ->
                   replySourceBounds = bounds
                   replyRoot = root
@@ -1872,34 +1956,42 @@ private fun DynamicDetail(
         imageEnabled = false,
         onSend = { message, _ ->
           val target = replyTarget
-          scope.launch {
-            runCatching {
-                withContext(Dispatchers.IO) {
-                  if (target == null) BiliCommentApi.addComment(item.commentOid, message, item.commentType)
-                  else
-                    BiliCommentApi.addReply(
-                      item.commentOid,
-                      (replyTargetRoot ?: target).rpid,
-                      target.rpid,
-                      message,
-                      item.commentType,
-                    )
-                }
-              }
-              .onSuccess { added ->
+          try {
+            val riskParameters = BiliCommentWebRiskProvider.collect(context)
+            val added =
+              withContext(Dispatchers.IO) {
                 if (target == null) {
-                  comments = listOf(added) + comments
-                  commentTotal += 1
-                  cacheComments()
+                  BiliCommentApi.addComment(
+                    item.commentOid,
+                    message,
+                    riskParameters,
+                    item.commentType,
+                  )
                 } else {
-                  replies = replies + added
-                  replyTarget = null
-                  replyTargetRoot = null
+                  BiliCommentApi.addReply(
+                    item.commentOid,
+                    (replyTargetRoot ?: target).rpid,
+                    target.rpid,
+                    message,
+                    riskParameters,
+                    item.commentType,
+                  )
                 }
               }
-              .onFailure {
-                Toast.makeText(context, it.message ?: "发送失败", Toast.LENGTH_SHORT).show()
-              }
+            if (target == null) {
+              comments = listOf(added) + comments
+              commentTotal += 1
+              cacheComments()
+            } else {
+              replies = replies + added
+              replyTarget = null
+              replyTargetRoot = null
+            }
+            true
+          } catch (error: Exception) {
+            if (error is kotlinx.coroutines.CancellationException) throw error
+            Toast.makeText(context, error.message ?: "发送失败", Toast.LENGTH_SHORT).show()
+            false
           }
         },
         modifier =
@@ -1935,7 +2027,7 @@ private fun DynamicDetail(
               onLike = ::likeComment,
               uploaderMid = item.authorMid,
               onProfileClick = onCommentProfileClick,
-              onImagePreview = ::openImage,
+              onImagePreview = ::openImages,
               onReply = { rootComment, target ->
                 replyTargetRoot = rootComment
                 replyTarget = target

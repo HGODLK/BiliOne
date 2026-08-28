@@ -136,6 +136,7 @@ internal class AppRootPlayerSessionState(initialShowDanmaku: Boolean = true) {
     pendingSeekTargetMs = null
     if (player != null && restorePositionMs != null) {
       currentPositionMs = restorePositionMs
+      playerViewModel.resetCdnBufferingDetectorForUserSeek()
       player.seekTo(restorePositionMs)
     } else {
       currentPositionMs = player?.currentPosition ?: currentPositionMs
@@ -152,7 +153,6 @@ internal class AppRootPlayerSessionState(initialShowDanmaku: Boolean = true) {
   ) {
     val player = playerViewModel.exoPlayer ?: return
     if (scrubPreviewMs == null && pendingSeekTargetMs == null) {
-      playerViewModel.resetCdnBufferingDetectorForUserSeek()
       seekWasPlaying = player.isPlaying
       player.pause()
     }
@@ -164,6 +164,8 @@ internal class AppRootPlayerSessionState(initialShowDanmaku: Boolean = true) {
     pendingSeekTargetMs = target
     currentPositionMs = target
     seekConfirmationJob?.cancel()
+    // 拖动预览可能已经消费过一次 seek 缓冲排除；最终提交前重新标记实际播放目标。
+    playerViewModel.resetCdnBufferingDetectorForUserSeek()
     player.seekTo(target)
     seekConfirmationJob = scope.launch {
       // 远端 DASH seek 是异步的。保持预览权威直到 Media3 上报目标位置，

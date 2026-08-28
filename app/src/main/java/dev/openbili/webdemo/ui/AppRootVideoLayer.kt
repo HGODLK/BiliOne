@@ -578,6 +578,7 @@ internal class AppRootVideoContext(
             replyItems = replyItems,
             replyHasMore = replyHasMore,
             repliesLoading = repliesLoading,
+            replyThreadUiState = videoState.replyThreadUiState,
             emotes = emotes,
             emotePackages = emotePackages,
             mentionSuggestions = mentionSuggestions,
@@ -737,7 +738,7 @@ internal class AppRootVideoContext(
               )
             },
             onPostComment = { message, imageUri ->
-              videoState.postComment(context, message, imageUri, scope)
+              videoState.postComment(context, message, imageUri)
             },
             onRecommendationLongClick = { showVideoPreview(it) },
             onArticleClick = { article, bounds ->
@@ -748,7 +749,7 @@ internal class AppRootVideoContext(
               )
             },
             onPostReply = { root, parent, message, imageUri ->
-              videoState.postReply(context, root, parent, message, imageUri, scope)
+              videoState.postReply(context, root, parent, message, imageUri)
             },
             onLikeComment = { comment -> videoState.toggleCommentLike(comment, scope) },
             onDeleteComment = { comment ->
@@ -779,7 +780,8 @@ internal class AppRootVideoContext(
             onOpenReplies = { comment -> videoState.openReplies(comment, scope) },
             onLoadMoreReplies = { videoState.loadMoreReplies(scope) },
             onRefreshReplies = { videoState.refreshReplies(scope) },
-            onDismissReplies = { replyRoot = null },
+            onDismissReplies = videoState::dismissReplies,
+            onReplyThreadScrollChanged = videoState::updateReplyThreadScroll,
             onCommentNavigationConsumed = { pendingVideoCommentTarget = null },
             onProfileClick = { mid, face, name, bounds ->
               openAvatarProfile(mid, bounds, face, name)

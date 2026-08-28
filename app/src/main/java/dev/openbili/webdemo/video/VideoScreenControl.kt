@@ -115,12 +115,20 @@ internal fun openVideoCommentImagePreview(
   previewJobState: MutableState<Job?>,
   scope: CoroutineScope,
   reduceMotion: Boolean,
-  image: CommentImage,
+  images: List<CommentImage>,
+  initialIndex: Int,
   bounds: Rect,
 ) {
   // 边界非法或已有预览进行中时直接返回，避免重复展开或使用无效矩形。
-  if (bounds.width <= 0f || bounds.height <= 0f || previewState.value != null) return
-  val session = CommentImagePreviewSession(image, bounds)
+  if (
+    images.isEmpty() ||
+      initialIndex !in images.indices ||
+      bounds.width <= 0f ||
+      bounds.height <= 0f ||
+      previewState.value != null
+  )
+    return
+  val session = CommentImagePreviewSession(images, initialIndex, bounds)
   previewState.value = session
   previewJobState.value?.cancel()
   previewJobState.value =

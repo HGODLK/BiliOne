@@ -8,7 +8,6 @@ package dev.openbili.webdemo.api
  * 点赞/回复状态）的公共解析函数。
  */
 
-import android.os.SystemClock
 import android.util.Log
 import androidx.core.text.HtmlCompat
 import java.io.ByteArrayInputStream
@@ -22,6 +21,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.zip.Inflater
 import java.util.zip.InflaterInputStream
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONTokener
@@ -161,9 +161,10 @@ object BiliCommentApi {
   }
 
   /** 发表主楼评论；可选附带一张大会员图片。 */
-  fun addComment(
+  internal fun addComment(
     oid: Long,
     message: String,
+    riskParameters: BiliCommentWebRiskParameters,
     type: Int = 1,
     image: BiliPrivateMessageApi.PrivateImageUpload? = null,
   ): CommentItem {
@@ -174,13 +175,15 @@ object BiliCommentApi {
         "oid" to oid.toString(),
         "message" to message,
         "plat" to "1",
+        "gaia_source" to "main_web",
+        "statistics" to "{\"appId\":100,\"platform\":5}",
         "csrf" to csrf,
         "csrf_token" to csrf,
       )
     image?.let { fields["pictures"] = BiliPrivateMessageApi.commentPicturesPayload(it) }
     val resp =
       BiliHttpClient.postForm(
-        "https://api.bilibili.com/x/v2/reply/add",
+        commentAddUrl(riskParameters),
         fields,
       )
     val httpCode = resp.code
@@ -189,15 +192,16 @@ object BiliCommentApi {
     val apiCode = json.optInt("code", -1)
     Log.d(BiliApiCommon.TAG, "comment add response: http=$httpCode code=$apiCode oid=$oid")
     if (apiCode != 0) throw IllegalStateException(json.optString("message", "评论失败"))
-    return parseAddedCommentResponse(json, message, "评论响应缺少评论内容")
+    return parseAddedCommentResponse(json, "评论尚未被服务器确认，内容已保留")
   }
 
   /** 发表楼中楼回复；可选附带一张大会员图片。 */
-  fun addReply(
+  internal fun addReply(
     oid: Long,
     root: Long,
     parent: Long,
     message: String,
+    riskParameters: BiliCommentWebRiskParameters,
     type: Int = 1,
     image: BiliPrivateMessageApi.PrivateImageUpload? = null,
   ): CommentItem {
@@ -210,13 +214,15 @@ object BiliCommentApi {
         "parent" to parent.toString(),
         "message" to message,
         "plat" to "1",
+        "gaia_source" to "main_web",
+        "statistics" to "{\"appId\":100,\"platform\":5}",
         "csrf" to csrf,
         "csrf_token" to csrf,
       )
     image?.let { fields["pictures"] = BiliPrivateMessageApi.commentPicturesPayload(it) }
     val resp =
       BiliHttpClient.postForm(
-        "https://api.bilibili.com/x/v2/reply/add",
+        commentAddUrl(riskParameters),
         fields,
       )
     val httpCode = resp.code
@@ -225,8 +231,29 @@ object BiliCommentApi {
     val apiCode = json.optInt("code", -1)
     Log.d(BiliApiCommon.TAG, "reply add response: http=$httpCode code=$apiCode oid=$oid")
     if (apiCode != 0) throw IllegalStateException(json.optString("message", "回复失败"))
-    return parseAddedCommentResponse(json, message, "回复响应缺少评论内容")
+    return parseAddedCommentResponse(json, "回复尚未被服务器确认，内容已保留")
   }
+
+  /** 按网页中间件顺序构造评论 URL：先签行为参数，最后追加不参与 WBI 的环境令牌。 */
+  private fun commentAddUrl(riskParameters: BiliCommentWebRiskParameters): String =
+    buildCommentAddUrl(
+      signedParameters = BiliApiCommon.signedParams(riskParameters.wbiParameters()),
+      environmentToken = riskParameters.environmentToken,
+    )
+
+  internal fun buildCommentAddUrl(
+    signedParameters: Map<String, String>,
+    environmentToken: String,
+  ): String =
+    "https://api.bilibili.com/x/v2/reply/add"
+      .toHttpUrl()
+      .newBuilder()
+      .apply {
+        signedParameters.forEach { (name, value) -> addQueryParameter(name, value) }
+        addQueryParameter("b_wet", environmentToken)
+      }
+      .build()
+      .toString()
 
   /** 评论点赞/取消点赞（action 1/0）。 */
   fun setCommentLike(oid: Long, rpid: Long, liked: Boolean, type: Int = 1) {
@@ -319,26 +346,14 @@ object BiliCommentApi {
     )
   }
 
-  /** 解析发表评论响应；接口可能同时返回完整 reply，也可能只返回新评论编号。 */
+  /** 解析发表评论响应；只有服务端返回完整 reply 时才允许界面按发送成功处理。 */
   internal fun parseAddedCommentResponse(
     json: JSONObject,
-    message: String,
     missingMessage: String,
   ): CommentItem {
     val data = json.optJSONObject("data") ?: throw IllegalStateException(missingMessage)
     data.optJSONObject("reply")?.let { return parseComment(it) }
-    val rpid = data.optLong("rpid", 0L)
-    if (rpid <= 0L) throw IllegalStateException(missingMessage)
-    return CommentItem(
-      rpid = rpid,
-      mid = data.optLong("mid", 0L),
-      name = "我",
-      face = "",
-      content = message,
-      likeCount = 0L,
-      replyCount = 0L,
-      ctime = System.currentTimeMillis() / 1_000L,
-    )
+    throw IllegalStateException(missingMessage)
   }
 
   /** 解析官方认证信息；primary 优先，legacy 兜底。 */

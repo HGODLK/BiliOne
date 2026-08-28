@@ -720,25 +720,20 @@ object BiliPrivateMessageApi {
     if (json.optInt("code") != 0) throw IllegalStateException(json.optString("message"))
   }
 
-  fun replyToMessage(message: AccountMessage, text: String) {
+  internal fun replyToMessage(
+    message: AccountMessage,
+    text: String,
+    riskParameters: BiliCommentWebRiskParameters,
+  ) {
     require(message.oid > 0 && message.parentId > 0) { "这条消息缺少可回复目标" }
-    val csrf = BiliApiCommon.requireCsrf()
     val root = message.rootId.takeIf { it > 0 } ?: message.parentId
-    val resp =
-      BiliHttpClient.postForm(
-        "https://api.bilibili.com/x/v2/reply/add",
-        mapOf(
-          "type" to message.commentType.toString(),
-          "oid" to message.oid.toString(),
-          "root" to root.toString(),
-          "parent" to message.parentId.toString(),
-          "message" to text,
-          "csrf" to csrf,
-          "csrf_token" to csrf,
-        ),
-      )
-    val json = JSONObject(resp.body?.string().orEmpty())
-    resp.close()
-    if (json.optInt("code") != 0) throw IllegalStateException(json.optString("message", "回复失败"))
+    BiliCommentApi.addReply(
+      oid = message.oid,
+      root = root,
+      parent = message.parentId,
+      message = text,
+      riskParameters = riskParameters,
+      type = message.commentType,
+    )
   }
 }

@@ -62,7 +62,8 @@ data class BiliRichMediaLink(
 private class TextBoundsHolder(var value: Rect = Rect.Zero)
 
 /** 匹配评论中的网页链接（http/https），匹配时排除其后的常见中英文标点。 */
-private val richTextWebUrlPattern = Regex("https?://[^\\s<>，。！？；：）】》”]+", RegexOption.IGNORE_CASE)
+private val richTextWebUrlPattern =
+  Regex("https?://[^\\s<>，。！？；：）】》”\\\"]+", RegexOption.IGNORE_CASE)
 /** 链接末尾需要剥除的尾随标点集合，避免把句末标点误判进链接范围。 */
 private val richTextTrailingUrlPunctuation =
   setOf(
@@ -85,6 +86,7 @@ private val richTextTrailingUrlPunctuation =
     '】',
     '》',
     '”',
+    '"',
     '\'',
   )
 

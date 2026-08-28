@@ -331,7 +331,7 @@ private fun InteractionMessageCard(
       onLike = {},
       uploaderMid = 0L,
       onProfileClick = onProfile,
-      onImagePreview = { _, _ -> },
+      onImagePreview = { _, _, _ -> },
       onReplies = { _, _ -> },
       onReply = { onToggleReply() },
       replyEnabled = replyEnabled,

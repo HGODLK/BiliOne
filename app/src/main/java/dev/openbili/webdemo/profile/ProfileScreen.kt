@@ -96,6 +96,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -810,27 +811,34 @@ private fun ProfileMenu(
     }
     if (selected != ProfileSection.PRIVATE_MESSAGES) {
       var searchEditing by remember(selected) { mutableStateOf(false) }
-      val searchEntryFocusRequester = remember { FocusRequester() }
-      val searchEditorFocusRequester = remember { FocusRequester() }
+      val searchFocusRequester = remember { FocusRequester() }
       val focusManager = LocalFocusManager.current
+      val keyboardController = LocalSoftwareKeyboardController.current
+      val searchScope = rememberCoroutineScope()
       LaunchedEffect(searchEditing) {
         if (searchEditing) {
           withFrameNanos {}
-          runCatching { searchEditorFocusRequester.requestFocus() }
+          if (runCatching { searchFocusRequester.requestFocus() }.getOrDefault(false)) {
+            keyboardController?.show()
+          }
         }
       }
       BackHandler(enabled = searchEditing) {
+        keyboardController?.hide()
         searchEditing = false
         focusManager.clearFocus(force = true)
-        runCatching { searchEntryFocusRequester.requestFocus() }
+        searchScope.launch {
+          withFrameNanos {}
+          runCatching { searchFocusRequester.requestFocus() }
+        }
       }
-      Box(
-        Modifier.fillMaxWidth()
-          .focusRequester(searchEntryFocusRequester)
-          .focusProperties {
-            canFocus = controlMode && !searchEditing
-            down = sectionFocusRequester
-          }
+      OutlinedTextField(
+        value = searchQuery,
+        onValueChange = onSearchQueryChange,
+        modifier =
+          Modifier.fillMaxWidth()
+            .focusRequester(searchFocusRequester)
+            .focusProperties { down = sectionFocusRequester }
           .controlFocusOutline(
             shape = RoundedCornerShape(14.dp),
             color = MaterialTheme.colorScheme.primary,
@@ -861,19 +869,13 @@ private fun ProfileMenu(
               }
               else -> false
             }
-          }
-      ) {
-        OutlinedTextField(
-          value = searchQuery,
-          onValueChange = onSearchQueryChange,
-          modifier = Modifier.fillMaxWidth().focusRequester(searchEditorFocusRequester),
-          placeholder = { Text("搜索${selected.label}") },
-          leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
-          singleLine = true,
-          shape = RoundedCornerShape(14.dp),
-          readOnly = controlMode && !searchEditing,
-        )
-      }
+          },
+        placeholder = { Text("搜索${selected.label}") },
+        leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+        singleLine = true,
+        shape = RoundedCornerShape(14.dp),
+        readOnly = controlMode && !searchEditing,
+      )
     } else {
       Spacer(Modifier.height(56.dp))
     }

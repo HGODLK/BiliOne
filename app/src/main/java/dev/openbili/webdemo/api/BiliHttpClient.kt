@@ -254,6 +254,10 @@ object BiliHttpClient {
   val gaiaToken: String?
     get() = cachedGaiaToken
 
+  /** 当前网络请求使用的桌面浏览器 UA，供评论环境令牌 WebView 保持同一设备特征。 */
+  internal val desktopUserAgent: String
+    get() = cachedDesktopUa ?: FALLBACK_DESKTOP_UA
+
   /**
    * 保存风控通行令牌并写入 Cookie（x-bili-gaia-vtoken）。
    *

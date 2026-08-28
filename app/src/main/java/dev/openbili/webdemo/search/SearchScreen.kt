@@ -521,6 +521,8 @@ fun SearchResultsScreen(
   state: SearchUiState,
   gridState: LazyGridState,
   columns: Int,
+  onQuery: (String) -> Unit,
+  onSearch: (String) -> Unit,
   onCategory: (SearchCategory) -> Unit,
   onOrder: (SearchOrder) -> Unit,
   onArticleOrder: (ArticleSearchOrder) -> Unit,
@@ -544,11 +546,56 @@ fun SearchResultsScreen(
   effectsEnabled: Boolean = true,
 ) {
   val controlMode = LocalControlMode.current
+  val scope = rememberCoroutineScope()
+  val focusManager = LocalFocusManager.current
+  val keyboardController = LocalSoftwareKeyboardController.current
   val initialFocusRequester = remember { FocusRequester() }
+  val searchEntryFocusRequester = remember { FocusRequester() }
+  val searchEditorFocusRequester = remember { FocusRequester() }
+  var searchEditing by remember(controlMode) { mutableStateOf(!controlMode) }
+
+  fun enterSearchEditing() {
+    if (searchEditing) return
+    searchEditing = true
+    scope.launch {
+      withFrameNanos {}
+      if (runCatching { searchEditorFocusRequester.requestFocus() }.getOrDefault(false)) {
+        keyboardController?.show()
+      }
+    }
+  }
+
+  fun leaveSearchEditing() {
+    keyboardController?.hide()
+    searchEditing = false
+    focusManager.clearFocus(force = true)
+    scope.launch {
+      withFrameNanos {}
+      runCatching { searchEntryFocusRequester.requestFocus() }
+    }
+  }
+
+  fun commitSearch() {
+    val keyword = state.query.trim()
+    if (keyword.isEmpty()) return
+    keyboardController?.hide()
+    focusManager.clearFocus(force = true)
+    onSearch(keyword)
+    if (controlMode) {
+      searchEditing = false
+      scope.launch {
+        withFrameNanos {}
+        runCatching { searchEntryFocusRequester.requestFocus() }
+      }
+    }
+  }
+
   LaunchedEffect(controlMode) {
     if (controlMode) initialFocusRequester.requestFocusWithinFrames(maxFrames = 8)
   }
-  BackHandler(enabled = backEnabled, onBack = onBack)
+  BackHandler(enabled = backEnabled) {
+    if (controlMode && searchEditing) leaveSearchEditing() else onBack()
+  }
   val effectiveColumns = columns.coerceIn(3, 6)
   val imageLoadPolicy = rememberGridFeedImageLoadPolicy(gridState, effectiveColumns)
   val nearEnd by remember {
@@ -583,12 +630,15 @@ fun SearchResultsScreen(
     if (effectsEnabled && state.submittedQuery.isNotBlank()) gridState.scrollToItem(0)
   }
   Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-    Column(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 18.dp)) {
+    Column(
+      Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 18.dp).padding(top = 12.dp)
+    ) {
       Row(verticalAlignment = Alignment.CenterVertically) {
         IconButton(
           onClick = onBack,
           modifier =
             Modifier.focusRequester(initialFocusRequester)
+              .focusProperties { right = searchEntryFocusRequester }
               .controlFocusOutline(
                 shape = CircleShape,
                 color = MaterialTheme.colorScheme.primary,
@@ -596,18 +646,78 @@ fun SearchResultsScreen(
         ) {
           Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
         }
-        Text(
-          text =
-            state.submittedQuery
-              .ifBlank { state.query }
-              .takeIf(String::isNotBlank)
-              ?.let {
-                "“$it”的搜索结果"
-              } ?: "搜索结果",
-          modifier = Modifier.weight(1f).padding(start = 8.dp),
-          style = MaterialTheme.typography.titleLarge,
-          maxLines = 1,
-        )
+        Surface(
+          modifier =
+            Modifier.weight(1f)
+              .padding(start = 8.dp)
+              .height(48.dp)
+              .focusRequester(searchEntryFocusRequester)
+              .focusProperties { canFocus = controlMode && !searchEditing }
+              .onPreviewKeyEvent { event ->
+                if (!controlMode || searchEditing) return@onPreviewKeyEvent false
+                if (!isControlConfirmKey(event.nativeKeyEvent.keyCode)) {
+                  return@onPreviewKeyEvent false
+                }
+                if (
+                  event.type == KeyEventType.KeyDown && event.nativeKeyEvent.repeatCount == 0
+                ) {
+                  enterSearchEditing()
+                }
+                true
+              }
+              .controlFocusOutline(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.primary,
+                width = 3.dp,
+                enabled = controlMode && !searchEditing,
+              )
+              .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = ::enterSearchEditing,
+              ),
+          shape = CircleShape,
+          color = MaterialTheme.colorScheme.surfaceVariant,
+        ) {
+          BasicTextField(
+            value = state.query,
+            onValueChange = onQuery,
+            modifier =
+              Modifier.fillMaxSize()
+                .focusRequester(searchEditorFocusRequester)
+                .focusProperties { canFocus = !controlMode || searchEditing },
+            enabled = !controlMode || searchEditing,
+            singleLine = true,
+            textStyle =
+              MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = { commitSearch() }),
+            decorationBox = { innerField ->
+              Row(
+                Modifier.fillMaxSize().padding(horizontal = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+              ) {
+                Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(20.dp))
+                Box(Modifier.weight(1f).padding(start = 8.dp)) {
+                  if (state.query.isBlank()) {
+                    Text("搜索视频", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                  }
+                  innerField()
+                }
+                if (state.query.isNotBlank()) {
+                  IconButton(onClick = { onQuery("") }, modifier = Modifier.size(32.dp)) {
+                    Icon(
+                      Icons.Default.Close,
+                      contentDescription = "清空搜索内容",
+                      modifier = Modifier.size(18.dp),
+                    )
+                  }
+                }
+              }
+            },
+          )
+        }
       }
       Row(
         Modifier.fillMaxWidth().padding(start = 58.dp, top = 10.dp),

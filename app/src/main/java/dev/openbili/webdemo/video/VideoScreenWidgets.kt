@@ -35,8 +35,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.focusable
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -57,6 +57,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -80,6 +82,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -231,9 +234,19 @@ internal fun FullscreenLockButton(
 }
 
 internal class CommentImagePreviewSession(
-  val image: CommentImage,
+  images: List<CommentImage>,
+  initialIndex: Int,
   val sourceBounds: Rect,
 ) {
+  val images = images.toList()
+  val initialIndex = if (this.images.isEmpty()) 0 else initialIndex.coerceIn(this.images.indices)
+  val initialImage: CommentImage
+    get() = images[initialIndex]
+
+  var currentIndex by mutableIntStateOf(this.initialIndex)
+  val image: CommentImage
+    get() = images[currentIndex.coerceIn(images.indices)]
+
   val progress = Animatable(0f)
   val preparation =
     TransitionPreparationBarrier(
@@ -249,8 +262,11 @@ internal class CommentImagePreviewSession(
   var preparationTimedOut by mutableStateOf(false)
 
   init {
+    require(this.images.isNotEmpty()) { "图片预览至少需要一张图片" }
     preparation.markReady(TransitionReadySignal.SOURCE_BOUNDS)
   }
+
+  constructor(image: CommentImage, sourceBounds: Rect) : this(listOf(image), 0, sourceBounds)
 }
 
 internal fun Modifier.floatingPlayerLayout(
@@ -447,13 +463,32 @@ internal fun CommentImagePreviewOverlay(
   modifier: Modifier = Modifier,
 ) {
   val context = LocalContext.current
-  val density = LocalDensity.current
   val scope = rememberCoroutineScope()
-  val previewImageUrl = remember(session.image) { fullResolutionCommentImageUrl(session.image.url) }
-  var zoomScale by remember(session) { mutableStateOf(1f) }
-  var panOffset by remember(session) { mutableStateOf(Offset.Zero) }
+  val pagerState =
+    rememberPagerState(initialPage = session.initialIndex, pageCount = { session.images.size })
+  val zoomScales = remember(session) { List(session.images.size) { mutableStateOf(1f) } }
+  val panOffsets = remember(session) { List(session.images.size) { mutableStateOf(Offset.Zero) } }
+  val resolvedImageSizes =
+    remember(session) {
+      session.images.map { image ->
+        mutableStateOf(
+          if (image.width > 0 && image.height > 0) IntSize(image.width, image.height)
+          else IntSize.Zero
+        )
+      }
+    }
+  val currentIndex = pagerState.currentPage.coerceIn(session.images.indices)
+  val currentImage = session.images[currentIndex]
+  val currentResolvedImageSize = resolvedImageSizes[currentIndex].value
+  val previewImageUrl = remember(currentImage) { fullResolutionCommentImageUrl(currentImage.url) }
   var confirmSave by remember(session) { mutableStateOf(false) }
   var saving by remember(session) { mutableStateOf(false) }
+
+  LaunchedEffect(currentIndex) {
+    session.currentIndex = currentIndex
+    confirmSave = false
+  }
+
   fun saveImage() {
     saving = true
     scope.launch {
@@ -490,177 +525,74 @@ internal fun CommentImagePreviewOverlay(
   ) {
     val viewportWidth = constraints.maxWidth.toFloat().coerceAtLeast(1f)
     val viewportHeight = constraints.maxHeight.toFloat().coerceAtLeast(1f)
-    val imageRatio =
-      if (session.image.width > 0 && session.image.height > 0)
-        session.image.width.toFloat() / session.image.height
-      else 1.5f
-    val previewLayout =
-      commentImagePreviewLayout(
-        viewportWidth = viewportWidth,
-        viewportHeight = viewportHeight,
-        imageWidth = session.image.width,
-        imageHeight = session.image.height,
-        wideViewport = maxWidth >= 600.dp,
-      )
-    val targetWidth = previewLayout.widthPx
-    val targetHeight = previewLayout.heightPx
-    val rootLeft = if (rootBounds.left.isFinite()) rootBounds.left else 0f
-    val rootTop = if (rootBounds.top.isFinite()) rootBounds.top else 0f
-    val source = session.sourceBounds.translate(Offset(-rootLeft, -rootTop))
-    val validSource = source.width > 1f && source.height > 1f
-    val startScale = commentImageStartScale(source, targetWidth, targetHeight)
-    val startTranslationX = if (validSource) source.center.x - viewportWidth / 2f else 0f
-    val startTranslationY = if (validSource) source.center.y - viewportHeight / 2f else 0f
-    val widthDp = with(density) { targetWidth.toDp() }
-    val heightDp = with(density) { targetHeight.toDp() }
-    LaunchedEffect(session, targetWidth, targetHeight) {
-      session.preparation.markReady(TransitionReadySignal.TARGET_MOUNTED)
-      repeat(4) {
-        withFrameNanos {}
-        if (session.targetBoundsTracker.observe(Rect(0f, 0f, targetWidth, targetHeight))) {
-          session.preparation.markReady(TransitionReadySignal.TARGET_BOUNDS_STABLE)
-          return@LaunchedEffect
-        }
+    val currentPreviewLayout =
+      remember(currentResolvedImageSize, viewportWidth, viewportHeight, maxWidth) {
+        commentImagePreviewLayout(
+          viewportWidth = viewportWidth,
+          viewportHeight = viewportHeight,
+          imageWidth = currentResolvedImageSize.width,
+          imageHeight = currentResolvedImageSize.height,
+          wideViewport = maxWidth >= 600.dp,
+        )
       }
-    }
+    val currentHorizontalPanLimit =
+      commentImagePanLimit(
+        currentPreviewLayout.widthPx,
+        viewportWidth,
+        zoomScales[currentIndex].value,
+      )
     Box(
       Modifier.matchParentSize()
         .graphicsLayer { alpha = session.progress.value.coerceIn(0f, 1f) * .9f }
         .background(Color.Black)
-        .clickable(onClick = onDismiss)
     )
-
-    if (validSource) {
-      Box(Modifier.matchParentSize(), contentAlignment = Alignment.TopStart) {
-        AsyncImage(
-          model = session.image.url,
-          contentDescription = null,
-          modifier =
-            Modifier.requiredSize(
-                with(density) { source.width.toDp() },
-                with(density) { source.height.toDp() },
-              )
-              .clip(RoundedCornerShape(12.dp))
-              .graphicsLayer {
-                val progress = session.progress.value.coerceIn(0f, 1f)
-                transformOrigin = TransformOrigin(0f, 0f)
-                translationX = source.left
-                translationY = source.top
-                alpha = (1f - progress / .35f).coerceIn(0f, 1f)
-              },
-          contentScale = ContentScale.Crop,
-        )
-      }
-    }
-
-    val transformGestureModifier =
-      if (previewLayout.verticallyScrollable) {
-        Modifier
-      } else {
-        Modifier.pointerInput(session, targetWidth, targetHeight) {
-          detectTransformGestures(panZoomLock = true) { centroid, pan, zoom, _ ->
-            if (session.progress.value < .995f) return@detectTransformGestures
-            val previousScale = zoomScale
-            val nextScale = (previousScale * zoom).coerceIn(1f, 5f)
-            val scaleChange = nextScale / previousScale.coerceAtLeast(.001f)
-            val center = Offset(size.width / 2f, size.height / 2f)
-            val centroidCorrection = (centroid - center) * (1f - scaleChange)
-            val candidate = panOffset + pan + centroidCorrection
-            val maxPanX = commentImagePanLimit(targetWidth, viewportWidth, nextScale)
-            val maxPanY = commentImagePanLimit(targetHeight, viewportHeight, nextScale)
-            zoomScale = nextScale
-            panOffset =
-              if (nextScale <= 1.001f) Offset.Zero
-              else
-                Offset(
-                  candidate.x.coerceIn(-maxPanX, maxPanX),
-                  candidate.y.coerceIn(-maxPanY, maxPanY),
-                )
-          }
-        }
-      }
-    val saveGestureModifier =
-      if (previewLayout.verticallyScrollable) {
-        Modifier
-      } else {
-        Modifier.pointerInput(session) {
-          detectTapGestures(
-            onLongPress = {
-              if (session.progress.value >= .995f && !saving) confirmSave = true
-            }
-          )
-        }
-      }
-    Box(
+    HorizontalPager(
+      state = pagerState,
+      key = { page -> "$page:${session.images[page].url}" },
+      userScrollEnabled =
+        session.progress.value >= .995f &&
+          !currentPreviewLayout.verticallyScrollable &&
+          currentHorizontalPanLimit <= .5f,
       modifier =
-        Modifier.size(widthDp, heightDp)
-          .graphicsLayer {
-            val progress = session.progress.value.coerceIn(0f, 1f)
-            val effectiveZoom = 1f + (zoomScale - 1f) * progress
-            val effectivePan = panOffset * progress
-            val sharedScale = startScale + (1f - startScale) * progress
-            transformOrigin = TransformOrigin.Center
-            val imageScale = sharedScale * effectiveZoom
-            scaleX = imageScale
-            scaleY = imageScale
-            translationX = startTranslationX * (1f - progress) + effectivePan.x
-            translationY = startTranslationY * (1f - progress) + effectivePan.y
-            alpha = if (validSource) ((progress - .04f) / .28f).coerceIn(0f, 1f) else progress
+        Modifier.fillMaxSize()
+          .clickable(
+            interactionSource = remember { MutableInteractionSource() },
+            indication = null,
+            onClick = onDismiss,
+          ),
+    ) { page ->
+      CommentImagePreviewPage(
+        session = session,
+        page = page,
+        image = session.images[page],
+        rootBounds = rootBounds,
+        viewportWidth = viewportWidth,
+        viewportHeight = viewportHeight,
+        wideViewport = maxWidth >= 600.dp,
+        zoomScaleState = zoomScales[page],
+        panOffsetState = panOffsets[page],
+        resolvedImageSizeState = resolvedImageSizes[page],
+        saving = saving,
+        onLongPress = { confirmSave = true },
+        onLongImagePageSwipe = { delta ->
+          val targetPage = (page + delta).coerceIn(session.images.indices)
+          if (targetPage != page) {
+            scope.launch { pagerState.animateScrollToPage(targetPage) }
           }
-          .then(saveGestureModifier)
-          .then(transformGestureModifier)
-    ) {
-      if (previewLayout.verticallyScrollable) {
-        AndroidView(
-          modifier = Modifier.fillMaxSize(),
-          factory = { webContext ->
-            WebView(webContext).apply {
-              WebViewConfigurator.configure(this, BuildConfig.DEBUG)
-              settings.javaScriptEnabled = false
-              settings.domStorageEnabled = false
-              settings.loadWithOverviewMode = false
-              settings.useWideViewPort = false
-              settings.builtInZoomControls = false
-              settings.displayZoomControls = false
-              isHorizontalScrollBarEnabled = false
-              isVerticalScrollBarEnabled = true
-              overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
-              setBackgroundColor(android.graphics.Color.TRANSPARENT)
-              isLongClickable = true
-              setOnLongClickListener {
-                if (session.progress.value >= .995f && !saving) confirmSave = true
-                true
-              }
-              webViewClient =
-                object : WebViewClient() {
-                  override fun onPageFinished(view: WebView, url: String) {
-                    session.preparation.markReady(TransitionReadySignal.IMAGE_READY)
-                  }
-                }
-              loadDataWithBaseURL(
-                "https://www.bilibili.com/",
-                longCommentImageHtml(previewImageUrl),
-                "text/html",
-                "UTF-8",
-                null,
-              )
-            }
-          },
-          onRelease = { webView ->
-            webView.setOnLongClickListener(null)
-            webView.stopLoading()
-            webView.webViewClient = WebViewClient()
-            webView.removeAllViews()
-            webView.destroy()
-          },
-        )
-      } else {
-        AsyncImage(
-          model = previewImageUrl,
-          contentDescription = "图片预览",
-          modifier = Modifier.fillMaxSize(),
-          contentScale = ContentScale.Fit,
-          onSuccess = { session.preparation.markReady(TransitionReadySignal.IMAGE_READY) },
+        },
+      )
+    }
+    if (session.images.size > 1) {
+      Surface(
+        modifier = Modifier.align(Alignment.TopCenter).padding(top = 18.dp),
+        shape = CircleShape,
+        color = Color.Black.copy(alpha = .58f),
+        contentColor = Color.White,
+      ) {
+        Text(
+          text = "${currentIndex + 1} / ${session.images.size}",
+          style = MaterialTheme.typography.labelLarge,
+          modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
         )
       }
     }
@@ -693,6 +625,223 @@ internal fun CommentImagePreviewOverlay(
           }
         },
       )
+    }
+  }
+}
+
+@Composable
+private fun CommentImagePreviewPage(
+  session: CommentImagePreviewSession,
+  page: Int,
+  image: CommentImage,
+  rootBounds: Rect,
+  viewportWidth: Float,
+  viewportHeight: Float,
+  wideViewport: Boolean,
+  zoomScaleState: MutableState<Float>,
+  panOffsetState: MutableState<Offset>,
+  resolvedImageSizeState: MutableState<IntSize>,
+  saving: Boolean,
+  onLongPress: () -> Unit,
+  onLongImagePageSwipe: (Int) -> Unit,
+) {
+  val context = LocalContext.current
+  val density = LocalDensity.current
+  val previewImageUrl = remember(image) { fullResolutionCommentImageUrl(image.url) }
+  val resolvedImageSize = resolvedImageSizeState.value
+  val previewLayout =
+    remember(resolvedImageSize, viewportWidth, viewportHeight, wideViewport) {
+      commentImagePreviewLayout(
+        viewportWidth = viewportWidth,
+        viewportHeight = viewportHeight,
+        imageWidth = resolvedImageSize.width,
+        imageHeight = resolvedImageSize.height,
+        wideViewport = wideViewport,
+      )
+    }
+  val targetWidth = previewLayout.widthPx
+  val targetHeight = previewLayout.heightPx
+  val initialPage = page == session.initialIndex
+  val rootLeft = if (rootBounds.left.isFinite()) rootBounds.left else 0f
+  val rootTop = if (rootBounds.top.isFinite()) rootBounds.top else 0f
+  val source =
+    if (initialPage) session.sourceBounds.translate(Offset(-rootLeft, -rootTop)) else Rect.Zero
+  val validSource = source.width > 1f && source.height > 1f
+  val startScale = commentImageStartScale(source, targetWidth, targetHeight)
+  val startTranslationX = if (validSource) source.center.x - viewportWidth / 2f else 0f
+  val startTranslationY = if (validSource) source.center.y - viewportHeight / 2f else 0f
+  val widthDp = with(density) { targetWidth.toDp() }
+  val heightDp = with(density) { targetHeight.toDp() }
+  val transformState =
+    rememberTransformableState { centroid, zoomChange, panChange, _ ->
+      if (session.progress.value < .995f) return@rememberTransformableState
+      val updated =
+        updatedCommentImageTransform(
+          currentScale = zoomScaleState.value,
+          currentPanOffset = panOffsetState.value,
+          centroid = centroid,
+          zoomChange = zoomChange,
+          panChange = panChange,
+          contentWidth = targetWidth,
+          contentHeight = targetHeight,
+          viewportWidth = viewportWidth,
+          viewportHeight = viewportHeight,
+        )
+      zoomScaleState.value = updated.scale
+      panOffsetState.value = updated.panOffset
+    }
+
+  LaunchedEffect(session, page, targetWidth, targetHeight) {
+    if (!initialPage) return@LaunchedEffect
+    session.preparation.markReady(TransitionReadySignal.TARGET_MOUNTED)
+    repeat(4) {
+      withFrameNanos {}
+      if (session.targetBoundsTracker.observe(Rect(0f, 0f, targetWidth, targetHeight))) {
+        session.preparation.markReady(TransitionReadySignal.TARGET_BOUNDS_STABLE)
+        return@LaunchedEffect
+      }
+    }
+  }
+
+  val pageGestureModifier =
+    if (previewLayout.verticallyScrollable) {
+      Modifier.pointerInput(session, page) {
+        detectLongCommentImagePageSwipes(onPageDelta = onLongImagePageSwipe)
+      }
+    } else {
+      Modifier.transformable(
+        state = transformState,
+        lockRotationOnZoomPan = true,
+        enabled = session.progress.value >= .995f,
+        canPan = { panChange ->
+          commentImageCanPan(
+            panChange = panChange,
+            panOffset = panOffsetState.value,
+            maxPanX = commentImagePanLimit(targetWidth, viewportWidth, zoomScaleState.value),
+            maxPanY = commentImagePanLimit(targetHeight, viewportHeight, zoomScaleState.value),
+          )
+        },
+      )
+    }
+  Box(
+    Modifier.fillMaxSize().then(pageGestureModifier),
+    contentAlignment = Alignment.Center,
+  ) {
+    if (validSource) {
+      Box(Modifier.matchParentSize(), contentAlignment = Alignment.TopStart) {
+        AsyncImage(
+          model = session.initialImage.url,
+          contentDescription = null,
+          modifier =
+            Modifier.requiredSize(
+                with(density) { source.width.toDp() },
+                with(density) { source.height.toDp() },
+              )
+              .clip(RoundedCornerShape(12.dp))
+              .graphicsLayer {
+                val progress = session.progress.value.coerceIn(0f, 1f)
+                transformOrigin = TransformOrigin(0f, 0f)
+                translationX = source.left
+                translationY = source.top
+                alpha = (1f - progress / .35f).coerceIn(0f, 1f)
+              },
+          contentScale = ContentScale.Crop,
+        )
+      }
+    }
+    val imagePressModifier =
+      if (previewLayout.verticallyScrollable) {
+        Modifier
+      } else {
+        Modifier.combinedClickable(
+          onClick = {},
+          onLongClick = {
+            if (session.progress.value >= .995f && !saving) onLongPress()
+          },
+        )
+      }
+    Box(
+      modifier =
+        Modifier.size(widthDp, heightDp)
+          .graphicsLayer {
+            val progress = session.progress.value.coerceIn(0f, 1f)
+            val zoomScale = zoomScaleState.value
+            val panOffset = panOffsetState.value
+            val effectiveZoom = 1f + (zoomScale - 1f) * progress
+            val effectivePan = panOffset * progress
+            val sharedScale = startScale + (1f - startScale) * progress
+            transformOrigin = TransformOrigin.Center
+            val imageScale = sharedScale * effectiveZoom
+            scaleX = imageScale
+            scaleY = imageScale
+            translationX = startTranslationX * (1f - progress) + effectivePan.x
+            translationY = startTranslationY * (1f - progress) + effectivePan.y
+            alpha = if (validSource) ((progress - .04f) / .28f).coerceIn(0f, 1f) else progress
+          }
+          .then(imagePressModifier)
+    ) {
+      if (previewLayout.verticallyScrollable) {
+        AndroidView(
+          modifier = Modifier.fillMaxSize(),
+          factory = { webContext ->
+            WebView(webContext).apply {
+              WebViewConfigurator.configure(this, BuildConfig.DEBUG)
+              settings.javaScriptEnabled = false
+              settings.domStorageEnabled = false
+              settings.loadWithOverviewMode = false
+              settings.useWideViewPort = false
+              settings.builtInZoomControls = false
+              settings.displayZoomControls = false
+              isHorizontalScrollBarEnabled = false
+              isVerticalScrollBarEnabled = true
+              overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+              setBackgroundColor(android.graphics.Color.TRANSPARENT)
+              isLongClickable = true
+              setOnLongClickListener {
+                if (session.progress.value >= .995f && !saving) onLongPress()
+                true
+              }
+              webViewClient =
+                object : WebViewClient() {
+                  override fun onPageFinished(view: WebView, url: String) {
+                    if (initialPage) {
+                      session.preparation.markReady(TransitionReadySignal.IMAGE_READY)
+                    }
+                  }
+                }
+              loadDataWithBaseURL(
+                "https://www.bilibili.com/",
+                longCommentImageHtml(previewImageUrl),
+                "text/html",
+                "UTF-8",
+                null,
+              )
+            }
+          },
+          onRelease = { webView ->
+            webView.setOnLongClickListener(null)
+            webView.stopLoading()
+            webView.webViewClient = WebViewClient()
+            webView.removeAllViews()
+            webView.destroy()
+          },
+        )
+      } else {
+        CommentRegularImagePreview(
+          rawUrl = previewImageUrl,
+          targetWidthPx = targetWidth,
+          targetHeightPx = targetHeight,
+          modifier = Modifier.fillMaxSize(),
+          onReady = {
+            if (initialPage) session.preparation.markReady(TransitionReadySignal.IMAGE_READY)
+          },
+          onIntrinsicSizeKnown = { width, height ->
+            if (image.width <= 0 || image.height <= 0) {
+              resolvedImageSizeState.value = IntSize(width, height)
+            }
+          },
+        )
+      }
     }
   }
 }

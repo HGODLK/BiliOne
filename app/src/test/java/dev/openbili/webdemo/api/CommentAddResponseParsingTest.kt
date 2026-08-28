@@ -2,6 +2,7 @@ package dev.openbili.webdemo.api
 
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -29,7 +30,7 @@ class CommentAddResponseParsingTest {
         """.trimIndent()
       )
 
-    val result = BiliCommentApi.parseAddedCommentResponse(json, "你好", "响应无效")
+    val result = BiliCommentApi.parseAddedCommentResponse(json, "响应无效")
 
     assertEquals(101L, result.rpid)
     assertEquals("测试用户", result.name)
@@ -37,14 +38,14 @@ class CommentAddResponseParsingTest {
   }
 
   @Test
-  fun fallsBackToMinimalCommentWhenOnlyRpidIsReturned() {
+  fun rejectsUnconfirmedResponseWhenOnlyRpidIsReturned() {
     val json = JSONObject("""{"data":{"rpid":303,"mid":404}}""")
 
-    val result = BiliCommentApi.parseAddedCommentResponse(json, "刚发送", "响应无效")
+    val error =
+      assertThrows(IllegalStateException::class.java) {
+        BiliCommentApi.parseAddedCommentResponse(json, "响应无效")
+      }
 
-    assertEquals(303L, result.rpid)
-    assertEquals(404L, result.mid)
-    assertEquals("我", result.name)
-    assertEquals("刚发送", result.content)
+    assertEquals("响应无效", error.message)
   }
 }

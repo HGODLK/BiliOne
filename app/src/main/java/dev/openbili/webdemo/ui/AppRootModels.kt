@@ -350,6 +350,7 @@ internal data class VideoPageEntry(
   val replyItems: List<CommentItem> = emptyList(),
   val replyPage: Int = 1,
   val replyHasMore: Boolean = false,
+  val replyThreadUiState: ReplyThreadUiState = ReplyThreadUiState(),
   val danmaku: List<DanmakuItem>,
   val danmakuMask: DanmakuMaskTimeline?,
   val emotes: List<BiliEmote>,

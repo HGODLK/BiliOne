@@ -20,6 +20,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Rect
 import dev.openbili.webdemo.api.BiliBangumiApi
 import dev.openbili.webdemo.api.BiliCommentApi
+import dev.openbili.webdemo.api.BiliCommentWebRiskProvider
 import dev.openbili.webdemo.api.BiliEmote
 import dev.openbili.webdemo.api.BiliEmotePackage
 import dev.openbili.webdemo.api.BiliFavoriteApi
@@ -99,6 +100,7 @@ internal class AppRootVideoState {
   var replyItems by mutableStateOf<List<CommentItem>>(emptyList())
   var replyPage by mutableStateOf(1)
   var replyHasMore by mutableStateOf(false)
+  var replyThreadUiState by mutableStateOf(ReplyThreadUiState())
   var repliesLoading by mutableStateOf(false)
   var danmaku by mutableStateOf<List<DanmakuItem>>(emptyList())
   var danmakuMask by mutableStateOf<DanmakuMaskTimeline?>(null)
@@ -209,6 +211,7 @@ internal class AppRootVideoState {
       replyItems = replyItems,
       replyPage = replyPage,
       replyHasMore = replyHasMore,
+      replyThreadUiState = retainedReplyThreadUiState(replyThreadUiState, replyRoot?.rpid),
       danmaku = danmaku,
       danmakuMask = danmakuMask,
       emotes = emotes,
@@ -401,95 +404,103 @@ internal class AppRootVideoState {
     }
   }
 
-  fun postComment(
+  suspend fun postComment(
     context: Context,
     message: String,
     imageUri: Uri?,
-    scope: CoroutineScope,
-  ) {
+  ): Boolean {
     if (commentOid <= 0L) {
       Toast.makeText(context, "评论区还在加载，请稍后再试", Toast.LENGTH_SHORT).show()
-      return
+      return false
     }
-    if (commentPostInFlight) return
+    if (commentPostInFlight) return false
     if (pendingCommentSortPrevious != null) {
       Toast.makeText(context, "评论排序加载中，请稍后再试", Toast.LENGTH_SHORT).show()
-      return
+      return false
     }
     val expectedOid = commentOid
     val requestGeneration = ++commentRequestGeneration
     commentPostInFlight = true
     commentsLoading = true
-    scope.launch {
-      try {
-        val added =
-          withContext(Dispatchers.IO) {
-            val uploadedImage = imageUri?.let { uploadCommentImage(context, it) }
-            BiliCommentApi.addComment(expectedOid, message, image = uploadedImage)
-          }
-        if (requestGeneration == commentRequestGeneration && commentOid == expectedOid) {
-          val updated = (commentItems + added).distinctBy { it.rpid }
-          commentItems =
-            if (commentSort == CommentSort.TIME) orderCommentsByTime(updated)
-            else listOf(added) + commentItems
-          commentTotalCount += 1
+    return try {
+      val uploadedImage =
+        withContext(Dispatchers.IO) { imageUri?.let { uploadCommentImage(context, it) } }
+      val riskParameters = BiliCommentWebRiskProvider.collect(context)
+      val added =
+        withContext(Dispatchers.IO) {
+          BiliCommentApi.addComment(
+            expectedOid,
+            message,
+            riskParameters,
+            image = uploadedImage,
+          )
         }
-      } catch (error: Exception) {
-        if (error is kotlinx.coroutines.CancellationException) throw error
-        Toast.makeText(context, error.message ?: "评论发送失败", Toast.LENGTH_SHORT).show()
-      } finally {
-        commentPostInFlight = false
-        if (requestGeneration == commentRequestGeneration && commentOid == expectedOid) {
-          commentsLoading = false
-        }
+      if (requestGeneration == commentRequestGeneration && commentOid == expectedOid) {
+        val updated = (commentItems + added).distinctBy { it.rpid }
+        commentItems =
+          if (commentSort == CommentSort.TIME) orderCommentsByTime(updated)
+          else listOf(added) + commentItems
+        commentTotalCount += 1
+        true
+      } else {
+        false
+      }
+    } catch (error: Exception) {
+      if (error is kotlinx.coroutines.CancellationException) throw error
+      Toast.makeText(context, error.message ?: "评论发送失败", Toast.LENGTH_SHORT).show()
+      false
+    } finally {
+      commentPostInFlight = false
+      if (requestGeneration == commentRequestGeneration && commentOid == expectedOid) {
+        commentsLoading = false
       }
     }
   }
 
-  fun postReply(
+  suspend fun postReply(
     context: Context,
     root: CommentItem,
     parent: CommentItem,
     message: String,
     imageUri: Uri?,
-    scope: CoroutineScope,
-  ) {
-    if (repliesLoading || commentOid == 0L) return
+  ): Boolean {
+    if (repliesLoading || commentOid == 0L) return false
     val expectedOid = commentOid
     val requestGeneration = replyRequestGate.begin()
     repliesLoading = true
-    scope.launch {
-      try {
-        val added =
-          withContext(Dispatchers.IO) {
-            val uploadedImage = imageUri?.let { uploadCommentImage(context, it) }
-            BiliCommentApi.addReply(
-              expectedOid,
-              root.rpid,
-              parent.rpid,
-              message,
-              image = uploadedImage,
-            )
-          }
-        if (commentOid == expectedOid) {
-          if (
-            replyRequestGate.isCurrent(requestGeneration) && replyRoot?.rpid == root.rpid
-          ) {
-            replyItems = (replyItems + added).distinctBy { it.rpid }
-          }
-          commentItems = commentItems.map {
-            if (it.rpid == root.rpid) it.copy(replyCount = it.replyCount + 1) else it
-          }
+    return try {
+      val uploadedImage =
+        withContext(Dispatchers.IO) { imageUri?.let { uploadCommentImage(context, it) } }
+      val riskParameters = BiliCommentWebRiskProvider.collect(context)
+      val added =
+        withContext(Dispatchers.IO) {
+          BiliCommentApi.addReply(
+            expectedOid,
+            root.rpid,
+            parent.rpid,
+            message,
+            riskParameters,
+            image = uploadedImage,
+          )
         }
-      } catch (error: Exception) {
-        if (error is kotlinx.coroutines.CancellationException) throw error
-        Toast.makeText(context, error.message ?: "回复发送失败", Toast.LENGTH_SHORT).show()
-      } finally {
-        if (
-          commentOid == expectedOid && replyRequestGate.isCurrent(requestGeneration)
-        ) {
-          repliesLoading = false
+      if (commentOid == expectedOid) {
+        if (replyRequestGate.isCurrent(requestGeneration) && replyRoot?.rpid == root.rpid) {
+          replyItems = (replyItems + added).distinctBy { it.rpid }
         }
+        commentItems = commentItems.map {
+          if (it.rpid == root.rpid) it.copy(replyCount = it.replyCount + 1) else it
+        }
+        true
+      } else {
+        false
+      }
+    } catch (error: Exception) {
+      if (error is kotlinx.coroutines.CancellationException) throw error
+      Toast.makeText(context, error.message ?: "回复发送失败", Toast.LENGTH_SHORT).show()
+      false
+    } finally {
+      if (commentOid == expectedOid && replyRequestGate.isCurrent(requestGeneration)) {
+        repliesLoading = false
       }
     }
   }
@@ -813,6 +824,7 @@ internal class AppRootVideoState {
     replyItems = emptyList()
     replyPage = 1
     replyHasMore = false
+    replyThreadUiState = ReplyThreadUiState(openedRootRpid = comment.rpid)
     repliesLoading = true
     val expectedOid = commentOid
     scope.launch {
@@ -842,7 +854,12 @@ internal class AppRootVideoState {
   fun dismissReplies() {
     replyRequestGate.invalidate()
     replyRoot = null
+    replyThreadUiState = ReplyThreadUiState()
     repliesLoading = false
+  }
+
+  fun updateReplyThreadScroll(rootRpid: Long, index: Int, offset: Int) {
+    replyThreadUiState = replyThreadUiState.withScrollPosition(rootRpid, index, offset)
   }
 
   fun loadMoreReplies(scope: CoroutineScope) {
@@ -938,6 +955,9 @@ internal class AppRootVideoState {
     replyItems = entry.replyItems
     replyPage = entry.replyPage
     replyHasMore = entry.replyHasMore
+    replyThreadUiState =
+      entry.replyThreadUiState.takeIf { it.openedRootRpid == entry.replyRoot?.rpid }
+        ?: ReplyThreadUiState()
     danmaku = entry.danmaku
     danmakuMask = entry.danmakuMask
     if (entry.emotes.isNotEmpty()) emotes = entry.emotes
@@ -974,6 +994,7 @@ internal class AppRootVideoState {
     replyItems = emptyList()
     replyPage = 1
     replyHasMore = false
+    replyThreadUiState = ReplyThreadUiState()
     repliesLoading = false
     commentOid = 0L
     commentPage = 1

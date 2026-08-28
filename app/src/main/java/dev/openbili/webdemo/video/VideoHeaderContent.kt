@@ -35,7 +35,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -55,6 +54,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -98,6 +98,7 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 /** 视频页头部组合体。 */
 @Composable
@@ -849,7 +850,7 @@ internal fun ReplyThreadPanel(
   onLike: (CommentItem) -> Unit,
   uploaderMid: Long,
   onProfileClick: (Long, CommentItem, CommentProfileAnchor) -> Unit,
-  onImagePreview: (CommentImage, Rect) -> Unit,
+  onImagePreview: (List<CommentImage>, Int, Rect) -> Unit,
   onReply: (CommentItem, CommentItem) -> Unit,
   onLoadMore: () -> Unit,
   navigationTargetRpid: Long? = null,
@@ -880,12 +881,28 @@ internal fun ReplyThreadPanel(
   backHandlingEnabled: Boolean = true,
   controlEnabled: Boolean = false,
   controlInitialFocusRequester: FocusRequester? = null,
+  initialFirstVisibleItemIndex: Int = 0,
+  initialFirstVisibleItemScrollOffset: Int = 0,
+  onScrollPositionChanged: (Int, Int) -> Unit = { _, _ -> },
   modifier: Modifier = Modifier,
 ) {
   val controlBackFocusRequester = remember { FocusRequester() }
   var replyViewportHeightPx by remember(root.rpid) { mutableStateOf(0f) }
-  val replyListState = rememberLazyListState()
+  val replyListState =
+    remember(root.rpid) {
+      LazyListState(
+        firstVisibleItemIndex = initialFirstVisibleItemIndex.coerceAtLeast(0),
+        firstVisibleItemScrollOffset = initialFirstVisibleItemScrollOffset.coerceAtLeast(0),
+      )
+    }
   var reachedNavigationRequestId by remember(root.rpid) { mutableStateOf<Long?>(null) }
+  LaunchedEffect(root.rpid, replyListState) {
+    snapshotFlow {
+        replyListState.firstVisibleItemIndex to replyListState.firstVisibleItemScrollOffset
+      }
+      .distinctUntilChanged()
+      .collect { (index, offset) -> onScrollPositionChanged(index, offset) }
+  }
   LaunchedEffect(navigationRequestId, navigationTargetRpid, replies, hasMore, loading) {
     val targetRpid = navigationTargetRpid ?: return@LaunchedEffect
     val requestId = navigationRequestId ?: return@LaunchedEffect

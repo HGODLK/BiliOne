@@ -1,5 +1,6 @@
 package dev.openbili.webdemo.video
 
+import dev.openbili.webdemo.api.CommentJumpLink
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -36,7 +37,59 @@ class CommentVideoLinksTest {
     val parsed = parseCommentVideoLinks(content)
 
     assertTrue(parsed.links.isEmpty())
+    assertEquals(listOf("https://b23.tv/AbCd12"), parsed.pendingVideoLinks.map { it.targetUrl })
     assertEquals(content, parsed.textWithMappedLinksRemoved(emptySet()))
+  }
+
+  @Test
+  fun asciiDoubleQuoteIsNotIncludedInVideoLink() {
+    val content = "推荐 \"https://b23.tv/BV1ERTR6zECb\""
+    val parsed = parseCommentVideoLinks(content)
+
+    assertEquals("https://b23.tv/BV1ERTR6zECb", parsed.links.single().rawUrl)
+    assertEquals("推荐 \"\"", parsed.textWithMappedLinksRemoved(setOf("BV1ERTR6zECb")))
+  }
+
+  @Test
+  fun resolvesRealB23ShareCodeIntoVideoCardReference() {
+    val content = "新视频来咯 https://b23.tv/r37V9cj"
+    val pending = parseCommentVideoLinks(content)
+    val parsed =
+      pending.withResolvedShortLinks(
+        mapOf("https://b23.tv/r37V9cj" to "BV17Bus6dE4J")
+      )
+
+    assertEquals(listOf("BV17Bus6dE4J"), parsed.links.map { it.bvid })
+    assertEquals("新视频来咯", parsed.textWithMappedLinksRemoved(setOf("BV17Bus6dE4J")))
+  }
+
+  @Test
+  fun jumpMetadataCanResolveDisplayedShortLinkWithoutNetworkRedirect() {
+    val content = "新视频来咯 https://b23.tv/r37V9cj"
+    val parsed =
+      parseCommentVideoLinks(content)
+        .withCommentJumpLinks(
+          listOf(
+            CommentJumpLink(
+              key = "https://b23.tv/r37V9cj",
+              pcUrl = "https://www.bilibili.com/video/BV17Bus6dE4J/",
+            )
+          )
+        )
+
+    assertEquals(listOf("BV17Bus6dE4J"), parsed.links.map { it.bvid })
+    assertTrue(parsed.pendingVideoLinks.isEmpty())
+  }
+
+  @Test
+  fun extractsVideoReferenceOnlyFromCanonicalBilibiliVideoPage() {
+    assertEquals(
+      "BV17Bus6dE4J",
+      extractCommentVideoReferenceFromUrl(
+        "https://www.bilibili.com/video/BV17Bus6dE4J/?spm_id_from=333.999"
+      ),
+    )
+    assertEquals(null, extractCommentVideoReferenceFromUrl("https://example.com/BV17Bus6dE4J"))
   }
 
   @Test

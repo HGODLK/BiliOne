@@ -1,11 +1,12 @@
 package dev.openbili.webdemo.video
 
+import dev.openbili.webdemo.api.CommentJumpLink
 import dev.openbili.webdemo.api.VideoInfo
 import dev.openbili.webdemo.feed.FeedItem
 import dev.openbili.webdemo.feed.FeedViewModel
 
 private val commentUrlPattern =
-  Regex("(?:(?:https?|bilibili):)?//[^\\s<>，。！？；：）】》”]+", RegexOption.IGNORE_CASE)
+  Regex("(?:(?:https?|bilibili):)?//[^\\s<>，。！？；：）】》”\\\"]+", RegexOption.IGNORE_CASE)
 private val bvidPattern = Regex("^BV1[1-9A-NP-Za-km-z]{9}$", RegexOption.IGNORE_CASE)
 private val rawBvidPattern =
   Regex("(?<![0-9A-Za-z])BV1[1-9A-NP-Za-km-z]{9}(?![0-9A-Za-z])", RegexOption.IGNORE_CASE)
@@ -16,7 +17,7 @@ private val timestampPattern =
   Regex("(?<!\\d)(?:(\\d+)#)?(\\d+(?::|：)){1,2}\\d{2}")
 private val trailingUrlPunctuation =
   setOf(
-    ',', '.', '!', '?', ';', ':', ')', ']', '}', '，', '。', '！', '？', '；', '：', '）', '】', '》', '”', '\'',
+    ',', '.', '!', '?', ';', ':', ')', ']', '}', '，', '。', '！', '？', '；', '：', '）', '】', '》', '”', '"', '\'',
   )
 
 /** 根据评论中的链接类型决定长按复制内容。 */
@@ -45,6 +46,13 @@ internal data class CommentArticleLink(
   val endIndex: Int = startIndex + rawUrl.length,
 )
 
+internal data class PendingCommentVideoLink(
+  val rawUrl: String,
+  val targetUrl: String,
+  val startIndex: Int,
+  val endIndex: Int,
+)
+
 enum class CommentMediaKind { VIDEO, ARTICLE }
 
 internal data class CommentMediaReference(
@@ -66,6 +74,7 @@ internal data class ParsedCommentVideoLinks(
   val originalText: String,
   val links: List<CommentVideoLink>,
   val articleLinks: List<CommentArticleLink> = emptyList(),
+  val pendingVideoLinks: List<PendingCommentVideoLink> = emptyList(),
 ) {
   val orderedReferences: List<CommentMediaReference>
     get() =
@@ -104,11 +113,75 @@ internal data class ParsedCommentVideoLinks(
       .replace(Regex("(?:\\r?\\n){3,}"), "\n\n")
       .trim()
   }
+
+  internal fun withResolvedShortLinks(
+    resolvedReferences: Map<String, String>
+  ): ParsedCommentVideoLinks {
+    if (resolvedReferences.isEmpty() || pendingVideoLinks.isEmpty()) return this
+    val resolvedLinks =
+      pendingVideoLinks.mapNotNull { pending ->
+        val reference = resolvedReferences[pending.targetUrl] ?: return@mapNotNull null
+        CommentVideoLink(
+          rawUrl = pending.rawUrl,
+          bvid = reference,
+          startIndex = pending.startIndex,
+          endIndex = pending.endIndex,
+        )
+      }
+    return copy(
+      links =
+        (links + resolvedLinks)
+          .distinctBy { Triple(it.startIndex, it.endIndex, it.bvid.lowercase()) }
+          .sortedBy { it.startIndex }
+    )
+  }
+
+  /** 使用评论接口给出的跳转目标补足正文中无法直接识别的短链或显示文本。 */
+  internal fun withCommentJumpLinks(jumpLinks: List<CommentJumpLink>): ParsedCommentVideoLinks {
+    if (jumpLinks.isEmpty()) return this
+    val augmentedLinks = links.toMutableList()
+    val augmentedPending = pendingVideoLinks.toMutableList()
+    jumpLinks.forEach { jump ->
+      if (jump.key.isBlank() || jump.pcUrl.isBlank()) return@forEach
+      val target = parseCommentVideoLinks(jump.pcUrl)
+      val targetVideo = target.links.firstOrNull()
+      val targetPending = target.pendingVideoLinks.firstOrNull()
+      if (targetVideo == null && targetPending == null) return@forEach
+      val existingPending = augmentedPending.firstOrNull { it.rawUrl == jump.key }
+      val existingLink = augmentedLinks.firstOrNull { it.rawUrl == jump.key }
+      val start =
+        existingPending?.startIndex
+          ?: existingLink?.startIndex
+          ?: originalText.indexOf(jump.key).takeIf { it >= 0 }
+          ?: return@forEach
+      val end = start + jump.key.length
+      if (targetVideo != null) {
+        augmentedPending.removeAll { it.startIndex == start && it.endIndex == end }
+        augmentedLinks.removeAll { it.startIndex == start && it.endIndex == end }
+        augmentedLinks += CommentVideoLink(jump.key, targetVideo.bvid, start, end)
+      } else if (augmentedLinks.none { it.startIndex == start && it.endIndex == end }) {
+        augmentedPending.removeAll { it.startIndex == start && it.endIndex == end }
+        augmentedPending +=
+          PendingCommentVideoLink(
+            rawUrl = jump.key,
+            targetUrl = targetPending!!.targetUrl,
+            startIndex = start,
+            endIndex = end,
+          )
+      }
+    }
+    return copy(
+      links = augmentedLinks.distinctBy { Triple(it.startIndex, it.endIndex, it.bvid.lowercase()) },
+      pendingVideoLinks =
+        augmentedPending.distinctBy { Triple(it.startIndex, it.endIndex, it.targetUrl) },
+    )
+  }
 }
 
 internal fun parseCommentVideoLinks(text: String): ParsedCommentVideoLinks {
   val videoLinks = mutableListOf<CommentVideoLink>()
   val articleLinks = mutableListOf<CommentArticleLink>()
+  val pendingVideoLinks = mutableListOf<PendingCommentVideoLink>()
   val occupiedRanges = mutableListOf<IntRange>()
   val allUrlRanges = mutableListOf<IntRange>()
   fun isOccupied(range: IntRange): Boolean = occupiedRanges.any { it.overlaps(range) }
@@ -153,6 +226,17 @@ internal fun parseCommentVideoLinks(text: String): ParsedCommentVideoLinks {
     }
     avidPattern.matchEntire(candidate)?.groupValues?.getOrNull(1)?.toLongOrNull()?.let {
       videoLinks += CommentVideoLink(url, "av$it", urlStart, urlEnd)
+      mark(urlStart, urlEnd)
+      return@forEach
+    }
+    if ((host == "b23.tv" || host == "www.b23.tv") && candidate.isNotBlank()) {
+      pendingVideoLinks +=
+        PendingCommentVideoLink(
+          rawUrl = url,
+          targetUrl = "https://$withoutScheme",
+          startIndex = urlStart,
+          endIndex = urlEnd,
+        )
       mark(urlStart, urlEnd)
       return@forEach
     }
@@ -214,7 +298,13 @@ internal fun parseCommentVideoLinks(text: String): ParsedCommentVideoLinks {
       )
     mark(range.first, range.last + 1)
   }
-  return ParsedCommentVideoLinks(text, videoLinks, articleLinks)
+  return ParsedCommentVideoLinks(text, videoLinks, articleLinks, pendingVideoLinks)
+}
+
+/** 只接受 B 站视频详情页，供短链重定向结果校验使用。 */
+internal fun extractCommentVideoReferenceFromUrl(url: String): String? {
+  val parsed = parseCommentVideoLinks(url)
+  return parsed.links.singleOrNull()?.bvid
 }
 
 /** 按 B 站网页端规则解析评论中的 M:SS/H:MM:SS 时间戳。 */
