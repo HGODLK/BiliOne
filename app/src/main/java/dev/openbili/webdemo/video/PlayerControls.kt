@@ -507,6 +507,7 @@ internal fun ModernPlayerControls(
   var qualityMenu by remember { mutableStateOf(false) }
   var subtitleMenu by remember { mutableStateOf(false) }
   var danmakuMenu by remember { mutableStateOf(false) }
+  var chapterMenu by remember { mutableStateOf(false) }
   var sliderPreviewMs by remember { mutableStateOf<Long?>(null) }
   val controlSeekFocusRequester = remember { FocusRequester() }
   val controlFallbackPlayFocusRequester = remember { FocusRequester() }
@@ -515,10 +516,16 @@ internal fun ModernPlayerControls(
   // ── 当前可用的臻彩音质模式，用于控制行按键序列与音质按钮 ───────────────────
   val premiumModes =
     PremiumAudioMode.entries.filter { premiumAudioVisible && playData.supportsPremiumAudio(it) }
+  val currentChapter =
+    remember(displayedPositionMs, playData.chapters) {
+      chapterAtPosition(displayedPositionMs, playData.chapters)?.takeIf { it.title.isNotBlank() }
+    }
+  val displayableChapterItems = remember(playData.chapters) { displayableChapters(playData.chapters) }
   // ── 控制器焦点链的按键序列：按显示顺序登记每个可聚焦控件 ───────────────────
   val controlRowKeys =
     buildList {
       add("play")
+      if (currentChapter != null) add("chapter")
       premiumModes.forEach { add("audio_${it.name}") }
       if (isFullscreen && onOpenSelection != null) add("selection")
       add("speed")
@@ -555,11 +562,14 @@ internal fun ModernPlayerControls(
     }
   }
   // ── 菜单可见性上报：任一菜单展开即通知调用方暂停自动隐藏控制层 ─────────────
-  LaunchedEffect(speedMenu, qualityMenu, subtitleMenu, danmakuMenu) {
-    onMenuVisibilityChanged(speedMenu || qualityMenu || subtitleMenu || danmakuMenu)
+  LaunchedEffect(speedMenu, qualityMenu, subtitleMenu, danmakuMenu, chapterMenu) {
+    onMenuVisibilityChanged(speedMenu || qualityMenu || subtitleMenu || danmakuMenu || chapterMenu)
   }
   LaunchedEffect(subtitleState.mediaId, subtitleState.tracks.isNotEmpty()) {
     if (subtitleState.tracks.isEmpty()) subtitleMenu = false
+  }
+  LaunchedEffect(playData.chapters, currentChapter) {
+    if (displayableChapterItems.isEmpty() || currentChapter == null) chapterMenu = false
   }
   // 组件销毁时复位菜单可见性，避免残留"菜单展开"状态影响自动隐藏逻辑。
   DisposableEffect(Unit) { onDispose { onMenuVisibilityChanged(false) } }
@@ -624,6 +634,7 @@ internal fun ModernPlayerControls(
         controlEnabled = controlEnabled,
         controlFocusRequester = controlSeekFocusRequester,
         controlDownFocusRequester = controlPlayFocusRequester,
+        chapters = playData.chapters,
       )
       Row(
         modifier = Modifier.fillMaxWidth(),
@@ -659,6 +670,41 @@ internal fun ModernPlayerControls(
           color = Color.White,
           style = MaterialTheme.typography.labelMedium,
         )
+        if (currentChapter != null) {
+          Box {
+            TextButton(
+              onClick = { chapterMenu = true },
+              modifier =
+                Modifier.widthIn(max = 180.dp)
+                  .controlRowNavigation("chapter")
+                  .controlFocusOutline(
+                    RoundedCornerShape(10.dp),
+                    MaterialTheme.colorScheme.primary,
+                    width = 3.dp,
+                    enabled = controlEnabled,
+                  ),
+            ) {
+              Text(
+                currentChapter.title.trim(),
+                color = Color.White,
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+              )
+            }
+            DropdownMenu(expanded = chapterMenu, onDismissRequest = { chapterMenu = false }) {
+              displayableChapterItems.forEach { chapter ->
+                DropdownMenuItem(
+                  text = { Text("${formatPlayerTime(chapter.startMs)}  ${chapter.title.trim()}") },
+                  onClick = {
+                    chapterMenu = false
+                    onSeek(chapter.startMs)
+                  },
+                )
+              }
+            }
+          }
+        }
         if (premiumAudioVisible) {
           Spacer(Modifier.width(10.dp))
           PremiumAudioMode.entries.forEach { mode ->

@@ -228,6 +228,8 @@ data class PlayUrlData(
   val streams: List<VideoStream>,
   val currentStreamIndex: Int,
   val durationMs: Long = 0L,
+  /** B 站播放器页返回的分段章节；时间线按秒换算为毫秒后供进度条绘制。 */
+  val chapters: List<VideoChapter> = emptyList(),
 ) {
   fun selectedAudioUrl(): String? =
     when (premiumAudioMode) {
@@ -249,6 +251,14 @@ data class PlayUrlData(
       PremiumAudioMode.HI_RES -> hiResAudio != null || !hiResAudioUrl.isNullOrBlank()
     }
 }
+
+/** 播放器页的一个分段章节（B 站接口字段名为 view_point）。 */
+data class VideoChapter(
+  val startMs: Long,
+  val endMs: Long,
+  val title: String,
+  val imageUrl: String? = null,
+)
 
 // ── 弹幕 ──────────────────────────────────────────────────────────────────
 

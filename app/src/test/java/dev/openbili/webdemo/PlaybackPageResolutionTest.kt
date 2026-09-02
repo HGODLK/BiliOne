@@ -28,6 +28,31 @@ class PlaybackPageResolutionTest {
   }
 
   @Test
+  fun explicitBangumiPageIsKeptEvenWhenInfoPagesOmitItsCid() {
+    val bangumiPage = VideoPage(page = 1, cid = 909L, part = "番剧集", durationSeconds = 1_200L)
+
+    val selected =
+      resolvePlaybackPage(
+        requestedPage = bangumiPage,
+        defaultCid = 101L,
+        pages = pages,
+        trustRequestedPage = true,
+      )
+
+    assertEquals(bangumiPage, selected)
+  }
+
+  @Test
+  fun untrustedPageFallsBackWhenItsCidIsNotInVideoPages() {
+    val unknownPage = VideoPage(page = 1, cid = 909L, part = "未知", durationSeconds = 1_200L)
+
+    val selected =
+      resolvePlaybackPage(requestedPage = unknownPage, defaultCid = 101L, pages = pages)
+
+    assertEquals(101L, selected?.cid)
+  }
+
+  @Test
   fun retainedSecondPageCidRestoresSecondPage() {
     val selected = resolvePlaybackPage(requestedPage = null, defaultCid = 102L, pages = pages)
 

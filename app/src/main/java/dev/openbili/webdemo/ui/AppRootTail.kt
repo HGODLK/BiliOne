@@ -744,9 +744,14 @@ internal fun appRootTailContent(
     historyCid,
     historyDuration,
     dataCommitAllowedId,
+    videoPageDataReadyId,
   ) {
     val item = appState.selectedVideo ?: return@LaunchedEffect
-    if (dataCommitAllowedId != item.id || historyCid <= 0L) return@LaunchedEffect
+    if (
+      dataCommitAllowedId != item.id ||
+        videoPageDataReadyId != item.id ||
+        historyCid <= 0L
+    ) return@LaunchedEffect
     val expectedCid = historyCid
     val expectedDuration = historyDuration
     val cachedEntry = videoEntryCache[item.id]
@@ -772,12 +777,17 @@ internal fun appRootTailContent(
     historyCid,
     historyDuration,
     dataCommitAllowedId,
+    videoPageDataReadyId,
     settings.danmakuDensity == 5,
     videoInfo?.publishedAt,
     videoInfo?.danmakuCount,
   ) {
     val item = appState.selectedVideo ?: return@LaunchedEffect
-    if (dataCommitAllowedId != item.id || historyCid <= 0L) return@LaunchedEffect
+    if (
+      dataCommitAllowedId != item.id ||
+        videoPageDataReadyId != item.id ||
+        historyCid <= 0L
+    ) return@LaunchedEffect
     val expectedCid = historyCid
     val requestAllHistory = settings.danmakuDensity == 5
     if (!requestAllHistory) {
@@ -826,12 +836,14 @@ internal fun appRootTailContent(
     historyAid,
     historyCid,
     dataCommitAllowedId,
+    videoPageDataReadyId,
     settings.danmakuSmartBlocking,
   ) {
     val item = appState.selectedVideo ?: return@LaunchedEffect
     if (
       !settings.danmakuSmartBlocking ||
         dataCommitAllowedId != item.id ||
+        videoPageDataReadyId != item.id ||
         historyAid <= 0L ||
         historyCid <= 0L
     ) {
@@ -1828,7 +1840,10 @@ internal fun appRootTailContent(
         startRecommendedVideoRef = { current: FeedItem, recommendation: FeedItem, bounds: Rect, returnBounds: Rect?, fromPlaybackEnd: Boolean ->
           startRecommendedVideo(current, recommendation, bounds, returnBounds, fromPlaybackEnd)
         },
-        selectCollectionEpisodeRef = { episode: FeedItem -> selectCollectionEpisode(episode) },
+        selectCollectionEpisodeRef = { episode: FeedItem ->
+          selectCollectionEpisode(episode)
+          Unit
+        },
         showVideoPreviewRef = { item: FeedItem -> showVideoPreview(item) },
         startEnterArticleRef = { article: ArticleItem, sourceBounds: Rect?, origin: ArticleOrigin ->
           startEnterArticle(article, sourceBounds, origin)

@@ -41,6 +41,7 @@ import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import dev.openbili.webdemo.api.AudioStream
 import dev.openbili.webdemo.api.BiliBangumiApi
 import dev.openbili.webdemo.api.BiliFavoriteApi
+import dev.openbili.webdemo.api.BiliReportApi
 import dev.openbili.webdemo.api.BiliVideoApi
 import dev.openbili.webdemo.api.FavoriteFolder
 import dev.openbili.webdemo.api.FeedCard
@@ -61,6 +62,7 @@ import dev.openbili.webdemo.selectPreferredStreamIndex
 import dev.openbili.webdemo.settings.AdvancedAudioPriority
 import dev.openbili.webdemo.settings.DeviceMediaCapabilities
 import dev.openbili.webdemo.settings.PreferredResolutionMode
+import dev.openbili.webdemo.video.chapterAtPosition
 import dev.openbili.webdemo.UrlPolicy
 import java.io.File
 import kotlin.math.abs
@@ -149,6 +151,7 @@ internal data class HomeMusicUiState(
   val dolbyAvailable: Boolean = false,
   val hiResAvailable: Boolean = false,
   val selectedPremiumAudio: PremiumAudioMode? = null,
+  val chapters: List<dev.openbili.webdemo.api.VideoChapter> = emptyList(),
   val displayNameOverrides: Map<String, String> = emptyMap(),
   val deletingItemIds: Set<String> = emptySet(),
 )
@@ -158,6 +161,7 @@ internal data class MusicPlaybackProgressState(
   val positionMs: Long = 0L,
   val durationMs: Long = 0L,
   val enabled: Boolean = false,
+  val chapters: List<dev.openbili.webdemo.api.VideoChapter> = emptyList(),
 )
 
 // 把高频变化的进度字段清零，使 screenState 只在“真正影响 UI 布局”的字段变化时才发新值。
@@ -317,10 +321,17 @@ internal class HomeMusicPlayerViewModel(application: Application) : AndroidViewM
           positionMs = current.positionMs,
           durationMs = current.durationMs,
           enabled = current.currentItem != null && current.durationMs > 0L,
+          chapters = current.chapters,
         )
       }
       .distinctUntilChanged()
       .stateIn(viewModelScope, SharingStarted.Eagerly, MusicPlaybackProgressState())
+  /** 仅在跨越 view_point 时变化，供音乐页标题按钮使用。 */
+  val currentChapterState: StateFlow<dev.openbili.webdemo.api.VideoChapter?> =
+    _state
+      .map { current -> chapterAtPosition(current.positionMs, current.chapters) }
+      .distinctUntilChanged()
+      .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
   private val app: BiliApplication
     get() = getApplication()
@@ -1257,6 +1268,7 @@ internal class HomeMusicPlayerViewModel(application: Application) : AndroidViewM
         dolbyAvailable = false,
         hiResAvailable = false,
         selectedPremiumAudio = null,
+        chapters = emptyList(),
       )
     persistResumeSnapshot(force = true)
     val generation = ++mediaGeneration
@@ -1336,6 +1348,7 @@ internal class HomeMusicPlayerViewModel(application: Application) : AndroidViewM
         dolbyAvailable = dolby,
         hiResAvailable = hiRes,
         selectedPremiumAudio = selected,
+        chapters = prepared.resolved.data.chapters,
         playbackLoading = true,
         playbackError = null,
         firstFrameReady = if (transitionCover) false else _state.value.firstFrameReady,
@@ -1522,8 +1535,14 @@ internal class HomeMusicPlayerViewModel(application: Application) : AndroidViewM
       } else {
         BiliVideoApi.getVideoInfo(resolvedId)
       } ?: error("获取视频信息失败")
+    val durationMs = info.durationSeconds * 1_000L
     val data = BiliVideoApi.getPlayUrl(info.bvid, info.cid) ?: error("获取播放地址失败")
-    val prioritized = prioritizeMusicRoutes(data.copy(durationMs = info.durationSeconds * 1_000L))
+    val pageInfo =
+      runCatching {
+        BiliReportApi.getPlayerPageInfo(info.aid, info.cid, durationMs = durationMs)
+      }.getOrDefault(dev.openbili.webdemo.api.PlayerPageInfo())
+    val prioritized =
+      prioritizeMusicRoutes(data.copy(durationMs = durationMs, chapters = pageInfo.chapters))
     val streamIndex =
       selectMusicStreamIndex(
         streams = prioritized.streams,

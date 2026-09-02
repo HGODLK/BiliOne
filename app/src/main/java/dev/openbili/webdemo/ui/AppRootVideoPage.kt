@@ -118,6 +118,7 @@ fun selectVideoPage(page: VideoPage) {
   val item = appState.selectedVideo ?: return
   val info = videoInfo ?: return
   if (page.cid <= 0L || page.cid == historyCid || info.pages.none { it.cid == page.cid }) return
+  val inheritedQualityId = playerViewModel.manualPreferredQualityId()
   commitPlaybackProgress()
   videoStack.lastOrNull()?.let { currentFrame ->
     videoStack =
@@ -148,6 +149,7 @@ fun selectVideoPage(page: VideoPage) {
         item.copy(videoUrl = "https://www.bilibili.com/video/${info.bvid}")
       } else item,
     preferredResolutionMode = currentPreferredResolutionMode(),
+    preferredStreamQualityId = inheritedQualityId,
     page = page,
   )
 }
@@ -188,16 +190,17 @@ fun clearVisibleVideoData() {
   )
 }
 
-fun selectCollectionEpisode(episode: FeedItem) {
-  val current = appState.selectedVideo ?: return
+fun selectCollectionEpisode(episode: FeedItem): Boolean {
+  val current = appState.selectedVideo ?: return false
   if (
     episode.id == current.id ||
       transitionSession != null ||
       transitionPhase !is TransitionPhase.Video
   )
-    return
+    return false
 
   cacheEntry(snapshotEntry(current))
+  val inheritedQualityId = playerViewModel.manualPreferredQualityId()
   commitPlaybackProgress()
 
   playerViewModel.cancelPendingLoad()
@@ -216,6 +219,7 @@ fun selectCollectionEpisode(episode: FeedItem) {
   val retained = videoEntryCache[episode.id]
   if (retained != null) restoreEntry(retained) else clearVisibleVideoData()
   val requestedPage = retainedPlaybackPage(episode.id) ?: episode.playbackPage
+  val retainedQualityId = retained?.takeIf { it.qualityManuallySelected }?.qualityId
   playerSession.clearPlaybackEnded()
   showEmbeddedCover = true
   requestedPage?.let { page ->
@@ -232,10 +236,12 @@ fun selectCollectionEpisode(episode: FeedItem) {
     item = episode,
     startPositionMs = retained?.savedPositionMs ?: 0L,
     preferredStreamIndex = retained?.qualityIndex,
+    preferredStreamQualityId = inheritedQualityId ?: retainedQualityId,
     preferredResolutionMode = currentPreferredResolutionMode(),
     page = requestedPage,
     restoreSavedProgress = retained?.playbackEnded != true,
   )
+  return true
 }
 
 }

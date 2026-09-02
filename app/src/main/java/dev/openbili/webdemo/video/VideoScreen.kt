@@ -471,6 +471,11 @@ fun VideoScreen(
         )
       }
       .orEmpty()
+  val cachePremiumAudioModes =
+    cachePlayData
+      ?.let { data -> PremiumAudioMode.entries.filter(data::supportsPremiumAudio) }
+      .orEmpty()
+  val cacheSelectedPremiumAudioMode = cachePlayData?.premiumAudioMode
   val offlineMediaManager = remember(view.context) { OfflineMediaManager.get(view.context) }
   val cacheTargets =
     remember(videoInfo, bangumiPage, currentAccountMid, currentCid) {
@@ -2075,6 +2080,8 @@ fun VideoScreen(
       resumeAfterBangumiInfoState = resumeAfterBangumiInfoState,
       cacheTargets = cacheTargets,
       cacheStreams = cacheStreams,
+      cachePremiumAudioModes = cachePremiumAudioModes,
+      cacheSelectedPremiumAudioMode = cacheSelectedPremiumAudioMode,
       existingOfflineTargetIds = existingOfflineTargetIds,
       currentAccountVipActive = currentAccountVipActive,
       offlineMediaManager = offlineMediaManager,

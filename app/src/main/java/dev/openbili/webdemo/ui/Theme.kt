@@ -7,6 +7,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -40,14 +41,14 @@ private fun ThemeAccent.roles(): AccentRoles =
       )
     ThemeAccent.BILI_PINK ->
       AccentRoles(
-        Color(0xFFA7355B),
+        Color(0xFFFB7299),
         Color.White,
-        Color(0xFFFFD9E2),
+        Color(0xFFFFD9E5),
         Color(0xFF3E001D),
-        Color(0xFFFFB1C6),
+        Color(0xFFFB7299),
         Color(0xFF5F1134),
         Color(0xFF84254C),
-        Color(0xFFFFD9E2),
+        Color(0xFFFFD9E5),
       )
     ThemeAccent.BLUE ->
       AccentRoles(
@@ -83,6 +84,10 @@ private fun ThemeAccent.roles(): AccentRoles =
         Color(0xFFC2F0CB),
       )
   }
+
+/** 从进度条主题色派生同色系 Point 高亮色，保证叠在轨道上仍能分辨。 */
+internal fun timelinePointHighlightColor(progressColor: Color, relatedColor: Color): Color =
+  lerp(progressColor, relatedColor, 0.48f)
 
 private fun createLightColors(accent: ThemeAccent) =
   lightColorScheme(

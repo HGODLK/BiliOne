@@ -36,15 +36,19 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -109,6 +113,7 @@ import dev.openbili.webdemo.music.HomeMusicPlayerViewModel
 import dev.openbili.webdemo.music.HomeMusicUiState
 import dev.openbili.webdemo.music.MUSIC_SPECTRUM_PEAK_HOLD_MS
 import dev.openbili.webdemo.music.MusicLibraryStatus
+import dev.openbili.webdemo.video.displayableChapters
 import dev.openbili.webdemo.music.advanceMusicPeak
 import dev.openbili.webdemo.music.displayTitle
 import dev.openbili.webdemo.settings.AppSettings
@@ -720,6 +725,7 @@ internal fun HomeMusicPlayerScreen(
         MusicProgressBar(
           progressState = viewModel.progressState,
           onSeek = viewModel::seekTo,
+          chapters = state.chapters,
           controlFocusRequest = controlProgressFocusRequest,
           onControlPlayerRequested = ::requestControlPlayerFocus,
           modifier =
@@ -1289,6 +1295,15 @@ private fun MusicPlayerPane(
 ) {
   val density = LocalDensity.current
   val progress = menuHideProgress.coerceIn(0f, 1f)
+  val currentChapter by viewModel.currentChapterState.collectAsState()
+  val displayableChapterItems = remember(state.chapters) { displayableChapters(state.chapters) }
+  var chapterMenu by remember { mutableStateOf(false) }
+  val currentChapterTitle = currentChapter?.title?.trim()?.takeIf(String::isNotBlank)
+  LaunchedEffect(currentChapterTitle, displayableChapterItems) {
+    if (currentChapterTitle == null || displayableChapterItems.isEmpty()) chapterMenu = false
+  }
+  LaunchedEffect(chapterMenu) { onControlTransientOpenChanged(chapterMenu) }
+  DisposableEffect(Unit) { onDispose { onControlTransientOpenChanged(false) } }
   var controlsBaseBounds by remember { mutableStateOf(Rect.Zero) }
   BoxWithConstraints(modifier) {
     // 给标题、封面和控制区预留固定的安全带。高度不足时缩小封面，避免居中布局
@@ -1332,14 +1347,65 @@ private fun MusicPlayerPane(
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
           )
-          state.currentItem?.uploader?.takeIf(String::isNotBlank)?.let { uploader ->
-            Text(
-              uploader,
-              color = infoForegroundColor.copy(alpha = .68f),
-              style = MaterialTheme.typography.bodyMedium,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-            )
+          val uploader = state.currentItem?.uploader?.takeIf(String::isNotBlank)
+          if (uploader == null && currentChapterTitle == null) {
+            Spacer(Modifier.height(20.dp))
+          } else {
+            Row(
+              modifier = Modifier.fillMaxWidth().height(20.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+              uploader?.let {
+                Text(
+                  it,
+                  modifier = Modifier.weight(1f, fill = false),
+                  color = infoForegroundColor.copy(alpha = .68f),
+                  style = MaterialTheme.typography.bodyMedium,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                )
+              }
+              if (currentChapterTitle != null) {
+                Box(
+                  modifier =
+                    Modifier.widthIn(max = 230.dp)
+                      .height(20.dp)
+                      .clip(RoundedCornerShape(8.dp))
+                      .clickable { chapterMenu = true }
+                      .padding(horizontal = 6.dp),
+                  contentAlignment = Alignment.Center,
+                ) {
+                  Text(
+                    currentChapterTitle,
+                    color = infoForegroundColor,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                  )
+                  DropdownMenu(
+                    expanded = chapterMenu,
+                    onDismissRequest = { chapterMenu = false },
+                  ) {
+                    displayableChapterItems.forEach { chapter ->
+                      DropdownMenuItem(
+                        text = {
+                          Text(
+                            "${formatMusicDuration(chapter.startMs)}  ${chapter.title.trim()}",
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                          )
+                        },
+                        onClick = {
+                          chapterMenu = false
+                          viewModel.seekTo(chapter.startMs)
+                        },
+                      )
+                    }
+                  }
+                }
+              }
+            }
           }
         }
         Spacer(Modifier.height(18.dp))

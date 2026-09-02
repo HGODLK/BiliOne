@@ -193,6 +193,8 @@ internal class AppRootVideoState {
             )
         }
         ?.currentPosition
+    val manualQualityId = playerViewModel.manualPreferredQualityId()
+    val readyPlayData = (playerViewModel.playerState.value as? PlayerState.Ready)?.playData
     return VideoPageEntry(
       item = item,
       recommendations = videoRecommendations,
@@ -218,9 +220,9 @@ internal class AppRootVideoState {
       cid = historyCid,
       durationSeconds = historyDuration,
       savedPositionMs = playerPositionMs ?: currentPositionMs,
-      qualityIndex =
-        (playerViewModel.playerState.value as? PlayerState.Ready)?.playData?.currentStreamIndex
-          ?: 0,
+      qualityIndex = readyPlayData?.currentStreamIndex ?: 0,
+      qualityId = readyPlayData?.streams?.getOrNull(readyPlayData.currentStreamIndex)?.id,
+      qualityManuallySelected = manualQualityId != null,
       dataReady = videoPageDataReadyId == item.id,
       playbackEnded = playbackEnded,
       engagementAccountMid = videoEngagementAccountMid,
@@ -1047,6 +1049,7 @@ internal class AppRootVideoState {
                         requestedPage = requestedPage,
                         defaultCid = requestedCid,
                         pages = info.pages,
+                        trustRequestedPage = BiliVideoApi.bangumiEpisodeId(item.videoUrl) != null,
                       )
                     val currentCid = currentPage?.cid ?: requestedCid
                     VideoPageEntry(
@@ -1151,6 +1154,7 @@ private fun offlineVideoPageEntry(
     durationSeconds = cached.durationMs / 1_000L,
     savedPositionMs = 0L,
     qualityIndex = 0,
+    qualityId = cached.qualityId,
     dataReady = true,
   )
 }

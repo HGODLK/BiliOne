@@ -20,6 +20,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.zip.Inflater
 import java.util.zip.InflaterInputStream
+import kotlin.math.roundToLong
 import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONTokener
@@ -143,16 +144,94 @@ object BiliReportApi {
     )
   }
 
-  /** 读取云端观看进度（毫秒）；last_play_cid 与当前 cid 不一致时视为无进度。 */
-  fun getPlaybackProgressMs(aid: Long, cid: Long): Long {
-    if (aid <= 0L || cid <= 0L) return 0L
-    val resp = BiliHttpClient.get("https://api.bilibili.com/x/player/v2?aid=$aid&cid=$cid")
+  /**
+   * 读取播放器页信息：云端观看进度与 B 站“分段章节”都来自同一个响应。
+   *
+   * 接口的 last_play_time 单位是毫秒，view_points 的 from/to 单位是秒。无章节或接口字段
+   * 缺失时返回空列表，不能让章节解析失败影响视频播放。
+   */
+  fun getPlayerPageInfo(
+    aid: Long,
+    cid: Long,
+    durationMs: Long = 0L,
+    episodeId: Long = 0L,
+  ): PlayerPageInfo {
+    if (aid <= 0L || cid <= 0L) return PlayerPageInfo()
+    val episodeQuery = episodeId.takeIf { it > 0L }?.let { "&ep_id=$it" }.orEmpty()
+    val resp =
+      BiliHttpClient.get(
+        "https://api.bilibili.com/x/player/v2?aid=$aid&cid=$cid$episodeQuery"
+      )
     val json = JSONObject(resp.body?.string().orEmpty())
     resp.close()
-    if (json.optInt("code") != 0) return 0L
-    val data = json.optJSONObject("data") ?: return 0L
-    val lastCid = data.optLong("last_play_cid", 0L)
-    if (lastCid > 0L && lastCid != cid) return 0L
-    return data.optLong("last_play_time", 0L).coerceAtLeast(0L)
+    if (json.optInt("code") != 0) return PlayerPageInfo()
+    return parsePlayerPageInfo(json.optJSONObject("data"), cid, durationMs)
   }
+
+  /** 读取云端观看进度（毫秒）；last_play_cid 与当前 cid 不一致时视为无进度。 */
+  fun getPlaybackProgressMs(aid: Long, cid: Long): Long =
+    getPlayerPageInfo(aid, cid).lastPlayTimeMs
+}
+
+data class PlayerPageInfo(
+  val lastPlayTimeMs: Long = 0L,
+  val chapters: List<VideoChapter> = emptyList(),
+)
+
+/** 供单元测试复用的播放器页 JSON 解析；网络层只负责请求与错误兜底。 */
+internal fun parsePlayerPageInfo(
+  data: JSONObject?,
+  expectedCid: Long,
+  durationMs: Long = 0L,
+): PlayerPageInfo {
+  if (data == null) return PlayerPageInfo()
+  val lastCid = data.optLong("last_play_cid", 0L)
+  val lastPlayTimeMs =
+    if (lastCid > 0L && lastCid != expectedCid) 0L
+    else data.optLong("last_play_time", 0L).coerceAtLeast(0L)
+  val safeDurationMs = durationMs.coerceAtLeast(0L)
+  val chapters =
+    data.optJSONArray("view_points")
+      ?.let { points ->
+        buildList {
+          for (index in 0 until points.length()) {
+            val point = points.optJSONObject(index) ?: continue
+            // B 站播放器页的显示名称以 content 为准；content 为空的 point 不进入
+            // 章节标题/选择菜单，也不回退到非接口约定的 title 字段。
+            val title = point.optString("content").trim()
+            val fromMs = point.optDouble("from", Double.NaN).secondsToMsOrNull()
+            val rawToMs = point.optDouble("to", Double.NaN).secondsToMsOrNull()
+            if (title.isBlank() || fromMs == null || rawToMs == null || rawToMs <= fromMs) continue
+            val startMs = fromMs.coerceAtLeast(0L)
+            if (safeDurationMs > 0L && startMs >= safeDurationMs) continue
+            val endMs =
+              if (safeDurationMs > 0L) rawToMs.coerceIn(startMs + 1L, safeDurationMs)
+              else rawToMs
+            if (endMs <= startMs) continue
+            add(
+              VideoChapter(
+                startMs = startMs,
+                endMs = endMs,
+                title = title,
+                imageUrl =
+                  point.optString("imgUrl").trim().ifBlank {
+                    point.optString("img_url").trim().ifBlank { null }
+                  },
+              )
+            )
+          }
+        }
+      }
+      .orEmpty()
+      .sortedWith(compareBy<VideoChapter> { it.startMs }.thenBy { it.endMs })
+      .fold(mutableListOf<VideoChapter>()) { unique, chapter ->
+        if (unique.lastOrNull()?.startMs != chapter.startMs) unique += chapter
+        unique
+      }
+  return PlayerPageInfo(lastPlayTimeMs = lastPlayTimeMs, chapters = chapters)
+}
+
+private fun Double.secondsToMsOrNull(): Long? {
+  if (!isFinite() || this < 0.0) return null
+  return (this * 1000.0).roundToLong().takeIf { it >= 0L }
 }

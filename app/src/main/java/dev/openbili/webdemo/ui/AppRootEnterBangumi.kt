@@ -95,7 +95,7 @@ internal class AppRootEnterBangumiContext(
   val hiddenPopularCoverItemIdState: MutableState<String?>,
   val playerBoundsState: MutableState<Rect>,
   val videoPageDataReadyIdState: MutableState<String?>,
-  val selectCollectionEpisodeRef: (FeedItem) -> Unit,
+  val selectCollectionEpisodeRef: (FeedItem) -> Boolean,
   val activeProfileEntryRef: (Long?) -> ProfileStackEntry?,
   val restoreEntryForFreshPlaybackRef: (VideoPageEntry) -> Unit,
   val awaitStablePlayerBoundsRef: suspend () -> Rect,
@@ -154,7 +154,7 @@ internal class AppRootEnterBangumiContext(
   var commentProfileReturnTransition by profileState::commentProfileReturnTransition
   var avatarProfileReturnTransition by profileState::avatarProfileReturnTransition
 
-  fun selectCollectionEpisode(episode: FeedItem) = selectCollectionEpisodeRef(episode)
+  fun selectCollectionEpisode(episode: FeedItem): Boolean = selectCollectionEpisodeRef(episode)
   fun activeProfileEntry(entryId: Long? = null): ProfileStackEntry? = activeProfileEntryRef(entryId)
   fun restoreEntryForFreshPlayback(entry: VideoPageEntry) = restoreEntryForFreshPlaybackRef(entry)
   suspend fun awaitStablePlayerBounds(): Rect = awaitStablePlayerBoundsRef()
@@ -563,14 +563,23 @@ fun selectBangumiEpisode(episode: BangumiEpisode) {
       uploaderFace = appState.selectedVideo?.uploaderFace,
       uploaderMid = appState.selectedVideo?.uploaderMid ?: 0L,
       description = page.season?.evaluate.orEmpty(),
+      playbackPage =
+        episode.cid.takeIf { it > 0L }?.let { cid ->
+          VideoPage(
+            page = 1,
+            cid = cid,
+            part = episode.title.ifBlank { episode.longTitle },
+            durationSeconds = episode.durationSeconds,
+          )
+        },
     )
+  if (!selectCollectionEpisode(item)) return
   BangumiPlaybackStore.save(
     context.applicationContext,
     page.sourceCard,
     page.season?.seasonId ?: 0L,
     episode,
   )
-  selectCollectionEpisode(item)
   // selectCollectionEpisode() 会提交旧 aid/cid：只有在那之后才发布新剧集，避免
   // 后台心跳把旧剧集的最终进度归到新剧集上。
   activeBangumiPage = page.copy(currentEpisodeId = episode.id)

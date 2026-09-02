@@ -10,6 +10,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.zIndex
 import dev.openbili.webdemo.api.BangumiEpisode
+import dev.openbili.webdemo.api.PremiumAudioMode
 import dev.openbili.webdemo.api.VideoInfo
 import dev.openbili.webdemo.api.VideoPage
 import dev.openbili.webdemo.api.VideoStream
@@ -48,6 +49,8 @@ internal fun VideoScreenDialogs(
   resumeAfterBangumiInfoState: MutableState<Boolean>,
   cacheTargets: List<OfflineMediaRequest>,
   cacheStreams: List<VideoStream>,
+  cachePremiumAudioModes: List<PremiumAudioMode>,
+  cacheSelectedPremiumAudioMode: PremiumAudioMode?,
   existingOfflineTargetIds: Set<String>,
   currentAccountVipActive: Boolean,
   offlineMediaManager: OfflineMediaManager,
@@ -140,6 +143,8 @@ internal fun VideoScreenDialogs(
       title = bangumiPage?.season?.title ?: videoInfo?.title ?: item.title,
       targets = cacheTargets,
       streams = cacheStreams,
+      premiumAudioModes = cachePremiumAudioModes,
+      selectedPremiumAudioMode = cacheSelectedPremiumAudioMode,
       existingTargetIds = existingOfflineTargetIds,
       premiumAvailable = currentAccountVipActive,
       onDismiss = {

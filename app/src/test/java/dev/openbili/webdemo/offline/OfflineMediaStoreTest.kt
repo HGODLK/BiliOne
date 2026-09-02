@@ -1,6 +1,8 @@
 package dev.openbili.webdemo.offline
 
 import android.content.Context
+import dev.openbili.webdemo.api.PremiumAudioMode
+import dev.openbili.webdemo.api.VideoChapter
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -44,6 +46,24 @@ class OfflineMediaStoreTest {
 
     assertEquals(9988L, store.entry(entry.id)?.collectionId)
     assertEquals("第 1 集", store.entry(entry.id)?.partTitle)
+  }
+
+  @Test
+  fun audioModeAndChaptersSurvivePersistence() {
+    val store = OfflineMediaStore(context)
+    val entry =
+      entry(title = "音乐", partTitle = "P1").copy(
+        audioMode = PremiumAudioMode.HI_RES,
+        audioQualityLabel = "HiRes",
+        chapters = listOf(VideoChapter(0L, 10_000L, "前奏")),
+      )
+
+    assertTrue(store.insertIfAbsent(entry))
+
+    val restored = store.entry(entry.id)
+    assertEquals(PremiumAudioMode.HI_RES, restored?.audioMode)
+    assertEquals("HiRes", restored?.audioQualityLabel)
+    assertEquals(entry.chapters, restored?.chapters)
   }
 
   private fun entry(title: String, partTitle: String) =

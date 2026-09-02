@@ -1,6 +1,8 @@
 package dev.openbili.webdemo.offline
 
 import android.net.Uri
+import dev.openbili.webdemo.api.PremiumAudioMode
+import dev.openbili.webdemo.api.VideoChapter
 import dev.openbili.webdemo.feed.FeedItem
 import java.io.File
 
@@ -75,6 +77,10 @@ data class OfflineMediaEntry(
   val audioCacheKey: String = "",
   val videoMimeType: String = "video/mp4",
   val audioMimeType: String = "audio/mp4",
+  /** 实际缓存的音轨；null 表示标准音质。 */
+  val audioMode: PremiumAudioMode? = null,
+  val audioQualityLabel: String = "标准音质",
+  val chapters: List<VideoChapter> = emptyList(),
   val includeDanmaku: Boolean = true,
   val includeSubtitles: Boolean = true,
   val danmakuRelativePath: String = "",
@@ -131,6 +137,8 @@ data class OfflineMediaRequest(
   val episodeId: Long = 0L,
   val qualityId: Int,
   val qualityLabel: String = "",
+  /** 用户为本次缓存任务请求的音轨；不支持时由下载准备阶段回退标准音质。 */
+  val requestedAudioMode: PremiumAudioMode? = null,
   val includeDanmaku: Boolean = true,
   val includeSubtitles: Boolean = true,
   val requiresVip: Boolean = false,

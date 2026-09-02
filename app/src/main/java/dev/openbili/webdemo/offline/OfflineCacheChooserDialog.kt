@@ -38,6 +38,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.unit.dp
+import dev.openbili.webdemo.api.PremiumAudioMode
 import dev.openbili.webdemo.api.VideoStream
 import dev.openbili.webdemo.ui.LocalControlMode
 import dev.openbili.webdemo.ui.controlFocusOutline
@@ -60,6 +61,8 @@ fun OfflineCacheChooserDialog(
   premiumAvailable: Boolean,
   onDismiss: () -> Unit,
   onConfirm: (List<OfflineMediaRequest>) -> Unit,
+  premiumAudioModes: List<PremiumAudioMode> = emptyList(),
+  selectedPremiumAudioMode: PremiumAudioMode? = null,
 ) {
   // ── 推导选择状态：可选目标、已选集合、全选判定与会员阻断 ──────────
   val targetIds = remember(targets) { targets.map(::requestSelectionId) }
@@ -70,6 +73,10 @@ fun OfflineCacheChooserDialog(
       mutableStateOf(selectableTargetIds.firstOrNull()?.let(::setOf).orEmpty())
     }
   var selectedQualityId by remember(streams) { mutableStateOf(streams.firstOrNull()?.id ?: 0) }
+  var selectedAudioMode by
+    remember(premiumAudioModes, selectedPremiumAudioMode) {
+      mutableStateOf(selectedPremiumAudioMode?.takeIf { it in premiumAudioModes })
+    }
   var includeDanmaku by remember { mutableStateOf(true) }
   var includeSubtitles by remember { mutableStateOf(true) }
   val selectedTargets =
@@ -82,7 +89,9 @@ fun OfflineCacheChooserDialog(
   val allSelected =
     selectableTargetIds.isNotEmpty() && selectedTargetIds.size == selectableTargetIds.size
   // 需要会员授权的目标中只要有一个未解锁（当前账号无有效大会员），就整体阻断确认
-  val premiumBlocked = selectedTargets.any(OfflineMediaRequest::requiresVip) && !premiumAvailable
+  val premiumBlocked =
+    !premiumAvailable &&
+      (selectedTargets.any(OfflineMediaRequest::requiresVip) || selectedAudioMode != null)
   val controlMode = LocalControlMode.current
   val dismissFocusRequester = remember { FocusRequester() }
 
@@ -191,6 +200,41 @@ fun OfflineCacheChooserDialog(
             )
           }
         }
+        Text("选择音质", style = MaterialTheme.typography.labelLarge)
+        FlowRow(
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          FilterChip(
+            selected = selectedAudioMode == null,
+            onClick = { selectedAudioMode = null },
+            label = { Text("标准音质") },
+            modifier =
+              Modifier.controlFocusOutline(
+                shape = RoundedCornerShape(20.dp),
+                color = MaterialTheme.colorScheme.primary,
+              ),
+          )
+          premiumAudioModes.distinct().forEach { mode ->
+            FilterChip(
+              selected = selectedAudioMode == mode,
+              onClick = { selectedAudioMode = mode },
+              label = { Text(mode.label) },
+              modifier =
+                Modifier.controlFocusOutline(
+                  shape = RoundedCornerShape(20.dp),
+                  color = MaterialTheme.colorScheme.primary,
+                ),
+            )
+          }
+        }
+        if (targets.size > 1 && premiumAudioModes.isNotEmpty() && selectedAudioMode != null) {
+          Text(
+            "部分分P或剧集不支持所选音质时，将回退到标准音质。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
         // ── 弹幕 / 字幕开关 ──────────
         Row(verticalAlignment = Alignment.CenterVertically) {
           Checkbox(checked = includeDanmaku, onCheckedChange = { includeDanmaku = it })
@@ -208,7 +252,7 @@ fun OfflineCacheChooserDialog(
         )
         if (premiumBlocked) {
           Text(
-            "缓存番剧影视需要当前账号具有有效大会员；缓存仍会绑定账号和会员授权。",
+            "缓存高级音质或会员内容需要当前账号具有有效大会员；缓存仍会绑定账号和会员授权。",
             color = MaterialTheme.colorScheme.error,
             style = MaterialTheme.typography.bodyMedium,
           )
@@ -242,6 +286,8 @@ fun OfflineCacheChooserDialog(
                 qualityId = selectedQualityId,
                 qualityLabel =
                   streams.firstOrNull { it.id == selectedQualityId }?.quality.orEmpty(),
+                requestedAudioMode = selectedAudioMode,
+                requiresVip = target.requiresVip || selectedAudioMode != null,
                 includeDanmaku = includeDanmaku,
                 includeSubtitles = includeSubtitles,
               )

@@ -59,4 +59,17 @@ class ArticleVideoTransitionStateTest {
     assertFalse(isReturningToSuspendedVideo(retainedArticleDepth = 2, remainingArticleDepth = 3))
     assertTrue(isReturningToSuspendedVideo(retainedArticleDepth = 2, remainingArticleDepth = 2))
   }
+
+  @Test
+  fun onlyArticlesOpenedAboveSuspendedVideoCoverThePlayer() {
+    assertFalse(articleCoversSuspendedVideo(articleDepth = 0, retainedArticleDepth = 0))
+    assertTrue(articleCoversSuspendedVideo(articleDepth = 1, retainedArticleDepth = 0))
+    assertFalse(articleCoversSuspendedVideo(articleDepth = 1, retainedArticleDepth = 1))
+    assertTrue(articleCoversSuspendedVideo(articleDepth = 2, retainedArticleDepth = 1))
+  }
+
+  @Test
+  fun restoredVideoIsNotCoveredWhenSuspensionSnapshotIsCleared() {
+    assertFalse(articleCoversSuspendedVideo(articleDepth = 3, retainedArticleDepth = null))
+  }
 }

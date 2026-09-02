@@ -34,6 +34,7 @@ import dev.openbili.webdemo.api.BiliBangumiApi
 import dev.openbili.webdemo.api.BiliReportApi
 import dev.openbili.webdemo.api.BiliSubtitleApi
 import dev.openbili.webdemo.api.BiliVideoApi
+import dev.openbili.webdemo.api.PlayerPageInfo
 import dev.openbili.webdemo.api.PlayUrlData
 import dev.openbili.webdemo.api.PremiumAudioMode
 import dev.openbili.webdemo.api.VideoPage
@@ -109,6 +110,8 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
   private var failedPlaybackPositionMs = 0L
   private var pendingVideoTrackId: String? = null
   private var pendingAudioTrackId: String? = null
+  /** 仅记录用户主动选择的清晰度；新视频未传入时会清除。 */
+  private var manualQualityId: Int? = null
   private var activeManifestFile: File? = null
   private var activeSubtitles: List<PreparedSubtitle> = emptyList()
   private var activeSubtitleIdentity: SubtitleMediaIdentity? = null
@@ -173,6 +176,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     item: FeedItem,
     startPositionMs: Long = 0L,
     preferredStreamIndex: Int? = null,
+    preferredStreamQualityId: Int? = null,
     preferredResolutionMode: PreferredResolutionMode = PreferredResolutionMode.HIGH,
     page: VideoPage? = null,
     restoreSavedProgress: Boolean = true,
@@ -181,6 +185,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     offlinePlaybackEntry = null
     activePlaybackIdentity = null
     lastItem = item
+    manualQualityId = preferredStreamQualityId
     exitBackgroundAudioMode()
     PlaybackSessionService.publishDetailPlayer(getApplication())
     val requestedStartPositionMs = startPositionMs.coerceAtLeast(0L)
@@ -226,6 +231,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 requestedPage = page,
                 defaultCid = info.cid,
                 pages = info.pages,
+                trustRequestedPage = bangumiEpisodeId != null,
               )
             val cid = selectedPage?.cid ?: info.cid
             val durationSeconds =
@@ -243,13 +249,29 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 generation = generation,
               )
             }
+            val durationMs = durationSeconds * 1000L
+            val playerPageInfoRequest = async {
+              runCatching {
+                BiliReportApi.getPlayerPageInfo(
+                  aid = info.aid,
+                  cid = cid,
+                  durationMs = durationMs,
+                  episodeId = bangumiEpisodeId ?: 0L,
+                )
+              }
+                .getOrDefault(PlayerPageInfo())
+            }
             val rawData =
               (bangumiEpisodeId?.let { episodeId ->
                 BiliVideoApi.getBangumiPlayUrl(episodeId, cid)
               } ?: BiliVideoApi.getPlayUrl(bvid, cid)) ?: throw Exception("获取播放地址失败，可能需要登录、会员或地区权限")
-            val durationMs = durationSeconds * 1000L
+            val playerPageInfo = playerPageInfoRequest.await()
             val data =
-              prioritizeCdnRoutes(filterPlayableTracks(rawData.copy(durationMs = durationMs)))
+              prioritizeCdnRoutes(
+                filterPlayableTracks(
+                  rawData.copy(durationMs = durationMs, chapters = playerPageInfo.chapters)
+                )
+              )
             val localPositionMs =
               if (restoreSavedProgress) {
                 PlaybackProgressStore.read(getApplication(), info.aid, cid, durationMs)
@@ -258,7 +280,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
               }
             val serverPositionMs =
               if (!restoreSavedProgress || localPositionMs > 0L) 0L
-              else runCatching { BiliReportApi.getPlaybackProgressMs(info.aid, cid) }.getOrDefault(0L)
+              else playerPageInfo.lastPlayTimeMs
             val resumePositionMs =
               if (!restoreSavedProgress) {
                 PlaybackProgressStore.normalize(requestedStartPositionMs, durationMs)
@@ -287,7 +309,10 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
           ActivePlaybackIdentity(itemId = item.id, aid = data.aid, cid = data.cid)
         pendingStartPositionMs = data.resumePositionMs
         val selectedIndex =
-          preferredStreamIndex?.takeIf { it in data.playData.streams.indices }
+          preferredStreamQualityId
+            ?.let { requestedId -> data.playData.streams.indexOfFirst { it.id == requestedId } }
+            ?.takeIf { it >= 0 }
+            ?: preferredStreamIndex?.takeIf { it in data.playData.streams.indices }
             ?: selectPreferredStreamIndex(
               data.playData.streams,
               preferredResolutionMode,
@@ -406,13 +431,22 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
           entry.audioUrl.takeIf(String::isNotBlank)?.let { url ->
             AudioStream(id = 0, url = url, mimeType = entry.audioMimeType)
           }
+        val standardAudio = audio.takeIf { entry.audioMode == null }
+        val dolbyAudio = audio.takeIf { entry.audioMode == PremiumAudioMode.DOLBY }
+        val hiResAudio = audio.takeIf { entry.audioMode == PremiumAudioMode.HI_RES }
         val data =
           PlayUrlData(
-            dashAudioUrl = audio?.url,
-            dashAudio = audio,
+            dashAudioUrl = standardAudio?.url,
+            dolbyAudioUrl = dolbyAudio?.url,
+            hiResAudioUrl = hiResAudio?.url,
+            dashAudio = standardAudio,
+            dolbyAudio = dolbyAudio,
+            hiResAudio = hiResAudio,
+            premiumAudioMode = entry.audioMode,
             streams = listOf(stream),
             currentStreamIndex = 0,
             durationMs = entry.durationMs,
+            chapters = entry.chapters,
           )
         if (generation != loadGeneration) return@launch
         activePlaybackIdentity =
@@ -668,6 +702,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     val data = playData ?: return
     if (streamIndex !in data.streams.indices) return
     val newData = data.copy(currentStreamIndex = streamIndex)
+    manualQualityId = newData.streams[streamIndex].id
     playData = newData
     _playerState.value = PlayerState.Ready(newData)
     pendingVideoTrackId = BiliDashManifest.videoTrackId(streamIndex)
@@ -675,9 +710,14 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     exoPlayer?.let { applyPendingTrackOverrides(it.currentTracks) }
   }
 
+  /** 当前视频中用户手动选择的清晰度；自动偏好选择不会写入。 */
+  fun manualPreferredQualityId(): Int? = manualQualityId
+
   fun switchPremiumAudio(mode: PremiumAudioMode) {
     val data = playData ?: return
     if (!data.supportsPremiumAudio(mode)) return
+    // 离线条目只缓存一种音轨，按钮仅用于展示实际音质，不能切换到未缓存的模式。
+    if (offlinePlaybackEntry != null) return
     val nextData = data.copy(premiumAudioMode = mode.takeUnless { data.premiumAudioMode == it })
     val player = exoPlayer
     val resumePositionMs = player?.currentPosition?.coerceAtLeast(0L) ?: 0L
@@ -1501,8 +1541,14 @@ internal fun resolvePlaybackPage(
   requestedPage: VideoPage?,
   defaultCid: Long,
   pages: List<VideoPage>,
+  trustRequestedPage: Boolean = false,
 ): VideoPage? =
-  requestedPage?.takeIf { requested -> pages.any { it.cid == requested.cid } }
+  // PGC 的 getVideoInfo().pages 偶尔不包含已由剧集接口选出的 cid；只有番剧调用方
+  // 明确声明信任该页时才绕过普通多 P 页面校验。
+  requestedPage?.takeIf { requested ->
+    requested.cid > 0L &&
+      (trustRequestedPage || pages.any { it.cid == requested.cid })
+  }
     ?: pages.firstOrNull { it.cid == defaultCid }
 
 internal fun resolvePlaybackDurationSeconds(

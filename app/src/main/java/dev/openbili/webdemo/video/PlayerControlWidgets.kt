@@ -27,7 +27,10 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
+import dev.openbili.webdemo.api.VideoChapter
 import dev.openbili.webdemo.ui.controlFocusOutline
+import dev.openbili.webdemo.ui.timelinePointHighlightColor
+import kotlin.math.abs
 
 private const val CONTROL_SEEK_STEP_MS = 5_000L
 
@@ -42,11 +45,20 @@ internal fun YoutubeSeekBar(
   controlEnabled: Boolean = false,
   controlFocusRequester: FocusRequester? = null,
   controlDownFocusRequester: FocusRequester? = null,
+  chapters: List<VideoChapter> = emptyList(),
 ) {
   var dragging by remember { mutableStateOf(false) }
   val maximum = durationMs.coerceAtLeast(1L).toFloat()
   val progress = (value / maximum).coerceIn(0f, 1f)
-  val progressPink = Color(0xFFFF5C8A)
+  val progressColor = MaterialTheme.colorScheme.primary
+  val pointHighlightColor =
+    timelinePointHighlightColor(progressColor, MaterialTheme.colorScheme.primaryContainer)
+  val chapterBoundaries =
+    remember(durationMs, chapters) { chapterBoundaryFractions(durationMs, chapters) }
+  val activeChapterBoundaries =
+    remember(value, durationMs, chapters) {
+      activeChapterBoundaryFractions(durationMs, value.toLong(), chapters)
+    }
   Canvas(
     modifier =
       modifier
@@ -96,12 +108,13 @@ internal fun YoutubeSeekBar(
             Modifier
           }
         )
-        .pointerInput(maximum) {
+        .pointerInput(maximum, chapters) {
         awaitEachGesture {
           val down = awaitFirstDown(requireUnconsumed = false)
           dragging = true
           onScrubStateChanged(true)
           var target = (down.position.x / size.width).coerceIn(0f, 1f) * maximum
+          var moved = false
           try {
             onValueChange(target)
             down.consume()
@@ -109,9 +122,27 @@ internal fun YoutubeSeekBar(
               val event = awaitPointerEvent()
               val change = event.changes.firstOrNull { it.id == down.id } ?: break
               if (!change.pressed) break
+              moved =
+                moved ||
+                  abs(change.position.x - down.position.x) > 8f ||
+                    abs(change.position.y - down.position.y) > 8f
               target = (change.position.x / size.width).coerceIn(0f, 1f) * maximum
               onValueChange(target)
               change.consume()
+            }
+            if (!moved) {
+              nearestChapterBoundaryForTap(
+                  xPx = down.position.x,
+                  widthPx = size.width.toFloat(),
+                  durationMs = durationMs,
+                  chapters = chapters,
+                  hitSlopPx = 14f,
+                )
+                ?.let {
+                  target = it.toFloat()
+                  // 先同步预览值，再通知完成；ModernPlayerControls 会优先读取预览值。
+                  onValueChange(target)
+                }
             }
             onValueChangeFinished(target)
           } finally {
@@ -130,13 +161,33 @@ internal fun YoutubeSeekBar(
       cornerRadius = androidx.compose.ui.geometry.CornerRadius(trackHeight / 2f),
     )
     drawRoundRect(
-      color = progressPink,
+      color = progressColor,
       topLeft = Offset(0f, top),
       size = androidx.compose.ui.geometry.Size(size.width * progress, trackHeight),
       cornerRadius = androidx.compose.ui.geometry.CornerRadius(trackHeight / 2f),
     )
+    // B 站 view_points 的章节边界叠在轨道上；拖动仍连续，点击节点时由手势层精确 seek。
+    chapterBoundaries.forEach { fraction ->
+      val x = size.width * fraction
+      drawLine(
+        color = Color.Black.copy(alpha = 0.55f),
+        start = Offset(x, top - 1.dp.toPx()),
+        end = Offset(x, top + trackHeight + 1.dp.toPx()),
+        strokeWidth = 1.dp.toPx(),
+      )
+    }
+    // 节点覆盖在轨道和分隔线上；当前章节前后的节点使用同主题的区分色。
+    chapterBoundaries.forEach { fraction ->
+      val x = size.width * fraction
+      drawCircle(
+        color = if (fraction in activeChapterBoundaries) pointHighlightColor else Color.White,
+        radius = 3.dp.toPx(),
+        center = Offset(x, size.height / 2f),
+      )
+    }
+    // 播放进度大圆点始终最后绘制，避免与章节节点重叠时被遮挡。
     drawCircle(
-      color = progressPink,
+      color = progressColor,
       radius = (if (dragging) 6.dp else 5.dp).toPx(),
       center = Offset(size.width * progress, size.height / 2f),
     )

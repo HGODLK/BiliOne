@@ -210,6 +210,20 @@ internal fun isReturningToSuspendedVideo(
 ): Boolean = retainedArticleDepth != null && retainedArticleDepth == remainingArticleDepth
 
 /**
+ * 判断当前文章栈是否真的位于被挂起的视频之上。
+ *
+ * 文章页从评论链接打开时会保留视频下方已有的文章帧；这些旧帧并不遮挡播放器，只有
+ * 栈深超过挂起时记录的深度，才需要把弹幕 SurfaceView 隐藏。视频恢复后挂起快照被清空，
+ * 即使文章栈仍保留也不能继续抑制播放器弹幕。
+ */
+internal fun articleCoversSuspendedVideo(
+  articleDepth: Int,
+  retainedArticleDepth: Int?,
+): Boolean =
+  retainedArticleDepth != null &&
+    articleDepth > retainedArticleDepth.coerceAtLeast(0)
+
+/**
  * 个人资料页的完整数据快照。
  *
  * 涵盖用户资料、作品列表（分页）、动态流、收藏夹/合集及其各自的加载态与错误态，以及该页
@@ -361,6 +375,9 @@ internal data class VideoPageEntry(
   val dataReady: Boolean,
   val playbackEnded: Boolean = false,
   val engagementAccountMid: Long = 0L,
+  /** 稳定的 B 站清晰度 id；qualityIndex 仅作为旧快照兼容回退。 */
+  val qualityId: Int? = null,
+  val qualityManuallySelected: Boolean = false,
 )
 
 /**

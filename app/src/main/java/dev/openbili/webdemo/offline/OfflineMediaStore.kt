@@ -91,6 +91,22 @@ internal class OfflineMediaStore(context: Context) {
       .put("audioCacheKey", entry.audioCacheKey)
       .put("videoMimeType", entry.videoMimeType)
       .put("audioMimeType", entry.audioMimeType)
+      .put("audioMode", entry.audioMode?.name)
+      .put("audioQualityLabel", entry.audioQualityLabel)
+      .put(
+        "chapters",
+        JSONArray().apply {
+          entry.chapters.forEach { chapter ->
+            put(
+              JSONObject()
+                .put("startMs", chapter.startMs)
+                .put("endMs", chapter.endMs)
+                .put("title", chapter.title)
+                .put("imageUrl", chapter.imageUrl),
+            )
+          }
+        },
+      )
       .put("includeDanmaku", entry.includeDanmaku)
       .put("includeSubtitles", entry.includeSubtitles)
       .put("danmakuRelativePath", entry.danmakuRelativePath)
@@ -130,6 +146,24 @@ internal class OfflineMediaStore(context: Context) {
         )
       }
     }
+    val chapterArray = json.optJSONArray("chapters") ?: JSONArray()
+    val chapters = buildList {
+      for (index in 0 until chapterArray.length()) {
+        val chapter = chapterArray.optJSONObject(index) ?: continue
+        val startMs = chapter.optLong("startMs", -1L)
+        val endMs = chapter.optLong("endMs", -1L)
+        if (startMs >= 0L && endMs > startMs) {
+          add(
+            dev.openbili.webdemo.api.VideoChapter(
+              startMs = startMs,
+              endMs = endMs,
+              title = chapter.optString("title"),
+              imageUrl = chapter.optString("imageUrl").ifBlank { null },
+            )
+          )
+        }
+      }
+    }
     return OfflineMediaEntry(
       id = json.getString("id"),
       kind =
@@ -156,6 +190,12 @@ internal class OfflineMediaStore(context: Context) {
       audioCacheKey = json.optString("audioCacheKey"),
       videoMimeType = json.optString("videoMimeType", "video/mp4"),
       audioMimeType = json.optString("audioMimeType", "audio/mp4"),
+      audioMode =
+        json.optString("audioMode").takeIf(String::isNotBlank)?.let {
+          runCatching { dev.openbili.webdemo.api.PremiumAudioMode.valueOf(it) }.getOrNull()
+        },
+      audioQualityLabel = json.optString("audioQualityLabel", "标准音质").ifBlank { "标准音质" },
+      chapters = chapters,
       includeDanmaku = json.optBoolean("includeDanmaku", true),
       includeSubtitles = json.optBoolean("includeSubtitles", true),
       danmakuRelativePath = json.optString("danmakuRelativePath"),

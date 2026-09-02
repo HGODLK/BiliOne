@@ -57,11 +57,15 @@ import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import dev.openbili.webdemo.api.PremiumAudioMode
+import dev.openbili.webdemo.api.VideoChapter
 import dev.openbili.webdemo.music.HomeMusicPlayerViewModel
 import dev.openbili.webdemo.music.HomeMusicUiState
 import dev.openbili.webdemo.music.MusicPlaybackOrder
 import dev.openbili.webdemo.music.MusicPlaybackProgressState
 import kotlinx.coroutines.flow.StateFlow
+import dev.openbili.webdemo.video.activeChapterBoundaryFractions
+import dev.openbili.webdemo.video.chapterBoundaryFractions
+import dev.openbili.webdemo.video.nearestChapterBoundaryForTap
 
 @Composable
 internal fun MusicTransportControls(
@@ -387,6 +391,7 @@ private fun PremiumAudioMenuItem(
 internal fun MusicProgressBar(
   progressState: StateFlow<MusicPlaybackProgressState>,
   onSeek: (Long) -> Unit,
+  chapters: List<VideoChapter> = emptyList(),
   controlFocusRequest: Int,
   onControlPlayerRequested: () -> Unit,
   modifier: Modifier,
@@ -405,10 +410,18 @@ internal fun MusicProgressBar(
   val playedFraction =
     dragFraction ?: (progress.positionMs.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
   val enabled = progress.enabled
-  val activeColor = MaterialTheme.colorScheme.primary
+  val progressColor = MaterialTheme.colorScheme.primary
+  val pointHighlightColor =
+    timelinePointHighlightColor(progressColor, MaterialTheme.colorScheme.primaryContainer)
   val inactiveColor = Color.Gray.copy(alpha = .66f)
   val trackHeight = 5.dp
   val thumbRadius = 5.5.dp
+  val chapterBoundaries =
+    remember(duration, chapters) { chapterBoundaryFractions(duration, chapters) }
+  val activeChapterBoundaries =
+    remember(duration, progress.positionMs, chapters) {
+      activeChapterBoundaryFractions(duration, progress.positionMs, chapters)
+    }
   Canvas(
     modifier
       .height(24.dp)
@@ -447,10 +460,19 @@ internal fun MusicProgressBar(
         }
       )
       .semantics { progressBarRangeInfo = ProgressBarRangeInfo(playedFraction, 0f..1f) }
-      .pointerInput(enabled, duration) {
+      .pointerInput(enabled, duration, chapters) {
         if (!enabled) return@pointerInput
         detectTapGestures { offset ->
-          onSeek(((offset.x / size.width).coerceIn(0f, 1f) * duration).toLong())
+          val continuous = ((offset.x / size.width).coerceIn(0f, 1f) * duration).toLong()
+          onSeek(
+            nearestChapterBoundaryForTap(
+              xPx = offset.x,
+              widthPx = size.width.toFloat(),
+              durationMs = duration,
+              chapters = chapters,
+              hitSlopPx = 14f,
+            ) ?: continuous
+          )
         }
       }
       .pointerInput(enabled, duration) {
@@ -480,14 +502,23 @@ internal fun MusicProgressBar(
       strokeWidth = trackHeight.toPx(),
     )
     drawLine(
-      color = if (enabled) activeColor else activeColor.copy(alpha = .32f),
+      color = if (enabled) progressColor else progressColor.copy(alpha = .32f),
       start = Offset(0f, centerY),
       end = Offset(endX, centerY),
       strokeWidth = trackHeight.toPx(),
     )
-    if (enabled) {
+    // 章节节点覆盖在两层轨道之上，当前章节前后的节点使用同主题的区分色。
+    chapterBoundaries.forEach { fraction ->
       drawCircle(
-        color = activeColor,
+        color = if (fraction in activeChapterBoundaries) pointHighlightColor else Color.White,
+        radius = 3.dp.toPx(),
+        center = Offset(size.width * fraction, centerY),
+      )
+    }
+    if (enabled) {
+      // 播放进度大圆点始终位于章节节点之上。
+      drawCircle(
+        color = progressColor,
         radius = thumbRadius.toPx(),
         center = Offset(endX, centerY),
       )

@@ -24,8 +24,10 @@ import androidx.media3.exoplayer.offline.DownloadService
 import androidx.media3.exoplayer.scheduler.Requirements
 import dev.openbili.webdemo.api.BiliDanmakuApi
 import dev.openbili.webdemo.api.BiliHttpClient
+import dev.openbili.webdemo.api.BiliReportApi
 import dev.openbili.webdemo.api.BiliSubtitleApi
 import dev.openbili.webdemo.api.BiliVideoApi
+import dev.openbili.webdemo.api.AudioStream
 import dev.openbili.webdemo.api.DanmakuItem
 import dev.openbili.webdemo.api.PlayUrlData
 import dev.openbili.webdemo.api.UserInfo
@@ -348,7 +350,8 @@ class OfflineMediaManager private constructor(context: Context) {
 
   fun enqueue(request: OfflineMediaRequest): Boolean {
     if (!storageAvailable() || migrationInProgress.get()) return false
-    if (request.requiresVip && request.accountMid <= 0L) return false
+    val requiresVip = request.requiresVip || request.requestedAudioMode != null
+    if (requiresVip && request.accountMid <= 0L) return false
     val id = offlineMediaId(request.kind, request.bvid, request.cid, request.episodeId)
     val preparing =
       OfflineMediaEntry(
@@ -371,11 +374,13 @@ class OfflineMediaManager private constructor(context: Context) {
         qualityLabel = request.qualityLabel.ifBlank { "清晰度 ${request.qualityId}" },
         includeDanmaku = request.includeDanmaku,
         includeSubtitles = request.includeSubtitles,
-        requiresVip = request.requiresVip,
+        requiresVip = requiresVip,
+        audioMode = request.requestedAudioMode,
+        audioQualityLabel = request.requestedAudioMode?.label ?: "标准音质",
         entitlementState =
-          if (request.requiresVip) OfflineEntitlementState.ACTIVE else OfflineEntitlementState.FREE,
+          if (requiresVip) OfflineEntitlementState.ACTIVE else OfflineEntitlementState.FREE,
         entitlementValidUntilMs =
-          if (request.requiresVip) System.currentTimeMillis() + VIP_AUTHORIZATION_LEASE_MS
+          if (requiresVip) System.currentTimeMillis() + VIP_AUTHORIZATION_LEASE_MS
           else Long.MAX_VALUE,
         createdAtMs = System.currentTimeMillis(),
       )
@@ -510,7 +515,36 @@ class OfflineMediaManager private constructor(context: Context) {
             OfflineMediaKind.BANGUMI -> BiliVideoApi.getBangumiPlayUrl(seed.episodeId, seed.cid)
           } ?: error("当前账号无法获取该视频的播放地址")
         val stream = selectStream(rawPlayData, seed.qualityId)
-        val audio = rawPlayData.dashAudio
+        val requestedAudioMode = seed.audioMode
+        val actualAudioMode =
+          requestedAudioMode?.takeIf { rawPlayData.supportsPremiumAudio(it) }
+        val audio =
+          when (actualAudioMode) {
+            dev.openbili.webdemo.api.PremiumAudioMode.DOLBY ->
+              rawPlayData.dolbyAudio
+                ?: rawPlayData.dolbyAudioUrl?.takeIf(String::isNotBlank)?.let { url ->
+                  AudioStream(id = 30216, url = url)
+                }
+            dev.openbili.webdemo.api.PremiumAudioMode.HI_RES ->
+              rawPlayData.hiResAudio
+                ?: rawPlayData.hiResAudioUrl?.takeIf(String::isNotBlank)?.let { url ->
+                  AudioStream(id = 30232, url = url)
+                }
+            null ->
+              rawPlayData.dashAudio
+                ?: rawPlayData.dashAudioUrl?.takeIf(String::isNotBlank)?.let { url ->
+                  AudioStream(id = 30280, url = url)
+                }
+          }
+        val chapters =
+          runCatching {
+            BiliReportApi.getPlayerPageInfo(
+              aid = seed.aid,
+              cid = seed.cid,
+              durationMs = seed.durationMs,
+              episodeId = seed.episodeId,
+            ).chapters
+          }.getOrDefault(emptyList())
         val metadataDirectory = File(rootDirectory, "metadata/${seed.id}").apply { mkdirs() }
         val coverPath = downloadCover(seed.coverUrl, metadataDirectory)
         val danmakuPath =
@@ -534,6 +568,9 @@ class OfflineMediaManager private constructor(context: Context) {
             audioCacheKey = audio?.let { "offline:${seed.id}:audio" }.orEmpty(),
             videoMimeType = stream.mimeType.ifBlank { "video/mp4" },
             audioMimeType = audio?.mimeType?.ifBlank { "audio/mp4" } ?: "audio/mp4",
+            audioMode = actualAudioMode,
+            audioQualityLabel = actualAudioMode?.label ?: "标准音质",
+            chapters = chapters,
             danmakuRelativePath =
               if (seed.includeDanmaku) danmakuPath.ifBlank { latest.danmakuRelativePath } else "",
             subtitles =

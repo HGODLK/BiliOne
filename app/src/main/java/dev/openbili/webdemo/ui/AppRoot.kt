@@ -888,6 +888,11 @@ fun AppRoot(
       val danmakuPositionEpoch = latestDanmakuPositionEpoch
       val highDynamicRange = latestIsHdrPlayback
       val profilePageCoversPlayer = profileStack.isNotEmpty() && !profileLayerSuppressed
+      val articlePageCoversPlayer =
+        articleCoversSuspendedVideo(
+          articleDepth = articleStack.size,
+          retainedArticleDepth = articleSuspendedVideo?.retainedArticleDepth,
+        )
       val cardTransitionRequiresDanmakuSuppression =
         shouldSuppressDanmakuForCardTransition(
           kind = transitionSession?.kind,
@@ -901,6 +906,7 @@ fun AppRoot(
           videoFullscreenTransitionActive ||
           videoExitPrelude != null ||
           profilePageCoversPlayer ||
+          articlePageCoversPlayer ||
           cardTransitionRequiresDanmakuSuppression ||
           commentImagePreviewActive ||
           showEmbeddedCover ||
