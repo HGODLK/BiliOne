@@ -898,6 +898,12 @@ fun AppRoot(
           kind = transitionSession?.kind,
           phase = transitionSession?.phase,
         )
+      val embeddedPlaybackCoverVisible =
+        isEmbeddedPlaybackCoverVisible(
+          showEmbeddedCover = showEmbeddedCover,
+          renderedVideoId = renderedVideoId,
+          selectedVideoId = appState.selectedVideo?.id,
+        )
       // 前奏在静态封面把接力棒交给飞行卡片的瞬间就被刻意移除。整个第二阶段需要持续抑制
       // 独立的 SurfaceView，否则 AndroidView 的更新会让弹幕表面重新显示在飞行动画之上。
       val danmakuTransitionSuppressed =
@@ -909,7 +915,7 @@ fun AppRoot(
           articlePageCoversPlayer ||
           cardTransitionRequiresDanmakuSuppression ||
           commentImagePreviewActive ||
-          showEmbeddedCover ||
+          embeddedPlaybackCoverVisible ||
           surfaceVisible == false
       val danmakuState = remember { DanmakuUpdateState() }
       val hostedOverlay = remember { arrayOfNulls<DanmakuOverlayView>(1) }

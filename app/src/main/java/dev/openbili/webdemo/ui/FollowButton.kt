@@ -71,7 +71,7 @@ fun FollowButton(
             containerColor = Color.Transparent,
             contentColor = Color.White,
             disabledContainerColor = Color.Transparent,
-            disabledContentColor = Color.White.copy(alpha = .55f),
+            disabledContentColor = Color.White.copy(alpha = .68f),
           )
         else androidx.compose.material3.ButtonDefaults.filledTonalButtonColors(),
       elevation =

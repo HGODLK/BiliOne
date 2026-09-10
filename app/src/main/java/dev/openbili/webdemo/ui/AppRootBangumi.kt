@@ -30,6 +30,11 @@ internal fun shouldPunchRootVideoEntryPortal(
 internal fun shouldFadeBangumiExitDirectly(seasonChangedFromSource: Boolean): Boolean =
   seasonChangedFromSource
 
+internal enum class BangumiPlaybackMode {
+  ONLINE,
+  CACHE_ONLY,
+}
+
 internal data class ActiveBangumiPage(
   val sourceCard: SpaceContentCard,
   val sourceProfileEntryId: Long,
@@ -41,6 +46,8 @@ internal data class ActiveBangumiPage(
   val sourceIsBangumiExplorePoster: Boolean = false,
   val sourceUsesLivePlayer: Boolean = false,
   val sourceOrigin: PageOrigin = PageOrigin.Profile(sourceProfileEntryId, sourceMid),
+  /** 从缓存页进入后，番剧会话内的所有分集切换都只能使用本地缓存。 */
+  val playbackMode: BangumiPlaybackMode = BangumiPlaybackMode.ONLINE,
   val sourceSeasonId: Long = sourceCard.seasonId,
   val sourceFollowedByViewer: Boolean = false,
   val seasonChangedFromSource: Boolean = false,

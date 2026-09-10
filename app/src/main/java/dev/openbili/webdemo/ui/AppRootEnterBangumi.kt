@@ -547,6 +547,27 @@ fun startProfileVideo(profileEntryId: Long, item: FeedItem, cardBounds: Rect) {
 fun selectBangumiEpisode(episode: BangumiEpisode) {
   val page = activeBangumiPage ?: return
   if (episode.id <= 0L || episode.id == page.currentEpisodeId) return
+  val cachedEntry =
+    if (page.playbackMode == BangumiPlaybackMode.CACHE_ONLY) {
+      val resolution =
+        OfflineMediaManager.get(context).resolveBangumiEpisode(
+          episodeId = episode.id,
+          cid = episode.cid,
+          seasonId = page.season?.seasonId ?: page.sourceCard.seasonId,
+          currentAccountMid = authUserInfo.mid,
+          vipActive = authUserInfo.vipActive,
+        )
+      resolution.entry
+        ?: run {
+          Toast.makeText(
+              context,
+              resolution.blockReason?.message ?: "该集缓存当前不可用",
+              Toast.LENGTH_SHORT,
+            )
+            .show()
+          return
+        }
+    } else null
   val item =
     FeedItem(
       id = "${page.sourceCard.id}:ep${episode.id}",
@@ -555,7 +576,9 @@ fun selectBangumiEpisode(episode: BangumiEpisode) {
           .filter(String::isNotBlank)
           .joinToString(" · ")
           .ifBlank { page.sourceCard.title },
-      videoUrl = "https://www.bilibili.com/bangumi/play/ep${episode.id}",
+      videoUrl =
+        cachedEntry?.playbackUri
+          ?: "https://www.bilibili.com/bangumi/play/ep${episode.id}",
       coverUrl = episode.coverUrl.ifBlank { page.sourceCard.coverUrl },
       uploader = appState.selectedVideo?.uploader,
       playCount = null,
@@ -839,6 +862,9 @@ fun startRootBangumi(
       returnToSourceCover = returnToSourceCover,
       sourceUsesLivePlayer = preserveCurrentPlayback,
       sourceOrigin = pageOrigin,
+      playbackMode =
+        if (offlinePlayback) BangumiPlaybackMode.CACHE_ONLY
+        else BangumiPlaybackMode.ONLINE,
       sourceFollowedByViewer = initialSeason?.followed == true,
       season = initialSeason,
       loading = initialSeason == null,

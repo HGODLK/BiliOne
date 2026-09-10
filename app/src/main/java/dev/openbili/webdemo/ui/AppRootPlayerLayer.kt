@@ -218,6 +218,13 @@ internal fun RootPlayerLayer(
   }
 }
 
+/** 封面标志会跨同页切集保留；首帧属于当前媒体后，封面已经不再遮挡播放器。 */
+internal fun isEmbeddedPlaybackCoverVisible(
+  showEmbeddedCover: Boolean,
+  renderedVideoId: String?,
+  selectedVideoId: String?,
+): Boolean = showEmbeddedCover && renderedVideoId != selectedVideoId
+
 /**
  * 跟踪上一次的弹幕参数，让托管的覆盖层在重组之间没有任何变化时不更新。
  */

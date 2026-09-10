@@ -8,16 +8,12 @@ internal class OfflineMediaStore(context: Context) {
   private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
   private val lock = Any()
 
+  init {
+    migrateQueueSequences()
+  }
+
   fun entries(): List<OfflineMediaEntry> =
-    synchronized(lock) {
-      val array =
-        runCatching { JSONArray(prefs.getString(KEY_ENTRIES, "[]")) }.getOrDefault(JSONArray())
-      buildList {
-        for (index in 0 until array.length()) {
-          runCatching { decode(array.getJSONObject(index)) }.getOrNull()?.let(::add)
-        }
-      }
-    }
+    synchronized(lock) { readEntries() }
 
   fun entry(id: String): OfflineMediaEntry? = entries().firstOrNull { it.id == id }
 
@@ -30,12 +26,27 @@ internal class OfflineMediaStore(context: Context) {
 
   fun insertIfAbsent(entry: OfflineMediaEntry): Boolean =
     synchronized(lock) {
-      val current = entries()
+      val current = readEntries()
       if (current.any { it.id == entry.id }) false
       else {
         write(current + entry)
         true
       }
+    }
+
+  /** 分配持久化的全局队列序号，避免依赖毫秒时间戳判断入队先后。 */
+  fun nextQueueSequence(): Long =
+    synchronized(lock) {
+      val current = readEntries()
+      val persistedNext = prefs.getLong(KEY_NEXT_QUEUE_SEQUENCE, 1L)
+      val next =
+        maxOf(
+          1L,
+          persistedNext,
+          (current.maxOfOrNull(OfflineMediaEntry::queueSequence) ?: 0L) + 1L,
+        )
+      prefs.edit().putLong(KEY_NEXT_QUEUE_SEQUENCE, next + 1L).commit()
+      next
     }
 
   fun remove(id: String) {
@@ -64,6 +75,46 @@ internal class OfflineMediaStore(context: Context) {
     val array = JSONArray()
     entries.sortedByDescending(OfflineMediaEntry::createdAtMs).forEach { array.put(encode(it)) }
     prefs.edit().putString(KEY_ENTRIES, array.toString()).apply()
+  }
+
+  private fun readEntries(): List<OfflineMediaEntry> {
+    val array =
+      runCatching { JSONArray(prefs.getString(KEY_ENTRIES, "[]")) }.getOrDefault(JSONArray())
+    return buildList {
+      for (index in 0 until array.length()) {
+        runCatching { decode(array.getJSONObject(index)) }.getOrNull()?.let(::add)
+      }
+    }
+  }
+
+  /** 为旧版本没有队列序号的任务补齐稳定顺序，后续恢复不再依赖存储展示顺序。 */
+  private fun migrateQueueSequences() {
+    synchronized(lock) {
+      val current = readEntries()
+      var next =
+        maxOf(
+          prefs.getLong(KEY_NEXT_QUEUE_SEQUENCE, 1L) - 1L,
+          current.maxOfOrNull(OfflineMediaEntry::queueSequence) ?: 0L,
+        )
+      val missing = current.filter { it.queueSequence <= 0L }
+      if (missing.isNotEmpty()) {
+        val oldOrder =
+          current
+            .filter { it.queueSequence <= 0L }
+            .sortedWith(
+              compareBy<OfflineMediaEntry> { it.createdAtMs }
+                .thenBy { it.pageNumber }
+                .thenBy { it.id }
+            )
+            .associate { it.id to ++next }
+        val migrated = current.map { entry -> entry.copy(queueSequence = oldOrder[entry.id] ?: entry.queueSequence) }
+        write(migrated)
+      }
+      val nextAvailable = next + 1L
+      if (prefs.getLong(KEY_NEXT_QUEUE_SEQUENCE, 1L) < nextAvailable) {
+        prefs.edit().putLong(KEY_NEXT_QUEUE_SEQUENCE, nextAvailable).commit()
+      }
+    }
   }
 
   private fun encode(entry: OfflineMediaEntry): JSONObject =
@@ -128,6 +179,8 @@ internal class OfflineMediaStore(context: Context) {
       .put("entitlementState", entry.entitlementState.name)
       .put("entitlementValidUntilMs", entry.entitlementValidUntilMs)
       .put("createdAtMs", entry.createdAtMs)
+      .put("queueSequence", entry.queueSequence)
+      .put("pausedByUser", entry.pausedByUser)
       .put("preparationPaused", entry.preparationPaused)
       .put("preparationError", entry.preparationError)
 
@@ -206,6 +259,8 @@ internal class OfflineMediaStore(context: Context) {
           .getOrDefault(OfflineEntitlementState.FREE),
       entitlementValidUntilMs = json.optLong("entitlementValidUntilMs", Long.MAX_VALUE),
       createdAtMs = json.optLong("createdAtMs", System.currentTimeMillis()),
+      queueSequence = json.optLong("queueSequence"),
+      pausedByUser = json.optBoolean("pausedByUser"),
       preparationPaused = json.optBoolean("preparationPaused"),
       preparationError = json.optString("preparationError"),
     )
@@ -217,6 +272,7 @@ internal class OfflineMediaStore(context: Context) {
     const val KEY_WIFI_ONLY = "wifi_only"
     const val KEY_STORAGE_LOCATION_ID = "storage_location_id"
     const val KEY_STORAGE_ROOT_PATH = "storage_root_path"
+    const val KEY_NEXT_QUEUE_SEQUENCE = "next_queue_sequence"
     const val INTERNAL_STORAGE_ID = "internal"
   }
 }

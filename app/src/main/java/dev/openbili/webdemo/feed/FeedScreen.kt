@@ -646,7 +646,7 @@ fun FeedCardContent(
         (if (compactInfo) 28.dp else 40.dp).coerceAtMost(contentHeight)
       val primaryTextColor = if (overlayInfoOnCover) Color.White else MaterialTheme.colorScheme.onSurface
       val secondaryTextColor =
-        if (overlayInfoOnCover) Color.White.copy(alpha = .82f)
+        if (overlayInfoOnCover) Color.White.copy(alpha = .90f)
         else MaterialTheme.colorScheme.onSurfaceVariant
       Column {
         Box(

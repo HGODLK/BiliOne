@@ -66,6 +66,18 @@ class OfflineMediaStoreTest {
     assertEquals(entry.chapters, restored?.chapters)
   }
 
+  @Test
+  fun queueMetadataSurvivesPersistenceAndSequenceIsMonotonic() {
+    val store = OfflineMediaStore(context)
+    val entry = entry(title = "队列", partTitle = "P1").copy(queueSequence = 42L, pausedByUser = true)
+
+    assertTrue(store.insertIfAbsent(entry))
+
+    assertEquals(entry, store.entry(entry.id))
+    assertEquals(43L, store.nextQueueSequence())
+    assertEquals(44L, store.nextQueueSequence())
+  }
+
   private fun entry(title: String, partTitle: String) =
     OfflineMediaEntry(
       id = offlineMediaId(OfflineMediaKind.VIDEO, "BV1test", 100L, 0L),

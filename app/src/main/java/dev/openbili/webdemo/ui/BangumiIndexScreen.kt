@@ -844,7 +844,7 @@ private fun BangumiIndexCard(
           meta,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
-          color = Color.White.copy(alpha = .82f),
+          color = Color.White.copy(alpha = .90f),
           style = MaterialTheme.typography.labelSmall,
         )
       }

@@ -596,6 +596,12 @@ fun VideoInfoTile(
     ) {
       val tileSize = videoInfoTileSizeForWindow(maxWidth, maxHeight)
       val darkPage = MaterialTheme.colorScheme.background.luminance() < .5f
+      Box(
+        modifier =
+          Modifier.fillMaxSize().pointerInput(Unit) {
+            detectTapGestures(onTap = { dismissThen(onDismiss) })
+          }
+      )
       Surface(
         modifier =
           Modifier.width(tileSize.width).height(tileSize.height).graphicsLayer {
@@ -604,7 +610,9 @@ fun VideoInfoTile(
             val scale = .92f + .08f * progress
             scaleX = scale
             scaleY = scale
-          },
+          }
+            // 卡片自身占据点击命中区域，避免外部点击层把卡内留白误判为关闭。
+            .pointerInput(Unit) { detectTapGestures(onTap = {}) },
         shape = RoundedCornerShape(28.dp),
         color =
           MaterialTheme.colorScheme.surface.copy(

@@ -5,6 +5,8 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.os.StatFs
 import android.os.storage.StorageManager
 import androidx.annotation.OptIn
@@ -32,6 +34,7 @@ import dev.openbili.webdemo.api.DanmakuItem
 import dev.openbili.webdemo.api.PlayUrlData
 import dev.openbili.webdemo.api.UserInfo
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.Executors
 import kotlinx.coroutines.CancellationException
@@ -60,7 +63,9 @@ class OfflineMediaManager private constructor(context: Context) {
   private val componentLock = Any()
   private val migrationMutex = Mutex()
   private val migrationInProgress = AtomicBoolean(false)
-  private val downloaderExecutor = Executors.newFixedThreadPool(2)
+  private val downloaderExecutor = Executors.newFixedThreadPool(MAX_TRACK_DOWNLOADS)
+  private val managerHandler = Handler(Looper.getMainLooper())
+  private val liveDownloads = ConcurrentHashMap<String, Download>()
   private val upstreamFactory =
     DefaultDataSource.Factory(
       appContext,
@@ -75,6 +80,45 @@ class OfflineMediaManager private constructor(context: Context) {
   @Volatile private var cacheBackendRoot: File = usableBackendRoot(activeRootDirectory)
   @Volatile private var mediaCache: SimpleCache = createMediaCache(cacheBackendRoot)
   @Volatile private var activeDownloadManager: DownloadManager = createDownloadManager(mediaCache)
+
+  private val taskCoordinator =
+    OfflineTaskCoordinator(
+      maxActiveTasks = MAX_ACTIVE_VIDEO_TASKS,
+      loadEntries = store::entries,
+      isTerminal = ::isEntryTerminal,
+      startTask = ::startScheduledTask,
+    )
+
+  private val downloadManagerListener =
+    object : DownloadManager.Listener {
+      override fun onInitialized(downloadManager: DownloadManager) {
+        loadPersistedDownloads(downloadManager)
+        recoverPersistedWork()
+      }
+
+      override fun onDownloadChanged(
+        downloadManager: DownloadManager,
+        download: Download,
+        finalException: Exception?,
+      ) {
+        liveDownloads[download.request.id] = download
+        taskCoordinator.onTaskStateChanged()
+      }
+
+      override fun onDownloadRemoved(downloadManager: DownloadManager, download: Download) {
+        liveDownloads.remove(download.request.id)
+        taskCoordinator.onTaskStateChanged()
+      }
+    }
+
+  private val progressRefreshRunnable =
+    object : Runnable {
+      override fun run() {
+        refreshLiveDownloads()
+        taskCoordinator.onTaskStateChanged()
+        managerHandler.postDelayed(this, PROGRESS_REFRESH_MS)
+      }
+    }
 
   val rootDirectory: File
     get() = activeRootDirectory
@@ -111,13 +155,18 @@ class OfflineMediaManager private constructor(context: Context) {
         ),
       )
       .apply {
-        maxParallelDownloads = 2
+        maxParallelDownloads = MAX_TRACK_DOWNLOADS
         minRetryCount = 4
         requirements = currentRequirements()
       }
 
   init {
-    if (storageAvailable()) scope.launch { recoverPersistedWork() }
+    activeDownloadManager.addListener(downloadManagerListener)
+    managerHandler.post(progressRefreshRunnable)
+    if (activeDownloadManager.isInitialized) {
+      loadPersistedDownloads(activeDownloadManager)
+      recoverPersistedWork()
+    }
   }
 
   val wifiOnly: Boolean
@@ -248,6 +297,7 @@ class OfflineMediaManager private constructor(context: Context) {
             cacheBackendRoot = targetRoot
             mediaCache = createMediaCache(targetRoot)
             activeDownloadManager = createDownloadManager(mediaCache)
+            activeDownloadManager.addListener(downloadManagerListener)
             targetActivated = true
           }
           if (sourceRoot.exists()) sourceRoot.deleteRecursively()
@@ -259,6 +309,7 @@ class OfflineMediaManager private constructor(context: Context) {
               cacheBackendRoot = usableBackendRoot(sourceRoot)
               mediaCache = createMediaCache(cacheBackendRoot)
               activeDownloadManager = createDownloadManager(mediaCache)
+              activeDownloadManager.addListener(downloadManagerListener)
             }
             recoverPersistedWork()
           }
@@ -316,28 +367,27 @@ class OfflineMediaManager private constructor(context: Context) {
         OfflineMediaSnapshot(
           entry = entry,
           state = OfflineTransferState.UNAVAILABLE,
-          progressPercent = 0f,
+          progressPercent = null,
           bytesDownloaded = 0L,
           totalBytes = 0L,
           failureReason = "缓存所在的 SD 卡当前不可用",
         )
       }
     }
-    val networkRequirementsMet = requirementsMet()
     return store.entries().map { entry ->
       if (entry.entitlementState == OfflineEntitlementState.REVOKED) {
-        OfflineMediaSnapshot(entry, OfflineTransferState.UNAVAILABLE, 0f, 0L, 0L)
+        OfflineMediaSnapshot(entry, OfflineTransferState.UNAVAILABLE, null, 0L, 0L)
       } else if (entry.videoUrl.isBlank()) {
         OfflineMediaSnapshot(
           entry,
           when {
-            entry.preparationPaused -> OfflineTransferState.PAUSED
-            entry.preparationError.isBlank() && networkRequirementsMet ->
+            entry.pausedByUser || entry.preparationPaused -> OfflineTransferState.PAUSED
+            entry.preparationError.isBlank() && taskCoordinator.isActive(entry.id) ->
               OfflineTransferState.PREPARING
             entry.preparationError.isBlank() -> OfflineTransferState.QUEUED
             else -> OfflineTransferState.FAILED
           },
-          0f,
+          null,
           0L,
           0L,
           entry.preparationError,
@@ -384,16 +434,25 @@ class OfflineMediaManager private constructor(context: Context) {
           else Long.MAX_VALUE,
         createdAtMs = System.currentTimeMillis(),
       )
-    if (!store.insertIfAbsent(preparing)) return false
-    startPreparation(preparing)
+    val queued = preparing.copy(queueSequence = store.nextQueueSequence())
+    if (!store.insertIfAbsent(queued)) return false
+    taskCoordinator.enqueue()
     return true
   }
 
   fun pause(id: String) {
     val entry = store.entry(id) ?: return
+    store.upsert(entry.copy(pausedByUser = true))
     if (entry.videoUrl.isBlank()) {
       preparationJobs.remove(id)?.cancel()
-      store.upsert(entry.copy(preparationPaused = true, preparationError = ""))
+      store.upsert(
+        entry.copy(
+          preparationPaused = true,
+          preparationError = "",
+          pausedByUser = true,
+        )
+      )
+      taskCoordinator.onUserPause(id)
       return
     }
     trackIds(id).forEach { trackId ->
@@ -405,16 +464,22 @@ class OfflineMediaManager private constructor(context: Context) {
         false,
       )
     }
+    taskCoordinator.onUserPause(id)
   }
 
   fun resume(id: String) {
     if (!storageAvailable() || migrationInProgress.get()) return
     val entry = store.entry(id) ?: return
     if (entry.entitlementState == OfflineEntitlementState.REVOKED) return
-    if (entry.videoUrl.isBlank() && entry.preparationPaused) {
-      val resumed = entry.copy(preparationPaused = false, preparationError = "")
+    if (entry.videoUrl.isBlank()) {
+      val resumed =
+        entry.copy(
+          pausedByUser = false,
+          preparationPaused = false,
+          preparationError = "",
+        )
       store.upsert(resumed)
-      startPreparation(resumed)
+      taskCoordinator.onUserResume()
       return
     }
     val downloads = trackIds(id).mapNotNull(::download)
@@ -422,10 +487,18 @@ class OfflineMediaManager private constructor(context: Context) {
       downloads.any { it.state == Download.STATE_FAILED } ||
         downloads.size < requiredTrackCount(entry)
     ) {
-      store.upsert(entry.copy(preparationError = "", videoUrl = "", audioUrl = ""))
-      startPreparation(entry.copy(preparationError = ""))
+      store.upsert(
+        entry.copy(
+          pausedByUser = false,
+          preparationError = "",
+          videoUrl = "",
+          audioUrl = "",
+        )
+      )
+      taskCoordinator.onUserResume()
       return
     }
+    store.upsert(entry.copy(pausedByUser = false, preparationPaused = false))
     trackIds(id).forEach { trackId ->
       DownloadService.sendSetStopReason(
         appContext,
@@ -435,10 +508,13 @@ class OfflineMediaManager private constructor(context: Context) {
         false,
       )
     }
+    taskCoordinator.onUserResume()
   }
 
   fun remove(id: String) {
     preparationJobs.remove(id)?.cancel()
+    liveDownloads.remove(videoTrackId(id))
+    liveDownloads.remove(audioTrackId(id))
     trackIds(id).forEach { trackId ->
       DownloadService.sendRemoveDownload(
         appContext,
@@ -448,6 +524,7 @@ class OfflineMediaManager private constructor(context: Context) {
       )
     }
     store.remove(id)
+    taskCoordinator.onRemoved(id)
     scope.launch { File(rootDirectory, "metadata/$id").deleteRecursively() }
   }
 
@@ -487,6 +564,7 @@ class OfflineMediaManager private constructor(context: Context) {
         }
       }
     }
+    taskCoordinator.onTaskStateChanged()
   }
 
   fun canPlay(entry: OfflineMediaEntry, currentAccountMid: Long, vipActive: Boolean): Boolean =
@@ -498,6 +576,21 @@ class OfflineMediaManager private constructor(context: Context) {
       entry.entitlementValidUntilMs < System.currentTimeMillis() -> false
       else -> true
     }
+
+  fun resolveBangumiEpisode(
+    episodeId: Long,
+    cid: Long,
+    seasonId: Long,
+    currentAccountMid: Long,
+    vipActive: Boolean,
+  ): OfflineBangumiPlaybackResolution =
+    OfflineBangumiPlaybackResolver.resolve(
+      snapshots = snapshots(),
+      episodeId = episodeId,
+      cid = cid,
+      seasonId = seasonId,
+      canPlay = { entry -> canPlay(entry, currentAccountMid, vipActive) },
+    )
 
   fun totalBytes(): Long =
     runCatching { mediaCache.cacheSpace }.getOrDefault(0L) +
@@ -555,8 +648,14 @@ class OfflineMediaManager private constructor(context: Context) {
           if (seed.includeSubtitles) saveSubtitles(seed, metadataDirectory) else emptyList()
         currentCoroutineContext().ensureActive()
         val latest = store.entry(seed.id) ?: return@runCatching
-        if (latest.entitlementState == OfflineEntitlementState.REVOKED || latest.preparationPaused)
+        if (
+          latest.entitlementState == OfflineEntitlementState.REVOKED ||
+            latest.entitlementState == OfflineEntitlementState.LOCKED ||
+            latest.pausedByUser ||
+            latest.preparationPaused
+        ) {
           return@runCatching
+        }
         val entry =
           seed.copy(
             coverRelativePath = coverPath.ifBlank { latest.coverRelativePath },
@@ -577,6 +676,7 @@ class OfflineMediaManager private constructor(context: Context) {
               if (seed.includeSubtitles) subtitles.ifEmpty { latest.subtitles } else emptyList(),
             entitlementState = latest.entitlementState,
             entitlementValidUntilMs = latest.entitlementValidUntilMs,
+            pausedByUser = false,
             preparationPaused = false,
             preparationError = "",
           )
@@ -596,22 +696,30 @@ class OfflineMediaManager private constructor(context: Context) {
             cacheKey = entry.audioCacheKey,
           )
         }
+        taskCoordinator.onTaskStateChanged()
       }
       .onFailure { error ->
         if (error is CancellationException) throw error
         // 删除或撤销权益可能与进行中的元数据请求竞争。终局性本地操作之后绝不
         // 重建卡片。
         val latest = store.entry(seed.id) ?: return@onFailure
-        if (latest.entitlementState == OfflineEntitlementState.REVOKED) return@onFailure
+        if (
+          latest.entitlementState == OfflineEntitlementState.REVOKED ||
+            latest.entitlementState == OfflineEntitlementState.LOCKED
+        ) {
+          return@onFailure
+        }
         removeTrackDownloads(seed.id)
         store.upsert(
           latest.copy(
+            pausedByUser = false,
             preparationPaused = false,
             preparationError = error.message ?: "缓存准备失败",
             videoUrl = "",
             audioUrl = "",
           )
         )
+        taskCoordinator.onTaskStateChanged()
       }
   }
 
@@ -642,39 +750,80 @@ class OfflineMediaManager private constructor(context: Context) {
     next.start()
   }
 
+  /** 启动一个已被调度器选中的视频任务；同一视频只占一个活动槽位。 */
+  private fun startScheduledTask(entry: OfflineMediaEntry) {
+    if (entry.videoUrl.isBlank()) {
+      startPreparation(entry)
+    } else {
+      ensureTracksQueued(entry)
+    }
+  }
+
+  private fun ensureTracksQueued(entry: OfflineMediaEntry) {
+    if (entry.videoUrl.isBlank()) return
+    val videoId = videoTrackId(entry.id)
+    if (download(videoId) == null) {
+      queueTrack(videoId, entry.videoUrl, entry.videoMimeType, entry.videoCacheKey)
+    }
+    if (entry.audioUrl.isNotBlank()) {
+      val audioId = audioTrackId(entry.id)
+      if (download(audioId) == null) {
+        queueTrack(audioId, entry.audioUrl, entry.audioMimeType, entry.audioCacheKey)
+      }
+    }
+    trackIds(entry.id).forEach { trackId ->
+      DownloadService.sendSetStopReason(
+        appContext,
+        OfflineDownloadService::class.java,
+        trackId,
+        Download.STOP_REASON_NONE,
+        false,
+      )
+    }
+  }
+
   private fun recoverPersistedWork() {
+    if (Looper.myLooper() != managerHandler.looper) {
+      managerHandler.post(::recoverPersistedWork)
+      return
+    }
+    if (!activeDownloadManager.isInitialized) return
+    loadPersistedDownloads(activeDownloadManager)
     store.entries().forEach { entry ->
       if (
         entry.entitlementState == OfflineEntitlementState.REVOKED ||
           entry.entitlementState == OfflineEntitlementState.LOCKED ||
-          entry.preparationPaused
+          entry.pausedByUser ||
+          entry.preparationPaused ||
+          entry.preparationError.isNotBlank() ||
+          entry.videoUrl.isBlank()
       ) {
         return@forEach
       }
-      if (entry.videoUrl.isBlank()) {
-        if (entry.preparationError.isBlank()) startPreparation(entry)
-        return@forEach
-      }
-      if (download(videoTrackId(entry.id)) == null) {
-        queueTrack(videoTrackId(entry.id), entry.videoUrl, entry.videoMimeType, entry.videoCacheKey)
-      }
-      if (entry.audioUrl.isNotBlank() && download(audioTrackId(entry.id)) == null) {
-        queueTrack(audioTrackId(entry.id), entry.audioUrl, entry.audioMimeType, entry.audioCacheKey)
+      trackIds(entry.id).forEach { trackId ->
+        DownloadService.sendSetStopReason(
+          appContext,
+          OfflineDownloadService::class.java,
+          trackId,
+          SCHEDULER_WAIT_STOP_REASON,
+          false,
+        )
       }
     }
+    taskCoordinator.recover()
   }
 
   private fun restartLockedWork(entry: OfflineMediaEntry) {
     if (entry.preparationPaused) return
     if (entry.videoUrl.isBlank()) {
-      if (entry.preparationError.isBlank()) startPreparation(entry)
+      if (entry.preparationError.isBlank()) taskCoordinator.onTaskStateChanged()
       return
     }
     val downloads = trackIds(entry.id).mapNotNull(::download)
     if (downloads.size < requiredTrackCount(entry)) {
       val preparing = entry.copy(videoUrl = "", audioUrl = "", preparationError = "")
       store.upsert(preparing)
-      startPreparation(preparing)
+      taskCoordinator.onTaskStateChanged()
     }
   }
 
@@ -690,28 +839,38 @@ class OfflineMediaManager private constructor(context: Context) {
   }
 
   private fun snapshotForDownloads(entry: OfflineMediaEntry): OfflineMediaSnapshot {
-    val downloads = trackIds(entry.id).mapNotNull(::download)
-    if (downloads.isEmpty()) {
-      return OfflineMediaSnapshot(entry, OfflineTransferState.QUEUED, 0f, 0L, 0L)
-    }
-    val bytes = downloads.sumOf { it.bytesDownloaded.coerceAtLeast(0L) }
-    val total = downloads.sumOf { it.contentLength.coerceAtLeast(0L) }
+    val downloads = trackIds(entry.id).map { trackId -> download(trackId) }
     val progress =
-      if (total > 0L) (bytes.toFloat() / total.toFloat() * 100f).coerceIn(0f, 100f)
-      else
-        downloads
-          .map { it.percentDownloaded }
-          .filter { it >= 0f }
-          .average()
-          .toFloat()
-          .coerceAtLeast(0f)
+      combineOfflineTrackProgress(
+        downloads.map { download ->
+          download?.let {
+            OfflineTrackProgress(
+              state = it.state,
+              contentLength = it.contentLength,
+              bytesDownloaded = it.bytesDownloaded,
+              percentDownloaded = it.percentDownloaded,
+            )
+          }
+            ?: OfflineTrackProgress(
+              state = Download.STATE_QUEUED,
+              contentLength = -1L,
+              bytesDownloaded = 0L,
+              percentDownloaded = -1f,
+            )
+        }
+      )
+    val existingDownloads = downloads.filterNotNull()
     val state =
       when {
-        downloads.any { it.state == Download.STATE_FAILED } -> OfflineTransferState.FAILED
-        downloads.all { it.state == Download.STATE_COMPLETED } &&
-          downloads.size == requiredTrackCount(entry) -> OfflineTransferState.COMPLETED
-        downloads.any { it.state == Download.STATE_DOWNLOADING } -> OfflineTransferState.DOWNLOADING
-        downloads.any {
+        entry.pausedByUser -> OfflineTransferState.PAUSED
+        existingDownloads.any { it.state == Download.STATE_FAILED } ->
+          OfflineTransferState.FAILED
+        existingDownloads.size == requiredTrackCount(entry) &&
+          existingDownloads.all { it.state == Download.STATE_COMPLETED } ->
+          OfflineTransferState.COMPLETED
+        existingDownloads.any { it.state == Download.STATE_DOWNLOADING } ->
+          OfflineTransferState.DOWNLOADING
+        existingDownloads.any {
           it.state == Download.STATE_STOPPED && it.stopReason == USER_PAUSE_STOP_REASON
         } -> OfflineTransferState.PAUSED
         else -> OfflineTransferState.QUEUED
@@ -719,15 +878,33 @@ class OfflineMediaManager private constructor(context: Context) {
     return OfflineMediaSnapshot(
       entry = entry,
       state = state,
-      progressPercent = progress,
-      bytesDownloaded = bytes,
-      totalBytes = total,
+      progressPercent = if (state == OfflineTransferState.COMPLETED) 100f else progress.percent,
+      bytesDownloaded = progress.bytesDownloaded,
+      totalBytes = progress.totalBytes,
       failureReason = if (state == OfflineTransferState.FAILED) "下载失败，可点击继续重试" else "",
     )
   }
 
-  private fun download(id: String): Download? =
-    runCatching { downloadManager.downloadIndex.getDownload(id) }.getOrNull()
+  private fun download(id: String): Download? = liveDownloads[id]
+
+  /** DownloadManager 的查询必须在其 Looper 上执行，界面快照只读这份并发安全的实时副本。 */
+  private fun loadPersistedDownloads(manager: DownloadManager) {
+    if (Looper.myLooper() != manager.applicationLooper) return
+    liveDownloads.clear()
+    manager.downloadIndex.getDownloads().use { cursor ->
+      while (cursor.moveToNext()) {
+        val download = cursor.download
+        liveDownloads[download.request.id] = download
+      }
+    }
+  }
+
+  private fun refreshLiveDownloads() {
+    if (!activeDownloadManager.isInitialized) return
+    activeDownloadManager.currentDownloads.forEach { download ->
+      liveDownloads[download.request.id] = download
+    }
+  }
 
   private fun currentRequirements(): Requirements =
     Requirements(if (store.wifiOnly) Requirements.NETWORK_UNMETERED else Requirements.NETWORK)
@@ -737,6 +914,14 @@ class OfflineMediaManager private constructor(context: Context) {
 
   private fun requiredTrackCount(entry: OfflineMediaEntry): Int =
     if (entry.audioUrl.isBlank()) 1 else 2
+
+  private fun isEntryTerminal(entry: OfflineMediaEntry): Boolean {
+    if (entry.videoUrl.isBlank()) return false
+    val downloads = trackIds(entry.id).mapNotNull(::download)
+    return downloads.any { it.state == Download.STATE_FAILED } ||
+      downloads.size == requiredTrackCount(entry) &&
+        downloads.all { it.state == Download.STATE_COMPLETED }
+  }
 
   private fun revokePremiumMedia(entry: OfflineMediaEntry) {
     preparationJobs.remove(entry.id)?.cancel()
@@ -755,6 +940,7 @@ class OfflineMediaManager private constructor(context: Context) {
         preparationError = "会员状态已失效，缓存内容已移除",
       )
     )
+    taskCoordinator.onTaskStateChanged()
     scope.launch {
       val directory = File(rootDirectory, "metadata/${entry.id}")
       directory.listFiles()?.filterNot { it.name == "cover.jpg" }?.forEach(File::deleteRecursively)
@@ -842,6 +1028,10 @@ class OfflineMediaManager private constructor(context: Context) {
   }
 
   private fun ensureStorageBackend() {
+    if (Looper.myLooper() != managerHandler.looper) {
+      managerHandler.post(::ensureStorageBackend)
+      return
+    }
     if (
       migrationInProgress.get() ||
         !storageAvailable() ||
@@ -863,6 +1053,7 @@ class OfflineMediaManager private constructor(context: Context) {
       cacheBackendRoot = activeRootDirectory
       mediaCache = createMediaCache(activeRootDirectory)
       activeDownloadManager = createDownloadManager(mediaCache)
+      activeDownloadManager.addListener(downloadManagerListener)
       recoverPersistedWork()
     }
   }
@@ -932,6 +1123,10 @@ class OfflineMediaManager private constructor(context: Context) {
   companion object {
     private const val OFFLINE_DIRECTORY_NAME = "offline_media"
     private const val USER_PAUSE_STOP_REASON = 1
+    private const val SCHEDULER_WAIT_STOP_REASON = 2
+    private const val MAX_ACTIVE_VIDEO_TASKS = 5
+    private const val MAX_TRACK_DOWNLOADS = MAX_ACTIVE_VIDEO_TASKS * 2
+    private const val PROGRESS_REFRESH_MS = 500L
     private const val MAX_COVER_BYTES = 8 * 1024 * 1024
     private const val REQUIREMENTS_RECHECK_MS = 1_000L
     private const val MIGRATION_QUIET_PERIOD_MS = 350L

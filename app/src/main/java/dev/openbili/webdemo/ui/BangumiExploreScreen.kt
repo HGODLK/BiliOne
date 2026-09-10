@@ -1025,7 +1025,7 @@ internal fun AnimeRankingPoster(
           item.subtitle,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
-          color = Color.White.copy(alpha = .82f),
+          color = Color.White.copy(alpha = .90f),
           style = MaterialTheme.typography.labelSmall,
         )
       }
@@ -1159,7 +1159,7 @@ internal fun AnimeRecommendationPoster(
           item.subtitle,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
-          color = Color.White.copy(alpha = .82f),
+          color = Color.White.copy(alpha = .90f),
           style = MaterialTheme.typography.labelSmall,
         )
       }
@@ -1646,7 +1646,7 @@ private fun ExploreFocusBanner(
               ?.let { count ->
                 Text(
                   "${formatCompactCount(count)} 人评分",
-                  color = Color.White.copy(alpha = .82f),
+                  color = Color.White.copy(alpha = .90f),
                   style = MaterialTheme.typography.bodyMedium,
                 )
               }

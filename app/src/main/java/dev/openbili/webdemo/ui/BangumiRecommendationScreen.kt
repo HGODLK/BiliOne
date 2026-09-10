@@ -1635,7 +1635,7 @@ private fun BangumiPreviewPlayer(
           Text("推荐加载失败", color = Color.White, style = MaterialTheme.typography.titleMedium)
           Text(
             "点这里重试",
-            color = Color.White.copy(alpha = .78f),
+            color = Color.White.copy(alpha = .88f),
             style = MaterialTheme.typography.bodyMedium,
             modifier =
               Modifier.clip(RoundedCornerShape(12.dp)).clickable(onClick = onRetry).padding(8.dp),
@@ -1898,7 +1898,7 @@ private fun BangumiCardStack(
             if (metadata.isNotBlank()) {
               Text(
                 metadata,
-                color = Color.White.copy(alpha = .74f),
+                color = Color.White.copy(alpha = .86f),
                 style = MaterialTheme.typography.labelMedium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,

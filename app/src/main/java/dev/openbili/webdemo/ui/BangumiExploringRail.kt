@@ -615,7 +615,7 @@ private fun AnimeHotHeroContent(
           selectedItem.subtitle,
           maxLines = 2,
           overflow = TextOverflow.Ellipsis,
-          color = Color.White.copy(alpha = .84f),
+          color = Color.White.copy(alpha = .90f),
           style = MaterialTheme.typography.bodyMedium,
         )
       }
@@ -639,7 +639,7 @@ private fun AnimeHotHeroContent(
             ?.let { count ->
               Text(
                 "${formatCompactCount(count)} 人评分",
-                color = Color.White.copy(alpha = .82f),
+                color = Color.White.copy(alpha = .90f),
                 style = MaterialTheme.typography.bodyMedium,
               )
             }

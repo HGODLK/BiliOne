@@ -1237,7 +1237,7 @@ private fun ProfileHeader(
                 }
                 Text(
                   "${profile.followingCount} 关注  ·  ${formatProfileFollowerCount(profile.followerCount)} 粉丝  ·  UID ${profile.mid}",
-                  color = Color.White.copy(alpha = .82f),
+                  color = Color.White.copy(alpha = .90f),
                   maxLines = 1,
                   overflow = TextOverflow.Ellipsis,
                 )

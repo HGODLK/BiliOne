@@ -63,7 +63,7 @@ internal fun PlayerErrorActions(
 ) {
   val primaryColor = if (fullscreen) Color.White else MaterialTheme.colorScheme.onSurface
   val secondaryColor =
-    if (fullscreen) Color.White.copy(alpha = .72f) else MaterialTheme.colorScheme.onSurfaceVariant
+    if (fullscreen) Color.White.copy(alpha = .86f) else MaterialTheme.colorScheme.onSurfaceVariant
   Column(
     modifier = modifier.padding(24.dp),
     horizontalAlignment = Alignment.CenterHorizontally,
@@ -160,7 +160,7 @@ internal fun AutoNextOverlay(
       )
       Text(
         nextTitle,
-        color = Color.White.copy(alpha = .78f),
+        color = Color.White.copy(alpha = .90f),
         maxLines = 2,
         overflow = TextOverflow.Ellipsis,
       )

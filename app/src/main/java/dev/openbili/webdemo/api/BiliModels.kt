@@ -276,6 +276,8 @@ data class DanmakuItem(
   val isLocal: Boolean = false,
   val sourceId: String? = null,
   val colorful: Int = DANMAKU_COLORFUL_NONE,
+  /** 当前适配番剧在指定片段中的双向滚动效果。 */
+  val isBidirectional: Boolean = false,
   /** 直播房间可选表情，由与文字弹幕相同的分道调度器渲染。 */
   val imageUrl: String? = null,
   val imageLarge: Boolean = false,

@@ -89,6 +89,10 @@ data class OfflineMediaEntry(
   val entitlementState: OfflineEntitlementState = OfflineEntitlementState.FREE,
   val entitlementValidUntilMs: Long = Long.MAX_VALUE,
   val createdAtMs: Long = System.currentTimeMillis(),
+  /** 全局缓存队列序号，数值越小越早进入缓存队列。 */
+  val queueSequence: Long = 0L,
+  /** 用户暂停整个视频任务时置为 true，和调度器等待槽位区分。 */
+  val pausedByUser: Boolean = false,
   val preparationPaused: Boolean = false,
   val preparationError: String = "",
 ) {
@@ -115,7 +119,8 @@ data class OfflineMediaEntry(
 data class OfflineMediaSnapshot(
   val entry: OfflineMediaEntry,
   val state: OfflineTransferState,
-  val progressPercent: Float,
+  /** null 表示当前还不能可靠计算百分比，界面应显示不定进度而不是伪造 0%。 */
+  val progressPercent: Float?,
   val bytesDownloaded: Long,
   val totalBytes: Long,
   val failureReason: String = "",

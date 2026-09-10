@@ -173,7 +173,7 @@ internal fun DanmakuComposer(
               textStyle = MaterialTheme.typography.bodyLarge.copy(color = Color.White),
               singleLine = true,
               decorationBox = { inner ->
-                if (text.isEmpty()) Text("发送一条弹幕", color = Color.White.copy(alpha = .62f))
+                if (text.isEmpty()) Text("发送一条弹幕", color = Color.White.copy(alpha = .78f))
                 inner()
               },
             )
@@ -214,7 +214,7 @@ internal fun DanmakuComposer(
         Text(
           "颜色",
           style = MaterialTheme.typography.labelMedium,
-          color = Color.White.copy(alpha = .72f),
+          color = Color.White.copy(alpha = .84f),
         )
         Row(
           modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -270,14 +270,14 @@ internal fun DanmakuComposer(
             Text(
               "VIP",
               style = MaterialTheme.typography.labelSmall,
-              color = Color.White.copy(alpha = if (vipActive) 1f else .45f),
+              color = Color.White.copy(alpha = if (vipActive) 1f else .60f),
             )
           }
           if (!vipActive) {
             Text(
               "大会员专属",
               style = MaterialTheme.typography.labelSmall,
-              color = Color.White.copy(alpha = .45f),
+              color = Color.White.copy(alpha = .60f),
             )
           }
         }

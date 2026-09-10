@@ -369,7 +369,7 @@ internal fun MusicTrackList(
                   )
                   Text(
                     listOfNotNull(item.uploader, item.duration).joinToString(" · ").ifBlank { " " },
-                    color = Color.White.copy(alpha = .64f),
+                    color = Color.White.copy(alpha = .86f),
                     style = MaterialTheme.typography.labelMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,

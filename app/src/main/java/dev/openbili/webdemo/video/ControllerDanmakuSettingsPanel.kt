@@ -110,7 +110,7 @@ internal fun ControllerDanmakuSettingsPanel(
               Text(
                 blockWordsLabel,
                 style = MaterialTheme.typography.labelSmall,
-                color = Color.White.copy(alpha = .62f),
+                color = Color.White.copy(alpha = .80f),
               )
             }
           }
@@ -194,7 +194,7 @@ private fun ControllerDanmakuToggleRow(
       Column(Modifier.weight(1f)) {
         Text(label, color = Color.White)
         description?.let {
-          Text(it, style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = .62f))
+          Text(it, style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = .80f))
         }
       }
       if (switch) Switch(checked = checked, onCheckedChange = null)

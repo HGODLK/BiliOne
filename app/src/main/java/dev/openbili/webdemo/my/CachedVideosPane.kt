@@ -20,6 +20,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -63,10 +64,13 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TriStateCheckbox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -145,14 +149,17 @@ internal fun CachedVideosPane(
   val flingTracker = remember(gridState) { FeedNavigationFlingTracker() }
 
   LaunchedEffect(manager) {
-    var storageRefreshTicks = 0
     while (isActive) {
       snapshots = withContext(Dispatchers.IO) { manager.snapshots() }
-      usedBytes = withContext(Dispatchers.IO) { manager.totalBytes() }
-      if (storageRefreshTicks++ % 4 == 0) {
-        storageLocations = withContext(Dispatchers.IO) { manager.availableStorageLocations() }
-      }
       delay(500L)
+    }
+  }
+
+  LaunchedEffect(manager) {
+    while (isActive) {
+      usedBytes = withContext(Dispatchers.IO) { manager.totalBytes() }
+      storageLocations = withContext(Dispatchers.IO) { manager.availableStorageLocations() }
+      delay(2_000L)
     }
   }
 
@@ -279,9 +286,9 @@ internal fun CachedVideosPane(
           verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
           items(groups, key = OfflineMediaGroup::id) { group ->
-            val aggregate = remember(group.snapshots) { group.aggregateSnapshot() }
+            val current = remember(group.snapshots) { group.currentSnapshot() }
             OfflineFeedCard(
-              snapshot = aggregate,
+              snapshot = current,
               item = group.toFeedItem(manager.rootDirectory),
               coverVisible =
                 group.expandable ||
@@ -505,7 +512,7 @@ private fun OfflineFeedCard(
 ) {
   var coverBounds by remember(item.id) { mutableStateOf(Rect.Zero) }
   var cardBounds by remember(item.id) { mutableStateOf(Rect.Zero) }
-  var menuExpanded by remember(item.id) { mutableStateOf(false) }
+  val menuExpandedState = remember(item.id) { mutableStateOf(false) }
   val unavailable = snapshot.state == OfflineTransferState.UNAVAILABLE || !canPlay
   val clickEnabled =
     collectionCount > 1 || (snapshot.state == OfflineTransferState.COMPLETED && canPlay)
@@ -559,7 +566,7 @@ private fun OfflineFeedCard(
               }
             }
           },
-          onLongClick = { menuExpanded = true },
+          onLongClick = { menuExpandedState.value = true },
         )
         .testTag("feed_card"),
     shape = VideoShapeTokens.Card,
@@ -581,7 +588,7 @@ private fun OfflineFeedCard(
           statsTextOverride = offlineStateLabel(snapshot, unavailable),
           publishDateTextOverride =
             if (collectionCount > 1)
-              "$collectionCount 项 · ${formatOfflineBytes(snapshot.bytesDownloaded)}"
+              "$collectionCount 项 · ${snapshot.entry.partTitle.ifBlank { "当前项" }} · ${formatOfflineBytes(snapshot.bytesDownloaded)}"
             else "${snapshot.entry.qualityLabel} · ${formatOfflineBytes(snapshot.bytesDownloaded)}",
           durationTextOverride = item.duration,
           coverOverlay = {
@@ -589,8 +596,12 @@ private fun OfflineFeedCard(
               snapshot.state !in
                 setOf(OfflineTransferState.COMPLETED, OfflineTransferState.UNAVAILABLE)
             ) {
-              LinearProgressIndicator(
-                progress = { snapshot.progressPercent / 100f },
+              snapshot.progressPercent?.let { progress ->
+                LinearProgressIndicator(
+                  progress = { progress / 100f },
+                  modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(4.dp),
+                )
+              } ?: LinearProgressIndicator(
                 modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(4.dp),
               )
             }
@@ -605,41 +616,77 @@ private fun OfflineFeedCard(
           fontWeight = FontWeight.SemiBold,
         )
       }
-      Box(Modifier.align(Alignment.TopEnd)) {
-        DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
-          when (snapshot.state) {
-            OfflineTransferState.DOWNLOADING,
-            OfflineTransferState.QUEUED,
-            OfflineTransferState.PREPARING ->
-              DropdownMenuItem(
-                text = { Text("暂停") },
-                leadingIcon = { Icon(Icons.Default.Pause, contentDescription = null) },
-                onClick = {
-                  menuExpanded = false
-                  onPause()
-                },
-              )
-            OfflineTransferState.PAUSED,
-            OfflineTransferState.FAILED ->
-              DropdownMenuItem(
-                text = { Text("继续") },
-                leadingIcon = { Icon(Icons.Default.PlayArrow, contentDescription = null) },
-                onClick = {
-                  menuExpanded = false
-                  onResume()
-                },
-              )
-            else -> Unit
-          }
-          DropdownMenuItem(
-            text = { Text("删除") },
-            leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
-            onClick = {
-              menuExpanded = false
-              onDelete()
-            },
-          )
+      val menuAction =
+        when (snapshot.state) {
+          OfflineTransferState.DOWNLOADING,
+          OfflineTransferState.QUEUED,
+          OfflineTransferState.PREPARING -> OfflineFeedCardMenuMode.PAUSE
+          OfflineTransferState.PAUSED,
+          OfflineTransferState.FAILED -> OfflineFeedCardMenuMode.RESUME
+          else -> OfflineFeedCardMenuMode.DELETE_ONLY
         }
+      val onMenuAction =
+        rememberUpdatedState<(OfflineFeedCardMenuAction) -> Unit> { action ->
+          menuExpandedState.value = false
+          when (action) {
+            OfflineFeedCardMenuAction.PAUSE -> onPause()
+            OfflineFeedCardMenuAction.RESUME -> onResume()
+            OfflineFeedCardMenuAction.DELETE -> onDelete()
+          }
+        }
+      OfflineFeedCardActionMenu(
+        expandedState = menuExpandedState,
+        action = menuAction,
+        onAction = onMenuAction,
+      )
+    }
+  }
+}
+
+private enum class OfflineFeedCardMenuAction {
+  PAUSE,
+  RESUME,
+  DELETE,
+}
+
+private enum class OfflineFeedCardMenuMode {
+  PAUSE,
+  RESUME,
+  DELETE_ONLY,
+}
+
+@Composable
+private fun BoxScope.OfflineFeedCardActionMenu(
+  expandedState: MutableState<Boolean>,
+  action: OfflineFeedCardMenuMode,
+  onAction: State<(OfflineFeedCardMenuAction) -> Unit>,
+) {
+  Box(Modifier.matchParentSize()) {
+    Box(Modifier.align(Alignment.TopEnd)) {
+      DropdownMenu(
+        expanded = expandedState.value,
+        onDismissRequest = { expandedState.value = false },
+      ) {
+        when (action) {
+          OfflineFeedCardMenuMode.PAUSE ->
+            DropdownMenuItem(
+              text = { Text("暂停") },
+              leadingIcon = { Icon(Icons.Default.Pause, contentDescription = null) },
+              onClick = { onAction.value(OfflineFeedCardMenuAction.PAUSE) },
+            )
+          OfflineFeedCardMenuMode.RESUME ->
+            DropdownMenuItem(
+              text = { Text("继续") },
+              leadingIcon = { Icon(Icons.Default.PlayArrow, contentDescription = null) },
+              onClick = { onAction.value(OfflineFeedCardMenuAction.RESUME) },
+            )
+          OfflineFeedCardMenuMode.DELETE_ONLY -> Unit
+        }
+        DropdownMenuItem(
+          text = { Text("删除") },
+          leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
+          onClick = { onAction.value(OfflineFeedCardMenuAction.DELETE) },
+        )
       }
     }
   }
@@ -694,10 +741,14 @@ private fun BatchDeleteDialog(
   onDismiss: () -> Unit,
   onDelete: (Set<String>) -> Unit,
 ) {
-  val allIds = remember(groups) { groups.flatMap { it.snapshots }.map { it.entry.id }.toSet() }
-  var selectedIds by remember(groups) { mutableStateOf(emptySet<String>()) }
-  var expandedIds by remember(groups) { mutableStateOf(emptySet<String>()) }
+  val allIds = groups.flatMap { it.snapshots }.map { it.entry.id }.toSet()
+  var selectedIds by remember { mutableStateOf(emptySet<String>()) }
+  var expandedIds by remember { mutableStateOf(emptySet<String>()) }
   var confirming by remember { mutableStateOf(false) }
+  LaunchedEffect(allIds) {
+    selectedIds = selectedIds.intersect(allIds)
+    expandedIds = expandedIds.intersect(groups.map(OfflineMediaGroup::id).toSet())
+  }
   val allSelected = allIds.isNotEmpty() && selectedIds.size == allIds.size
   AlertDialog(
     onDismissRequest = onDismiss,
@@ -865,38 +916,9 @@ private data class OfflineMediaGroup(
     )
   }
 
-  fun aggregateSnapshot(): OfflineMediaSnapshot {
-    val bytes = snapshots.sumOf(OfflineMediaSnapshot::bytesDownloaded)
-    val total = snapshots.sumOf(OfflineMediaSnapshot::totalBytes)
-    val progress =
-      if (total > 0L) bytes.toFloat() / total.toFloat() * 100f
-      else
-        snapshots.map(OfflineMediaSnapshot::progressPercent).average().toFloat().coerceAtLeast(0f)
-    val state =
-      when {
-        snapshots.all { it.state == OfflineTransferState.COMPLETED } ->
-          OfflineTransferState.COMPLETED
-        snapshots.any { it.state == OfflineTransferState.DOWNLOADING } ->
-          OfflineTransferState.DOWNLOADING
-        snapshots.any { it.state == OfflineTransferState.PREPARING } ->
-          OfflineTransferState.PREPARING
-        snapshots.any { it.state == OfflineTransferState.QUEUED } -> OfflineTransferState.QUEUED
-        snapshots.any { it.state == OfflineTransferState.FAILED } -> OfflineTransferState.FAILED
-        snapshots.any { it.state == OfflineTransferState.PAUSED } -> OfflineTransferState.PAUSED
-        snapshots.any { it.state == OfflineTransferState.UNAVAILABLE } ->
-          OfflineTransferState.UNAVAILABLE
-        else -> snapshots.first().state
-      }
-    return OfflineMediaSnapshot(
-      entry = snapshots.first().entry,
-      state = state,
-      progressPercent = progress.coerceIn(0f, 100f),
-      bytesDownloaded = bytes,
-      totalBytes = total,
-      failureReason =
-        snapshots.firstOrNull { it.failureReason.isNotBlank() }?.failureReason.orEmpty(),
-    )
-  }
+  /** 外层合集卡只展示队列头部的当前剧集，避免把后续剧集进度提前合并进来。 */
+  fun currentSnapshot(): OfflineMediaSnapshot =
+    snapshots.firstOrNull { it.state != OfflineTransferState.COMPLETED } ?: snapshots.last()
 }
 
 private fun List<OfflineMediaSnapshot>.toOfflineGroups(): List<OfflineMediaGroup> =
@@ -973,8 +995,10 @@ private fun offlineStateLabel(snapshot: OfflineMediaSnapshot, unavailable: Boole
     unavailable -> "请使用缓存绑定的账号和有效会员播放"
     snapshot.state == OfflineTransferState.PREPARING -> "正在准备缓存"
     snapshot.state == OfflineTransferState.QUEUED -> "等待下载"
-    snapshot.state == OfflineTransferState.DOWNLOADING -> "下载中 ${snapshot.progressPercent.toInt()}%"
-    snapshot.state == OfflineTransferState.PAUSED -> "已暂停 ${snapshot.progressPercent.toInt()}%"
+    snapshot.state == OfflineTransferState.DOWNLOADING ->
+      "下载中 ${snapshot.progressPercent?.let { "${it.toInt()}%" } ?: "准备中"}"
+    snapshot.state == OfflineTransferState.PAUSED ->
+      "已暂停${snapshot.progressPercent?.let { " ${it.toInt()}%" }.orEmpty()}"
     snapshot.state == OfflineTransferState.COMPLETED -> "已完成 · 点击播放"
     snapshot.state == OfflineTransferState.FAILED -> snapshot.failureReason.ifBlank { "缓存失败" }
     else -> "不可用"

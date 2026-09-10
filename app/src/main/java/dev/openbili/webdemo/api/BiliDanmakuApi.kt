@@ -39,6 +39,10 @@ object BiliDanmakuApi {
   private const val CONSTRAINED_DANMAKU_CACHE_ENTRIES = 4
   private const val DEFAULT_DANMAKU_SEGMENT_CACHE_ENTRIES = 48
   private const val CONSTRAINED_DANMAKU_SEGMENT_CACHE_ENTRIES = 8
+  // 仅适配当前研究的《记忆管理局》第 7 集，其他视频暂不启用该效果。
+  private const val MEMORY_MANAGEMENT_EPISODE_7_CID = 41_355_775_902L
+  private const val MEMORY_MANAGEMENT_BIDIRECTIONAL_START_MS = 2_000_000L
+  private const val MEMORY_MANAGEMENT_BIDIRECTIONAL_END_MS = 2_025_000L
   private val danmakuLock = Any()
   private val danmakuCache =
     LinkedHashMap<DanmakuCacheKey, List<DanmakuItem>>(DEFAULT_DANMAKU_CACHE_ENTRIES, .75f, true)
@@ -124,16 +128,20 @@ object BiliDanmakuApi {
         danmakuCache[currentKey]
           ?: fetchCurrentDanmaku(cid, durationSeconds).also { danmakuCache[currentKey] = it }
       val loaded =
-        if (includeHistory) {
-          fetchHistoricalDanmaku(
-            cid = cid,
-            publishedAt = publishedAt,
-            expectedCount = expectedCount,
-            current = current,
-          )
-        } else {
-          current
-        }
+        applyCurrentAnimeDanmakuEffect(
+          cid = cid,
+          items =
+            if (includeHistory) {
+              fetchHistoricalDanmaku(
+                cid = cid,
+                publishedAt = publishedAt,
+                expectedCount = expectedCount,
+                current = current,
+              )
+            } else {
+              current
+            },
+        )
       danmakuCache[cacheKey] = loaded
       while (danmakuCache.size > maxDanmakuCacheEntries()) {
         danmakuCache.remove(danmakuCache.keys.first())
@@ -163,14 +171,19 @@ object BiliDanmakuApi {
           "?type=1&oid=$cid&segment_index=$segmentIndex"
       val result = fetchDanmakuProtobuf(url, cid, "segment=$segmentIndex")
       val loaded =
-        if (result.httpCode in 200..299) {
-          result.items
-        } else if (segmentIndex == 1) {
-          val legacy = fetchDanmakuXml("https://api.bilibili.com/x/v1/dm/list.so?oid=$cid", cid)
-          legacy.items.filter { it.timeMs in 0 until DANMAKU_SEGMENT_SECONDS * 1_000L }
-        } else {
-          emptyList()
-        }
+        applyCurrentAnimeDanmakuEffect(
+          cid = cid,
+          items =
+            if (result.httpCode in 200..299) {
+              result.items
+            } else if (segmentIndex == 1) {
+              val legacy =
+                fetchDanmakuXml("https://api.bilibili.com/x/v1/dm/list.so?oid=$cid", cid)
+              legacy.items.filter { it.timeMs in 0 until DANMAKU_SEGMENT_SECONDS * 1_000L }
+            } else {
+              emptyList()
+            },
+        )
       synchronized(danmakuLock) {
         danmakuSegmentCache[key] = loaded
         while (danmakuSegmentCache.size > maxDanmakuSegmentCacheEntries()) {
@@ -196,13 +209,42 @@ object BiliDanmakuApi {
       } else {
         fetchDanmakuXml("https://comment.bilibili.com/$cid.xml", cid).items
       }
-    val merged = mergeDanmaku(segmented, legacy)
+    val merged = applyCurrentAnimeDanmakuEffect(cid, mergeDanmaku(segmented, legacy))
     Log.d(
       BiliApiCommon.TAG,
       "danmaku current sources: cid=$cid segmented=${segmented.size} " +
         "legacy=${legacy.size} merged=${merged.size}",
     )
     return merged
+  }
+
+  /**
+   * 将当前适配番剧的活动区间标记为双向滚动。
+   *
+   * Bilibili 的原始弹幕仍是普通滚动模式，播放器在活动元数据命中的时间区间内才会
+   * 在客户端改成双向模式；这里保留同样的边界，并刻意把适配范围限制在当前这一集。
+   */
+  internal fun applyCurrentAnimeDanmakuEffect(
+    cid: Long,
+    items: List<DanmakuItem>,
+  ): List<DanmakuItem> {
+    if (cid != MEMORY_MANAGEMENT_EPISODE_7_CID || items.isEmpty()) return items
+    var changed = false
+    val adapted =
+      items.map { item ->
+        val shouldBeBidirectional =
+          item.type != 4 &&
+            item.type != 5 &&
+            item.timeMs in
+              MEMORY_MANAGEMENT_BIDIRECTIONAL_START_MS..MEMORY_MANAGEMENT_BIDIRECTIONAL_END_MS
+        if (item.isBidirectional == shouldBeBidirectional) {
+          item
+        } else {
+          changed = true
+          item.copy(isBidirectional = shouldBeBidirectional)
+        }
+      }
+    return if (changed) adapted else items
   }
 
   private fun fetchCurrentDanmakuSegments(

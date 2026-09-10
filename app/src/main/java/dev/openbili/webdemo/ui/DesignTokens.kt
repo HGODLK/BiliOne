@@ -23,7 +23,10 @@ object AppColors {
   val LightSurfaceContainer = Color(0xFFEDF0F0)
   val LightOnBackground = Color(0xFF17191A)
   val LightOnSurface = Color(0xFF17191A)
-  val LightOnSurfaceVariant = Color(0xFF62686A)
+  // Variant text is used on translucent cards as well as opaque surfaces. Keep
+  // it darker than the stock neutral so metadata remains readable after the
+  // card's background alpha is applied.
+  val LightOnSurfaceVariant = Color(0xFF505759)
   val LightOutline = Color(0xFFC8CFD1)
   val LightOutlineVariant = Color(0xFFDCE2E3)
   val LightError = Color(0xFFC62828)
@@ -47,13 +50,23 @@ object AppColors {
   val DarkSurfaceContainer = Color(0xFF1E2325)
   val DarkOnBackground = Color(0xFFE2E6E7)
   val DarkOnSurface = Color(0xFFE2E6E7)
-  val DarkOnSurfaceVariant = Color(0xFFAAB2B4)
+  // The brighter dark-theme variant keeps secondary labels legible over the
+  // darker glass surfaces without making them compete with primary text.
+  val DarkOnSurfaceVariant = Color(0xFFC2CACC)
   val DarkOutline = Color(0xFF465053)
   val DarkOutlineVariant = Color(0xFF30383A)
   val DarkError = Color(0xFFFF8A85)
   val DarkOnError = Color(0xFF690005)
   val DarkErrorContainer = Color(0xFF93000A)
   val DarkOnErrorContainer = Color(0xFFFFDAD6)
+}
+
+/** Shared text-edge treatment for text rendered above changing backgrounds. */
+object TextVisualTokens {
+  /** A small edge shadow improves glyph separation without looking like a drop shadow. */
+  const val GlobalEdgeAlpha = 0.16f
+  const val DarkGlobalEdgeAlpha = 0.24f
+  const val GlobalEdgeBlurRadiusPx = 1.1f
 }
 
 val AppShapes =

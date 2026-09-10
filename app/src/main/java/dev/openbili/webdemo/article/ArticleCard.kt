@@ -190,7 +190,7 @@ fun ArticleCard(
               )
               Text(
                 article.authorName.ifBlank { article.categoryName.ifBlank { "专栏" } },
-                color = Color.White.copy(alpha = .82f),
+                color = Color.White.copy(alpha = .90f),
                 style = MaterialTheme.typography.labelSmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,

@@ -179,6 +179,7 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
   private var scheduledLaneCount = 0
   private var scheduledViewportWidth = 0
   private var scheduledLaneHeight = 0f
+  private val bidirectionalDirections = HashMap<DanmakuItem, Boolean>()
   private var uiPositionProvider: () -> Long = { 0L }
   private var uiPlaybackRateProvider: () -> Float = { 1f }
   private var uiPositionEpoch = Long.MIN_VALUE
@@ -867,8 +868,14 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
         else -> viewport.top + value.lane * laneStep - value.ascent
       }
     val x =
-      if (fixed) viewport.left + (viewport.width() - textWidth) / 2f
-      else viewport.right - elapsed.toFloat() / motionDuration * (viewport.width() + textWidth)
+      when {
+        fixed -> viewport.left + (viewport.width() - textWidth) / 2f
+        value.isBidirectionalReverse -> {
+          val progress = elapsed.toFloat() / motionDuration
+          viewport.left - textWidth + progress * (viewport.width() + textWidth)
+        }
+        else -> viewport.right - elapsed.toFloat() / motionDuration * (viewport.width() + textWidth)
+      }
     drawLocalDanmakuHighlight(canvas, value, x, baseline)
     item.imageUrl?.let { imageUrl ->
       imageBitmaps[imageUrl]?.let { bitmap ->
@@ -1397,7 +1404,13 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
                 scrollingLaneFor(item, scrollingPrevious, laneSpan, densityLevel)
                   ?: return@forEach
             }
-        add(ScheduledDanmaku(item, lane))
+        add(
+          ScheduledDanmaku(
+            item = item,
+            lane = lane,
+            isBidirectionalReverse = bidirectionalReverseFor(item),
+          )
+        )
         val occupiedLanes = lane until lane + laneSpan
         when (item.type) {
           TYPE_TOP -> occupiedLanes.forEach { topAvailableAt[it] = item.timeMs + FIXED_DURATION_MS }
@@ -1500,6 +1513,7 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
         laneStep = scheduledLaneHeight,
         ascent = measurement.ascent,
         descent = measurement.descent,
+        isBidirectionalReverse = scheduledItem.isBidirectionalReverse,
         endMs =
           item.timeMs +
             if (item.type == TYPE_TOP || item.type == TYPE_BOTTOM) FIXED_DURATION_MS
@@ -1517,6 +1531,21 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
     if (inlineSegmentCache.size > retained.size + ITEM_CACHE_TRIM_SLACK) {
       inlineSegmentCache.keys.retainAll(retained)
     }
+    if (bidirectionalDirections.size > retained.size + ITEM_CACHE_TRIM_SLACK) {
+      bidirectionalDirections.keys.retainAll(retained)
+    }
+  }
+
+  /** 活动弹幕沿用播放器的随机左右分流，但在重排轨道时保持方向不变。 */
+  private fun bidirectionalReverseFor(item: DanmakuItem): Boolean {
+    if (
+      !item.isBidirectional ||
+        item.type == TYPE_TOP ||
+        item.type == TYPE_BOTTOM
+    ) {
+      return false
+    }
+    return bidirectionalDirections.getOrPut(item) { Math.random() < .5 }
   }
 
   private fun measurementFor(item: DanmakuItem): DanmakuMeasurement =
@@ -2033,7 +2062,11 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
     return low
   }
 
-  private data class ScheduledDanmaku(val item: DanmakuItem, val lane: Int)
+  private data class ScheduledDanmaku(
+    val item: DanmakuItem,
+    val lane: Int,
+    val isBidirectionalReverse: Boolean,
+  )
 
   private data class DanmakuMeasurement(
     val textSize: Float,
@@ -2062,6 +2095,7 @@ class DanmakuOverlayView(context: Context) : SurfaceView(context), SurfaceHolder
     val laneStep: Float,
     val ascent: Float,
     val descent: Float,
+    val isBidirectionalReverse: Boolean,
     val endMs: Long,
     val color: Int,
   )

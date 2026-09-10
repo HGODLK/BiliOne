@@ -99,7 +99,7 @@ internal fun PlaybackHeader(
 ) {
   var ownerBounds by remember(model.stableId) { mutableStateOf(Rect.Zero) }
   val resolvedForeground = foregroundColor ?: MaterialTheme.colorScheme.onBackground
-  val secondaryForeground = resolvedForeground.copy(alpha = .72f)
+  val secondaryForeground = resolvedForeground.copy(alpha = .88f)
   val afterHome =
     when {
       model.ownerMid > 0L -> controlFocus?.owner

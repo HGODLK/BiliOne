@@ -70,7 +70,7 @@ internal fun ControllerPlaybackSidePanel(
               )
               .background(Color.White.copy(alpha = .08f), RoundedCornerShape(12.dp)),
         ) {
-          Text(item.label, color = if (item.enabled) Color.White else Color.White.copy(alpha = .45f))
+          Text(item.label, color = if (item.enabled) Color.White else Color.White.copy(alpha = .60f))
         }
       }
     }

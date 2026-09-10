@@ -744,14 +744,9 @@ internal fun appRootTailContent(
     historyCid,
     historyDuration,
     dataCommitAllowedId,
-    videoPageDataReadyId,
   ) {
     val item = appState.selectedVideo ?: return@LaunchedEffect
-    if (
-      dataCommitAllowedId != item.id ||
-        videoPageDataReadyId != item.id ||
-        historyCid <= 0L
-    ) return@LaunchedEffect
+    if (dataCommitAllowedId != item.id || historyCid <= 0L) return@LaunchedEffect
     val expectedCid = historyCid
     val expectedDuration = historyDuration
     val cachedEntry = videoEntryCache[item.id]

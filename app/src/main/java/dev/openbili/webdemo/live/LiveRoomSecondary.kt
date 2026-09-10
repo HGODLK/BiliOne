@@ -243,7 +243,7 @@ private fun LiveRankSection(
         when {
           loading -> CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
           error != null && users.isEmpty() -> Text(error, color = MaterialTheme.colorScheme.error)
-          users.isEmpty() -> Text("暂时没有榜单数据", color = foregroundColor.copy(alpha = .72f))
+          users.isEmpty() -> Text("暂时没有榜单数据", color = foregroundColor.copy(alpha = .86f))
           else ->
             LazyRow(
               modifier = Modifier.fillMaxSize(),
@@ -325,7 +325,7 @@ private fun LiveRankUserCard(user: LiveRankUser, foregroundColor: Color) {
           Text(
             it,
             style = MaterialTheme.typography.labelSmall,
-            color = foregroundColor.copy(alpha = .72f),
+            color = foregroundColor.copy(alpha = .86f),
             maxLines = 1,
           )
         }
@@ -580,14 +580,14 @@ private fun LiveInteractiveLotteryCard(
             lottery.command.takeIf(String::isNotBlank) ?: "发送指定弹幕参与"
           },
           style = MaterialTheme.typography.labelSmall,
-          color = foregroundColor.copy(alpha = .82f),
+          color = foregroundColor.copy(alpha = .90f),
           maxLines = 2,
         )
         Text(
           lottery.error ?: statusText,
           style = MaterialTheme.typography.labelSmall,
           color =
-            if (lottery.error == null) foregroundColor.copy(alpha = .72f)
+            if (lottery.error == null) foregroundColor.copy(alpha = .86f)
             else MaterialTheme.colorScheme.error,
           maxLines = 2,
         )
@@ -877,7 +877,7 @@ private fun LiveComposer(
             focusRequester = focusRequester,
             enabled = account.isLogin && !state.composer.sending,
             contentColor = foregroundColor,
-            placeholderColor = foregroundColor.copy(alpha = .68f),
+            placeholderColor = foregroundColor.copy(alpha = .78f),
             maxLines = 1,
             modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp, max = 54.dp),
           )

@@ -6,7 +6,9 @@ import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
@@ -174,6 +176,38 @@ private val BaseTypography =
     )
   }
 
+private fun Typography.withReadableEdges(darkTheme: Boolean): Typography {
+  val edge =
+    Shadow(
+      color =
+        Color.Black.copy(
+          alpha =
+            if (darkTheme) TextVisualTokens.DarkGlobalEdgeAlpha
+            else TextVisualTokens.GlobalEdgeAlpha
+        ),
+      offset = Offset.Zero,
+      blurRadius = TextVisualTokens.GlobalEdgeBlurRadiusPx,
+    )
+  fun androidx.compose.ui.text.TextStyle.withEdge() = copy(shadow = edge)
+  return Typography(
+    displayLarge = displayLarge.withEdge(),
+    displayMedium = displayMedium.withEdge(),
+    displaySmall = displaySmall.withEdge(),
+    headlineLarge = headlineLarge.withEdge(),
+    headlineMedium = headlineMedium.withEdge(),
+    headlineSmall = headlineSmall.withEdge(),
+    titleLarge = titleLarge.withEdge(),
+    titleMedium = titleMedium.withEdge(),
+    titleSmall = titleSmall.withEdge(),
+    bodyLarge = bodyLarge.withEdge(),
+    bodyMedium = bodyMedium.withEdge(),
+    bodySmall = bodySmall.withEdge(),
+    labelLarge = labelLarge.withEdge(),
+    labelMedium = labelMedium.withEdge(),
+    labelSmall = labelSmall.withEdge(),
+  )
+}
+
 private val AppTypography =
   Typography(
     headlineMedium =
@@ -219,6 +253,9 @@ private val AppTypography =
     bodySmall = BaseTypography.bodySmall,
   )
 
+private val LightAppTypography = AppTypography.withReadableEdges(darkTheme = false)
+private val DarkAppTypography = AppTypography.withReadableEdges(darkTheme = true)
+
 @Composable
 fun BiliDemoTheme(
   darkTheme: Boolean = isSystemInDarkTheme(),
@@ -227,7 +264,7 @@ fun BiliDemoTheme(
 ) {
   MaterialTheme(
     colorScheme = if (darkTheme) DarkColors.getValue(accent) else LightColors.getValue(accent),
-    typography = AppTypography,
+    typography = if (darkTheme) DarkAppTypography else LightAppTypography,
     shapes = AppShapes,
     content = content,
   )

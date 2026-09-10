@@ -1138,7 +1138,7 @@ private fun LivePlayerCard(
           state.watchedText?.takeIf(String::isNotBlank)?.let {
             Text(
               it,
-              color = Color.White.copy(alpha = .82f),
+              color = Color.White.copy(alpha = .90f),
               style = MaterialTheme.typography.labelSmall,
             )
           }
@@ -1223,7 +1223,7 @@ private fun LivePlayerCard(
                 modifier = Modifier.size(25.dp),
                 color =
                   if (showDanmaku) MaterialTheme.colorScheme.primary
-                  else Color.White.copy(alpha = .72f),
+                  else Color.White.copy(alpha = .88f),
               )
             }
             DropdownMenu(
@@ -1435,7 +1435,7 @@ private fun LiveRecommendationSection(
               TextButton(onClick = onRetry) { Text("重试") }
             }
           state.recommendations.isEmpty() ->
-            Text("暂时没有更多推荐", color = foregroundColor.copy(alpha = .72f))
+            Text("暂时没有更多推荐", color = foregroundColor.copy(alpha = .86f))
           else ->
             LazyRow(
               modifier = Modifier.fillMaxSize(),

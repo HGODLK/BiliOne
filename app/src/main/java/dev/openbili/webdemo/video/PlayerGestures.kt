@@ -656,7 +656,7 @@ internal fun FullscreenInfoPanel(
       )
       Text(
         "${item.uploader.orEmpty()}  ·  ${item.playCount.orEmpty()} 播放  ·  ${item.duration.orEmpty()}",
-        color = Color.White.copy(alpha = .72f),
+        color = Color.White.copy(alpha = .90f),
         style = MaterialTheme.typography.bodyMedium,
       )
       BiliRichText(
@@ -667,7 +667,7 @@ internal fun FullscreenInfoPanel(
       )
       Text(
         "向下滑动或轻触信息区域收起",
-        color = Color.White.copy(alpha = .52f),
+        color = Color.White.copy(alpha = .78f),
         style = MaterialTheme.typography.labelMedium,
       )
     }

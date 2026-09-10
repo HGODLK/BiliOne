@@ -518,7 +518,7 @@ private fun FollowingUserCard(
             style =
               MaterialTheme.typography.bodySmall.copy(
                 color =
-                  if (colorfulCardsEnabled) Color.White.copy(alpha = .82f)
+                  if (colorfulCardsEnabled) Color.White.copy(alpha = .90f)
                   else MaterialTheme.colorScheme.onSurfaceVariant
               ),
           )

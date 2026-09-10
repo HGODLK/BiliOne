@@ -665,7 +665,7 @@ private fun LivePreviewPanel(
         )
         Text(
           "${room.uname} · ${room.watchedText ?: "直播中"}",
-          color = Color.White.copy(alpha = .82f),
+          color = Color.White.copy(alpha = .90f),
           style = MaterialTheme.typography.bodySmall,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,

@@ -199,7 +199,7 @@ private fun MusicControlButton(
   content: @Composable () -> Unit,
 ) {
   val controlMode = LocalControlMode.current
-  val contentColor = if (enabled) Color.White else Color.White.copy(alpha = .28f)
+  val contentColor = if (enabled) Color.White else Color.White.copy(alpha = .55f)
   Surface(
     modifier =
       Modifier.size(if (emphasized) 60.dp else 52.dp)
@@ -322,7 +322,7 @@ private fun AdvancedAudioButton(
       color =
         if (state.selectedPremiumAudio != null) MaterialTheme.colorScheme.primary.copy(alpha = .34f)
         else Color.Black.copy(alpha = .30f),
-      contentColor = if (available) Color.White else Color.White.copy(alpha = .28f),
+      contentColor = if (available) Color.White else Color.White.copy(alpha = .55f),
       border = BorderStroke(.75.dp, Color.White.copy(alpha = if (available) .18f else .08f)),
       tonalElevation = 0.dp,
       shadowElevation = 0.dp,
@@ -372,7 +372,7 @@ private fun PremiumAudioMenuItem(
   onClick: () -> Unit,
 ) {
   DropdownMenuItem(
-    text = { Text(label, color = if (enabled) Color.White else Color.White.copy(alpha = .32f)) },
+    text = { Text(label, color = if (enabled) Color.White else Color.White.copy(alpha = .55f)) },
     onClick = onClick,
     enabled = enabled,
     trailingIcon = {

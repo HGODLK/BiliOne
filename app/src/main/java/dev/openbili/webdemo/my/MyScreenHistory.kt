@@ -965,6 +965,20 @@ private fun HistoryTimeScale(
           color = labelColor.toArgb()
           textSize = 8.dp.toPx()
         }
+      val edgePaint =
+        android.graphics.Paint(paint).apply {
+          style = android.graphics.Paint.Style.STROKE
+          strokeWidth = .7.dp.toPx()
+          strokeJoin = android.graphics.Paint.Join.ROUND
+      }
+      fun drawLabel(text: String, x: Float, y: Float, textColor: Color) {
+        edgePaint.color =
+          (if (textColor.luminance() > .5f) Color.Black else Color.White).toArgb()
+        edgePaint.alpha = (paint.alpha * .48f).roundToInt()
+        edgePaint.textSize = paint.textSize
+        drawContext.canvas.nativeCanvas.drawText(text, x, y, edgePaint)
+        drawContext.canvas.nativeCanvas.drawText(text, x, y, paint)
+      }
       for (step in 0..120) {
         val minute = 1440 - step * 12
         val y = size.height * step / 120f
@@ -979,11 +993,12 @@ private fun HistoryTimeScale(
           cap = StrokeCap.Round,
         )
         if (hourTick && minute in 60..1380) {
-          drawContext.canvas.nativeCanvas.drawText(
+          paint.alpha = if (future) 70 else 255
+          drawLabel(
             "%02d".format(minute / 60),
             right - 38.dp.toPx(),
             (y + 3.dp.toPx()).coerceIn(paint.textSize, size.height),
-            paint.apply { alpha = if (future) 70 else 255 },
+            labelColor,
           )
         }
       }
@@ -997,11 +1012,12 @@ private fun HistoryTimeScale(
       )
       paint.color = primary.toArgb()
       paint.textSize = 10.dp.toPx()
-      drawContext.canvas.nativeCanvas.drawText(
+      paint.alpha = 255
+      drawLabel(
         "%02d:%02d".format(selectedMinute / 60, selectedMinute % 60),
         2.dp.toPx(),
         (currentY - 5.dp.toPx()).coerceIn(paint.textSize, size.height),
-        paint,
+        primary,
       )
     }
     val currentYDp = with(density) { ((1f - selectedMinute / 1440f) * heightPx).toDp() }

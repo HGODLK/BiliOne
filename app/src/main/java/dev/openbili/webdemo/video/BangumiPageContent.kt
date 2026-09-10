@@ -490,7 +490,7 @@ private fun BangumiDetailCard(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
           )
-          BangumiStatLine(season, foregroundColor.copy(alpha = .76f))
+          BangumiStatLine(season, foregroundColor.copy(alpha = .88f))
           val metadata =
             buildList {
                 season?.areas?.takeIf { it.isNotEmpty() }?.joinToString(" / ")?.let(::add)
@@ -507,7 +507,7 @@ private fun BangumiDetailCard(
             Text(
               metadata,
               style = MaterialTheme.typography.bodyMedium,
-              color = foregroundColor.copy(alpha = .76f),
+              color = foregroundColor.copy(alpha = .88f),
               maxLines = 1,
               overflow = TextOverflow.Ellipsis,
             )
@@ -519,7 +519,7 @@ private fun BangumiDetailCard(
               ?: if (page.loading) "正在读取番剧资料…" else "暂无简介"
           }",
             style = MaterialTheme.typography.bodyMedium,
-            color = foregroundColor.copy(alpha = .76f),
+            color = foregroundColor.copy(alpha = .88f),
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
           )
@@ -543,14 +543,14 @@ private fun BangumiDetailCard(
                 Text(
                   "${formatBangumiCount(it)} 人评分",
                   style = MaterialTheme.typography.labelMedium,
-                  color = foregroundColor.copy(alpha = .72f),
+                  color = foregroundColor.copy(alpha = .86f),
                 )
               }
             Spacer(Modifier.weight(1f))
             Text(
               "点击查看完整信息",
               style = MaterialTheme.typography.labelSmall,
-              color = foregroundColor.copy(alpha = .82f),
+              color = foregroundColor.copy(alpha = .90f),
             )
           }
         }
@@ -639,13 +639,13 @@ private fun BangumiEpisodeCard(
         when {
           page.loading && episodes.isEmpty() ->
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-              Text("正在读取选集…", color = foregroundColor.copy(alpha = .72f))
+              Text("正在读取选集…", color = foregroundColor.copy(alpha = .86f))
             }
           page.error != null && episodes.isEmpty() ->
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
               Text(
                 page.error,
-                color = foregroundColor.copy(alpha = .82f),
+                color = foregroundColor.copy(alpha = .90f),
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
               )
@@ -694,7 +694,7 @@ private fun BangumiEpisodeCard(
           Text(
             "更多",
             style = MaterialTheme.typography.labelSmall,
-            color = foregroundColor.copy(alpha = .76f),
+            color = foregroundColor.copy(alpha = .88f),
           )
         }
       }
@@ -750,7 +750,7 @@ private fun BangumiEpisodeNumber(
     color =
       if (selected) MaterialTheme.colorScheme.primary.copy(alpha = .22f)
       else foregroundColor.copy(alpha = .08f),
-    contentColor = if (selected) foregroundColor else foregroundColor.copy(alpha = .82f),
+    contentColor = if (selected) foregroundColor else foregroundColor.copy(alpha = .90f),
   ) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
       Text(

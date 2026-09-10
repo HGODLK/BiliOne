@@ -104,7 +104,7 @@ internal fun ControllerPlaybackControls(
               ) {
                 Text(
                   item.label,
-                  color = if (item.enabled) Color.White else Color.White.copy(alpha = .45f),
+                  color = if (item.enabled) Color.White else Color.White.copy(alpha = .60f),
                 )
               }
             }
@@ -128,7 +128,7 @@ private fun ControllerPlaybackProgress(positionMs: Long, durationMs: Long) {
       verticalAlignment = Alignment.CenterVertically,
     ) {
       Text(played, color = Color.White, style = MaterialTheme.typography.labelLarge)
-      Text(total, color = Color.White.copy(alpha = .75f), style = MaterialTheme.typography.labelLarge)
+      Text(total, color = Color.White.copy(alpha = .88f), style = MaterialTheme.typography.labelLarge)
     }
     Box(
       modifier = Modifier.fillMaxWidth().background(Color.White.copy(alpha = .28f), RoundedCornerShape(4.dp)),
