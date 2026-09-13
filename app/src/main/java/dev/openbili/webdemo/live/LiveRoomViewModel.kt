@@ -58,6 +58,7 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
   private var danmuConfig: LiveDanmuConfig? = null
   private var generation = 0L
   private var foreground = true
+  private var historyAccountMid = 0L
   private var lastPlayUrlReloadAtMs = 0L
   private val playbackRecovery = LivePlaybackRecovery()
   private var account = UserInfo(0L, "", "", false)
@@ -114,8 +115,9 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
     }
   }
 
-  fun open(entry: LiveSearchRoom, navigationEntryId: Long = 0L) {
+  fun open(entry: LiveSearchRoom, navigationEntryId: Long, accountMid: Long) {
     foreground = true
+    historyAccountMid = accountMid
     val nextGeneration = ++generation
     roomJob?.cancel()
     playbackJob?.cancel()
@@ -157,7 +159,7 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
           ),
         anchorInfo = LiveAnchorInfo(entry.uid, entry.uname, entry.faceUrl),
       )
-    LiveHistoryStore.record(getApplication(), entry)
+    LiveHistoryStore.record(getApplication(), accountMid, entry)
     roomJob = viewModelScope.launch {
       try {
         val room = withContext(Dispatchers.IO) { BiliLiveApi.getRoomInfo(entry.roomId) }
@@ -173,6 +175,7 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
         loadRecommendations(nextGeneration, room)
         LiveHistoryStore.record(
           getApplication(),
+          accountMid,
           entry.copy(
             roomId = room.roomId,
             shortRoomId = room.shortRoomId,
@@ -185,7 +188,7 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
             liveStatus = room.liveStatus,
           ),
         )
-        loadRoomCapabilities(nextGeneration, room)
+        loadRoomCapabilities(nextGeneration, room, accountMid)
       } catch (error: Exception) {
         if (error is CancellationException) throw error
         if (!isCurrent(nextGeneration)) return@launch
@@ -242,6 +245,7 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
         liveStatus = room?.liveStatus ?: 0,
       ),
       navigationEntryId = current.navigationEntryId,
+      accountMid = historyAccountMid,
     )
   }
 
@@ -787,7 +791,11 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
     }
   }
 
-  private fun loadRoomCapabilities(requestGeneration: Long, room: LiveRoomInfo) {
+  private fun loadRoomCapabilities(
+    requestGeneration: Long,
+    room: LiveRoomInfo,
+    accountMid: Long,
+  ) {
     viewModelScope.launch {
       val anchor =
         withContext(Dispatchers.IO) {
@@ -799,6 +807,7 @@ class LiveRoomViewModel(application: Application) : AndroidViewModel(application
         if (currentRoom != null) {
           LiveHistoryStore.record(
             getApplication(),
+            accountMid,
             LiveSearchRoom(
               roomId = currentRoom.roomId,
               shortRoomId = currentRoom.shortRoomId,

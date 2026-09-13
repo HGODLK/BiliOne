@@ -60,6 +60,7 @@ import dev.openbili.webdemo.api.ArticleItem
 import dev.openbili.webdemo.api.CommentItem
 import dev.openbili.webdemo.api.FavoriteFolder
 import dev.openbili.webdemo.api.FollowingUser
+import dev.openbili.webdemo.api.SavedAccount
 import dev.openbili.webdemo.api.SpaceContentCard
 import dev.openbili.webdemo.api.UserInfo
 import dev.openbili.webdemo.feed.FeedItem
@@ -135,6 +136,9 @@ fun MyScreen(
   hiddenInteractionCommentAvatarRpid: Long? = null,
   settings: AppSettings,
   onSettingsChange: ((AppSettings) -> AppSettings) -> Unit,
+  savedAccounts: List<SavedAccount>,
+  onAddAccount: () -> Unit,
+  onSwitchAccount: (Long) -> Unit,
   onLogout: () -> Unit,
   rootPageVisible: Boolean = true,
   controlInputEnabled: Boolean = true,
@@ -148,7 +152,9 @@ fun MyScreen(
     remember(visibleSections) { visibleSections.associateWith { FocusRequester() } }
   val focusManager = LocalFocusManager.current
   val controlScope = rememberCoroutineScope()
+  val accountSwitchFocusRequester = remember { FocusRequester() }
   var handledControlSecondLevelRequest by remember { mutableStateOf(0) }
+  var showAccountSwitcher by remember { mutableStateOf(false) }
   var showLogoutDialog by remember { mutableStateOf(false) }
   var sectionToMarkRead by remember { mutableStateOf<MySection?>(null) }
   val visibleError =
@@ -296,6 +302,13 @@ fun MyScreen(
                 )
               }
             }
+          }
+          if (user.isLogin || savedAccounts.isNotEmpty()) {
+            AccountSwitchMenuItem(
+              focusRequester = accountSwitchFocusRequester,
+              focusEnabled = !controlMode || controlLevel == MyControlLevel.SECTIONS,
+              onClick = { showAccountSwitcher = true },
+            )
           }
           if (user.isLogin) {
             Text(
@@ -513,6 +526,29 @@ fun MyScreen(
         ) {
           Text("狠心退出 (╥﹏╥)")
         }
+      },
+    )
+  }
+  if (showAccountSwitcher) {
+    AccountSwitcherDialog(
+      accounts = savedAccounts,
+      currentMid = user.mid,
+      onDismiss = {
+        showAccountSwitcher = false
+        if (controlMode) {
+          controlScope.launch {
+            withFrameNanos {}
+            runCatching { accountSwitchFocusRequester.requestFocus() }
+          }
+        }
+      },
+      onAddAccount = {
+        showAccountSwitcher = false
+        onAddAccount()
+      },
+      onSwitchAccount = { mid ->
+        showAccountSwitcher = false
+        onSwitchAccount(mid)
       },
     )
   }

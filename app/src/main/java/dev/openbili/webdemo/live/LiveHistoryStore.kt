@@ -17,12 +17,13 @@ object LiveHistoryStore {
   @Synchronized
   fun record(
     context: Context,
+    accountMid: Long,
     room: LiveSearchRoom,
     viewedAt: Long = System.currentTimeMillis() / 1_000L,
   ) {
-    if (room.roomId <= 0L) return
+    if (accountMid <= 0L || room.roomId <= 0L) return
     val merged =
-      (listOf(StoredLiveHistory(room, viewedAt)) + read(context))
+      (listOf(StoredLiveHistory(room, viewedAt)) + read(context, accountMid))
         .distinctBy { it.room.roomId }
         .take(MAX_ITEMS)
     val value =
@@ -49,14 +50,17 @@ object LiveHistoryStore {
     context
       .getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
       .edit()
-      .putString(KEY_ITEMS, value.toString())
+      .putString(itemsKey(accountMid), value.toString())
       .apply()
   }
 
   @Synchronized
-  fun read(context: Context): List<StoredLiveHistory> {
+  fun read(context: Context, accountMid: Long): List<StoredLiveHistory> {
+    if (accountMid <= 0L) return emptyList()
     val raw =
-      context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).getString(KEY_ITEMS, null)
+      context
+        .getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        .getString(itemsKey(accountMid), null)
         ?: return emptyList()
     val array = runCatching { JSONArray(raw) }.getOrNull() ?: return emptyList()
     return buildList {
@@ -89,6 +93,8 @@ object LiveHistoryStore {
       .sortedByDescending(StoredLiveHistory::viewedAt)
       .take(MAX_ITEMS)
   }
+
+  private fun itemsKey(accountMid: Long): String = "${KEY_ITEMS}_$accountMid"
 
   private fun JSONObject.nullableString(name: String): String? =
     if (isNull(name)) null else optString(name).takeIf(String::isNotBlank)

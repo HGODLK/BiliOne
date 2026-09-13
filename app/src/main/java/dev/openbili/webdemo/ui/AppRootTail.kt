@@ -1151,6 +1151,7 @@ internal fun appRootTailContent(
       playbackPositionMs?.let { positionMs ->
         BangumiLocalHistoryStore.record(
           context.applicationContext,
+          page.sourceMid,
           page.sourceCard,
           season.seasonId,
           episode,

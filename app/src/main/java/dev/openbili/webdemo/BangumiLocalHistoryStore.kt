@@ -31,6 +31,7 @@ internal object BangumiLocalHistoryStore {
   @Synchronized
   fun record(
     context: Context,
+    accountMid: Long,
     sourceCard: SpaceContentCard,
     seasonId: Long,
     episode: BangumiEpisode,
@@ -38,7 +39,7 @@ internal object BangumiLocalHistoryStore {
     durationMs: Long,
     viewedAt: Long = System.currentTimeMillis() / 1_000L,
   ) {
-    if (episode.id <= 0L) return
+    if (accountMid <= 0L || episode.id <= 0L) return
     val resolvedSeasonId = seasonId.takeIf { it > 0L } ?: sourceCard.seasonId
     val item =
       StoredBangumiHistory(
@@ -57,7 +58,7 @@ internal object BangumiLocalHistoryStore {
         viewedAt = viewedAt.coerceAtLeast(0L),
       )
     val merged =
-      (listOf(item) + read(context))
+      (listOf(item) + read(context, accountMid))
         .distinctBy { historyKey(it.seasonId, it.episodeId, it.sourceId) }
         .take(MAX_ITEMS)
     val encoded =
@@ -84,14 +85,17 @@ internal object BangumiLocalHistoryStore {
     context
       .getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
       .edit()
-      .putString(KEY_ITEMS, encoded.toString())
+      .putString(itemsKey(accountMid), encoded.toString())
       .apply()
   }
 
   @Synchronized
-  fun read(context: Context): List<StoredBangumiHistory> {
+  fun read(context: Context, accountMid: Long): List<StoredBangumiHistory> {
+    if (accountMid <= 0L) return emptyList()
     val raw =
-      context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).getString(KEY_ITEMS, null)
+      context
+        .getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        .getString(itemsKey(accountMid), null)
         ?: return emptyList()
     val array = runCatching { JSONArray(raw) }.getOrNull() ?: return emptyList()
     return buildList {
@@ -122,6 +126,8 @@ internal object BangumiLocalHistoryStore {
       .distinctBy { historyKey(it.seasonId, it.episodeId, it.sourceId) }
       .take(MAX_ITEMS)
   }
+
+  private fun itemsKey(accountMid: Long): String = "${KEY_ITEMS}_$accountMid"
 
   private fun historyKey(seasonId: Long, episodeId: Long, sourceId: String): String =
     seasonId.takeIf { it > 0L }?.let { "season:$it" }

@@ -949,7 +949,7 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
       )
     loadJob = viewModelScope.launch {
       try {
-        val localHistory = withContext(Dispatchers.IO) { readLocalHistory(filter) }
+        val localHistory = withContext(Dispatchers.IO) { readLocalHistory(filter, expectedMid) }
         if (!isCurrentLoad(generation, expectedMid, MySection.HISTORY)) return@launch
         if (_state.value.historyFilter != filter) return@launch
         historyLocalItems = mergeHistoryItems(localHistory)
@@ -976,10 +976,10 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
     }
   }
 
-  private fun readLocalHistory(filter: HistoryFilter): List<HistoryCardItem> =
+  private fun readLocalHistory(filter: HistoryFilter, accountMid: Long): List<HistoryCardItem> =
     when (filter) {
-      HistoryFilter.ALL -> readLocalLiveHistory() + readLocalBangumiHistory()
-      HistoryFilter.LIVE -> readLocalLiveHistory()
+      HistoryFilter.ALL -> readLocalLiveHistory(accountMid) + readLocalBangumiHistory(accountMid)
+      HistoryFilter.LIVE -> readLocalLiveHistory(accountMid)
       else -> emptyList()
     }
 
@@ -2275,13 +2275,13 @@ class MyViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-  private fun readLocalLiveHistory(): List<HistoryCardItem.Live> =
-    LiveHistoryStore.read(getApplication()).map { item ->
+  private fun readLocalLiveHistory(accountMid: Long): List<HistoryCardItem.Live> =
+    LiveHistoryStore.read(getApplication(), accountMid).map { item ->
       HistoryCardItem.Live(item.room, item.viewedAt)
     }
 
-  private fun readLocalBangumiHistory(): List<HistoryCardItem.Bangumi> =
-    BangumiLocalHistoryStore.read(getApplication()).map { stored ->
+  private fun readLocalBangumiHistory(accountMid: Long): List<HistoryCardItem.Bangumi> =
+    BangumiLocalHistoryStore.read(getApplication(), accountMid).map { stored ->
       val historyId = "history:pgc:ep${stored.episodeId}"
       val seasonType = stored.seasonType.takeIf { it > 0 } ?: 1
       val mediaLabel = pgcMediaLabel(seasonType)

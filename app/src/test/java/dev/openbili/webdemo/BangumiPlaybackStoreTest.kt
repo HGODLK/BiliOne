@@ -59,7 +59,8 @@ class BangumiPlaybackStoreTest {
 
     BangumiLocalHistoryStore.record(
       context,
-      indexCard,
+      accountMid = 100,
+      sourceCard = indexCard,
       seasonId = 42,
       episode = first,
       positionMs = 30_000,
@@ -68,7 +69,8 @@ class BangumiPlaybackStoreTest {
     )
     BangumiLocalHistoryStore.record(
       context,
-      indexCard,
+      accountMid = 100,
+      sourceCard = indexCard,
       seasonId = 42,
       episode = second,
       positionMs = 40_000,
@@ -76,12 +78,38 @@ class BangumiPlaybackStoreTest {
       viewedAt = 200,
     )
 
-    val stored = BangumiLocalHistoryStore.read(context).single()
+    val stored = BangumiLocalHistoryStore.read(context, accountMid = 100).single()
     assertEquals(102L, stored.episodeId)
     assertEquals(42L, stored.seasonId)
     assertEquals(4, stored.seasonType)
     assertEquals(40_000L, stored.positionMs)
     assertEquals(200L, stored.viewedAt)
+  }
+
+  @Test
+  fun localHistoryIsSeparatedByAccount() {
+    val card = SpaceContentCard(id = "bangumi:42", title = "作品", seasonId = 42)
+    BangumiLocalHistoryStore.record(
+      context,
+      accountMid = 100,
+      sourceCard = card,
+      seasonId = 42,
+      episode = episode(id = 101, title = "账号甲记录"),
+      positionMs = 10_000,
+      durationMs = 1_000_000,
+    )
+    BangumiLocalHistoryStore.record(
+      context,
+      accountMid = 200,
+      sourceCard = card,
+      seasonId = 42,
+      episode = episode(id = 102, title = "账号乙记录"),
+      positionMs = 20_000,
+      durationMs = 1_000_000,
+    )
+
+    assertEquals(101L, BangumiLocalHistoryStore.read(context, 100).single().episodeId)
+    assertEquals(102L, BangumiLocalHistoryStore.read(context, 200).single().episodeId)
   }
 
   private fun episode(id: Long, title: String) =

@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import dev.openbili.webdemo.api.BiliAuthApi
 import dev.openbili.webdemo.api.BiliHttpClient
 import dev.openbili.webdemo.api.QrCodeInfo
+import dev.openbili.webdemo.api.SavedAccount
 import dev.openbili.webdemo.api.UserInfo
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.asStateFlow
@@ -43,23 +44,45 @@ class AuthViewModel : ViewModel() {
   private val _appAccessAuthorized = MutableStateFlow(BiliHttpClient.hasValidAppAccessToken())
   val appAccessAuthorized: StateFlow<Boolean> = _appAccessAuthorized.asStateFlow()
 
+  private val _savedAccounts = MutableStateFlow(BiliHttpClient.savedAccounts())
+  val savedAccounts: StateFlow<List<SavedAccount>> = _savedAccounts.asStateFlow()
+
   private var pollJob: Job? = null
   private var appAuthorizationFlow = false
+  private var accountGeneration = 0L
+  private var webLoginInProgress = false
+  private var loginFallbackMid: Long? = null
 
   fun checkLoginStatus() {
+    val expectedGeneration = accountGeneration
     viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
       try {
         val info = BiliAuthApi.getUserInfo()
-        _userInfo.value = info
+        if (expectedGeneration != accountGeneration) return@launch
+        if (info.isLogin) {
+          rememberLoggedInUser(info)
+        } else {
+          BiliHttpClient.clearLoginSession()
+          _userInfo.value = signedOutUser()
+          _appAccessAuthorized.value = false
+          refreshSavedAccounts()
+        }
       } catch (_: Exception) {}
     }
   }
 
   fun startLogin() {
+    if (!webLoginInProgress) {
+      loginFallbackMid = _userInfo.value.mid.takeIf { _userInfo.value.isLogin && it > 0L }
+    }
+    webLoginInProgress = true
+    accountGeneration++
+    val expectedGeneration = accountGeneration
     appAuthorizationFlow = false
     viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
       try {
         val qr = BiliAuthApi.generateQrCode()
+        if (expectedGeneration != accountGeneration) return@launch
         if (qr == null) {
           _loginState.value = LoginState.Failed("获取二维码失败，请重试")
           return@launch
@@ -67,16 +90,20 @@ class AuthViewModel : ViewModel() {
         _loginState.value = LoginState.QrReady(qr)
         startPolling(qr)
       } catch (e: Exception) {
+        if (expectedGeneration != accountGeneration) return@launch
         _loginState.value = LoginState.Failed(e.message ?: "获取二维码失败")
       }
     }
   }
 
   fun startAppAuthorization() {
+    accountGeneration++
+    val expectedGeneration = accountGeneration
     appAuthorizationFlow = true
     viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
       try {
         val qr = BiliAuthApi.generateAppQrCode()
+        if (expectedGeneration != accountGeneration) return@launch
         if (qr == null) {
           _loginState.value = LoginState.AppFailed("获取移动端授权二维码失败，请重试")
           return@launch
@@ -84,6 +111,7 @@ class AuthViewModel : ViewModel() {
         _loginState.value = LoginState.AppQrReady(qr)
         startAppPolling(qr)
       } catch (e: Exception) {
+        if (expectedGeneration != accountGeneration) return@launch
         _loginState.value = LoginState.AppFailed(e.message ?: "获取移动端授权二维码失败")
       }
     }
@@ -94,23 +122,66 @@ class AuthViewModel : ViewModel() {
   }
 
   fun cancelLogin() {
+    accountGeneration++
     pollJob?.cancel()
     pollJob = null
+    if (webLoginInProgress) restoreAccountAfterCancelledLogin()
+    webLoginInProgress = false
+    loginFallbackMid = null
+    appAuthorizationFlow = false
     _loginState.value = LoginState.Idle
   }
 
   fun logout() {
+    accountGeneration++
     pollJob?.cancel()
     pollJob = null
     BiliHttpClient.clearLoginSession()
     _appAccessAuthorized.value = false
     appAuthorizationFlow = false
-    _userInfo.value = UserInfo(mid = 0, name = "", face = "", isLogin = false)
+    webLoginInProgress = false
+    loginFallbackMid = null
+    _userInfo.value = signedOutUser()
+    refreshSavedAccounts()
     _loginState.value = LoginState.Idle
+  }
+
+  /** 立即启用本机保存的账号，并在后台校验服务端登录态。 */
+  fun switchAccount(mid: Long): Boolean {
+    val account = BiliHttpClient.activateSavedAccount(mid) ?: return false
+    accountGeneration++
+    val expectedGeneration = accountGeneration
+    pollJob?.cancel()
+    pollJob = null
+    appAuthorizationFlow = false
+    webLoginInProgress = false
+    loginFallbackMid = null
+    _loginState.value = LoginState.Idle
+    _userInfo.value = account.toUserInfo()
+    _appAccessAuthorized.value = BiliHttpClient.hasValidAppAccessToken()
+    refreshSavedAccounts()
+    viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+      try {
+        val verified = BiliAuthApi.getUserInfo()
+        if (expectedGeneration != accountGeneration) return@launch
+        if (verified.isLogin && verified.mid == mid) {
+          rememberLoggedInUser(verified)
+        } else {
+          BiliHttpClient.clearLoginSession()
+          _userInfo.value = signedOutUser()
+          _appAccessAuthorized.value = false
+          refreshSavedAccounts()
+        }
+      } catch (_: Exception) {
+        // 本地切换已经完成；短暂离线时继续使用缓存的账号摘要。
+      }
+    }
+    return true
   }
 
   private fun startPolling(qrInfo: QrCodeInfo) {
     pollJob?.cancel()
+    val expectedGeneration = accountGeneration
     android.util.Log.d("AuthVM", "startPolling")
     pollJob =
       viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
@@ -118,6 +189,7 @@ class AuthViewModel : ViewModel() {
           delay(2000)
           try {
             val status = BiliAuthApi.pollQrCode(qrInfo.qrcodeKey)
+            if (expectedGeneration != accountGeneration) return@launch
             android.util.Log.d("AuthVM", "poll status: code=${status.code}")
             when (status.code) {
               86101 ->
@@ -135,7 +207,14 @@ class AuthViewModel : ViewModel() {
               0 -> {
                 // 登录成功 —— 拉取用户信息
                 val info = BiliAuthApi.getUserInfo()
-                _userInfo.value = info
+                if (expectedGeneration != accountGeneration) return@launch
+                if (!info.isLogin || info.mid <= 0L) {
+                  _loginState.value = LoginState.Failed("登录状态校验失败，请重试")
+                  return@launch
+                }
+                rememberLoggedInUser(info)
+                webLoginInProgress = false
+                loginFallbackMid = null
                 _loginState.value = LoginState.Success(info)
                 return@launch
               }
@@ -149,6 +228,7 @@ class AuthViewModel : ViewModel() {
               }
             }
           } catch (e: Exception) {
+            if (expectedGeneration != accountGeneration) return@launch
             _loginState.value = LoginState.Failed(e.message ?: "登录失败")
             return@launch
           }
@@ -158,12 +238,14 @@ class AuthViewModel : ViewModel() {
 
   private fun startAppPolling(qrInfo: QrCodeInfo) {
     pollJob?.cancel()
+    val expectedGeneration = accountGeneration
     pollJob =
       viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
         while (true) {
           delay(2_000)
           try {
             val status = BiliAuthApi.pollAppQrCode(qrInfo.qrcodeKey)
+            if (expectedGeneration != accountGeneration) return@launch
             when (status.code) {
               86039 -> _loginState.value = LoginState.AppWaiting(qrInfo, "请使用哔哩哔哩 App 扫码并确认授权")
               0 -> {
@@ -195,6 +277,7 @@ class AuthViewModel : ViewModel() {
               }
             }
           } catch (e: Exception) {
+            if (expectedGeneration != accountGeneration) return@launch
             _loginState.value = LoginState.AppFailed(e.message ?: "移动端授权失败")
             return@launch
           }
@@ -205,4 +288,35 @@ class AuthViewModel : ViewModel() {
   override fun onCleared() {
     pollJob?.cancel()
   }
+
+  private fun rememberLoggedInUser(info: UserInfo) {
+    if (!info.isLogin || info.mid <= 0L) return
+    BiliHttpClient.rememberCurrentAccount(info)
+    _userInfo.value = info
+    _appAccessAuthorized.value = BiliHttpClient.hasValidAppAccessToken()
+    refreshSavedAccounts()
+  }
+
+  private fun refreshSavedAccounts() {
+    _savedAccounts.value = BiliHttpClient.savedAccounts()
+  }
+
+  /** 新账号扫码被取消时恢复原账号，避免半完成的扫码 Cookie 覆盖当前会话。 */
+  private fun restoreAccountAfterCancelledLogin() {
+    val restored = loginFallbackMid?.let(BiliHttpClient::activateSavedAccount)
+    if (restored != null) {
+      _userInfo.value = restored.toUserInfo()
+      _appAccessAuthorized.value = BiliHttpClient.hasValidAppAccessToken()
+    } else {
+      BiliHttpClient.clearLoginSession()
+      _userInfo.value = signedOutUser()
+      _appAccessAuthorized.value = false
+    }
+    refreshSavedAccounts()
+  }
+
+  private fun SavedAccount.toUserInfo(): UserInfo =
+    UserInfo(mid = mid, name = name, face = face, isLogin = true, vipActive = vipActive)
+
+  private fun signedOutUser(): UserInfo = UserInfo(mid = 0, name = "", face = "", isLogin = false)
 }

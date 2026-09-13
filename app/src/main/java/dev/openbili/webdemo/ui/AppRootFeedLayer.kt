@@ -20,6 +20,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -316,6 +317,7 @@ internal class AppRootFeedContext(
 
   @Composable
   fun FeedLayer() {
+    val savedAccounts by authViewModel.savedAccounts.collectAsState()
     val isRootCapsuleVisible =
       rootCapsuleVisible(
         controlMode = controlMode,
@@ -714,6 +716,21 @@ internal class AppRootFeedContext(
                       ?.rpid,
                   settings = settings,
                   onSettingsChange = settingsViewModel::update,
+                  savedAccounts = savedAccounts,
+                  onAddAccount = authViewModel::startLogin,
+                  onSwitchAccount = { mid ->
+                    if (myState.section == dev.openbili.webdemo.my.MySection.FOLLOWING) {
+                      myViewModel.commitPendingUnfollows()
+                    }
+                    val accountName = savedAccounts.firstOrNull { it.mid == mid }?.name.orEmpty()
+                    val switched = authViewModel.switchAccount(mid)
+                    Toast.makeText(
+                        context,
+                        if (switched) "已切换到${accountName.ifBlank { "这个账号" }}" else "账号切换失败，请重新登录",
+                        Toast.LENGTH_SHORT,
+                      )
+                      .show()
+                  },
                   onLogout = {
                     if (myState.section == dev.openbili.webdemo.my.MySection.FOLLOWING) {
                       myViewModel.commitPendingUnfollows()

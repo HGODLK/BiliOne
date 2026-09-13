@@ -317,7 +317,7 @@ internal fun LiveRoomScreen(
           state.navigationEntryId != navigationEntryId ||
           state.roomInfo == null)
     ) {
-      viewModel.open(entry, navigationEntryId)
+      viewModel.open(entry, navigationEntryId, account.mid)
     }
     viewModel.setForeground(active)
   }

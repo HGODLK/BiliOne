@@ -54,6 +54,7 @@ object BiliHttpClient {
     )
 
   private var cookieStore: MutableList<Cookie> = mutableListOf()
+  private var accountSessionStore: AccountSessionStore? = null
   private var cachedDesktopUa: String? = null
   @Volatile private var cachedGaiaToken: String? = null
   private var prefs: SharedPreferences? = null
@@ -65,6 +66,7 @@ object BiliHttpClient {
    */
   fun init(context: Context) {
     prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    accountSessionStore = AccountSessionStore(requireNotNull(prefs))
     loadCookies()
     cachedGaiaToken = cookieValue("x-bili-gaia-vtoken")
 
@@ -123,7 +125,53 @@ object BiliHttpClient {
       cookieStore.removeAll { it.expiresAt < now }
       val records = cookieStore.mapTo(linkedSetOf()) { encodeCookie(it) }
       prefs?.edit()?.putStringSet(KEY_COOKIES_V2, records)?.apply()
+      accountSessionStore?.updateActiveCookies(
+        cookieMid = currentCookieMidLocked(),
+        cookies = currentSessionCookiesLocked(),
+      )
     }
+  }
+
+  /** 读取可快速切换的账号摘要，最近使用的账号排在前面。 */
+  fun savedAccounts(): List<SavedAccount> = accountSessionStore?.accounts().orEmpty()
+
+  /** 保存当前登录账号及其独立凭据。旧版的单账号登录态会在首次读取账号资料后迁移到这里。 */
+  fun rememberCurrentAccount(user: UserInfo) {
+    if (!user.isLogin || user.mid <= 0L) return
+    synchronized(cookieStore) {
+      val sessionCookies = currentSessionCookiesLocked()
+      if (sessionCookies.none { it.name == "SESSDATA" }) return
+      val previousActiveMid = accountSessionStore?.activeAccountMid() ?: 0L
+      if (previousActiveMid > 0L && previousActiveMid != user.mid) {
+        clearAppAccessTokenPreferences()
+      }
+      accountSessionStore?.remember(
+        user = user,
+        cookies = sessionCookies,
+        appToken =
+          AccountAppToken(
+            accessToken = prefs?.getString(KEY_APP_ACCESS_TOKEN, null).orEmpty(),
+            refreshToken = prefs?.getString(KEY_APP_REFRESH_TOKEN, null).orEmpty(),
+            expiresAt = prefs?.getLong(KEY_APP_TOKEN_EXPIRES_AT, 0L) ?: 0L,
+          ),
+      )
+    }
+  }
+
+  /** 切换到已保存账号；设备指纹 Cookie 保持不变。 */
+  fun activateSavedAccount(mid: Long): SavedAccount? {
+    val session = accountSessionStore?.activate(mid) ?: return null
+    val activated =
+      synchronized(cookieStore) {
+        cookieStore = mergeLoginSessionCookies(cookieStore, session.cookies).toMutableList()
+        restoreAppAccessTokenLocked(session)
+        session.account
+      }
+    persistCookies()
+    cachedGaiaToken = cookieValue("x-bili-gaia-vtoken")
+    clearWebViewLoginCookies()
+    syncCookiesToWebView()
+    return activated
   }
 
   /** 从 SharedPreferences 读取并恢复 Cookie 列表。 */
@@ -283,19 +331,13 @@ object BiliHttpClient {
 
   /** 清除账号登录态，但保留公开接口使用的匿名设备 Cookie。 */
   fun clearLoginSession() {
-    synchronized(cookieStore) { cookieStore.removeAll { it.name in LOGIN_COOKIE_NAMES } }
-    clearAppAccessToken()
-    persistCookies()
-    runCatching {
-      val manager = CookieManager.getInstance()
-      LOGIN_COOKIE_NAMES.forEach { name ->
-        manager.setCookie(
-          "https://bilibili.com/",
-          "$name=; Max-Age=0; Path=/; Domain=.bilibili.com; Secure",
-        )
-      }
-      manager.flush()
+    accountSessionStore?.removeActive()
+    synchronized(cookieStore) {
+      cookieStore.removeAll { it.name in LOGIN_COOKIE_NAMES }
     }
+    clearAppAccessToken(removeFromSavedAccount = false)
+    persistCookies()
+    clearWebViewLoginCookies()
   }
 
   /**
@@ -423,6 +465,13 @@ object BiliHttpClient {
       ?.putString(KEY_APP_REFRESH_TOKEN, refreshToken)
       ?.putLong(KEY_APP_TOKEN_EXPIRES_AT, expiresAt)
       ?.apply()
+    synchronized(cookieStore) {
+      val currentMid = currentCookieMidLocked()
+      accountSessionStore?.updateActiveToken(
+        cookieMid = currentMid,
+        appToken = AccountAppToken(accessToken, refreshToken, expiresAt),
+      )
+    }
   }
 
   /**
@@ -443,13 +492,12 @@ object BiliHttpClient {
   fun hasValidAppAccessToken(): Boolean = appAccessToken() != null
 
   /** 清除持久化的 APP access token。 */
-  private fun clearAppAccessToken() {
-    prefs
-      ?.edit()
-      ?.remove(KEY_APP_ACCESS_TOKEN)
-      ?.remove(KEY_APP_REFRESH_TOKEN)
-      ?.remove(KEY_APP_TOKEN_EXPIRES_AT)
-      ?.apply()
+  private fun clearAppAccessToken(removeFromSavedAccount: Boolean = true) {
+    clearAppAccessTokenPreferences()
+    if (!removeFromSavedAccount) return
+    synchronized(cookieStore) {
+      accountSessionStore?.updateActiveToken(currentCookieMidLocked(), AccountAppToken())
+    }
   }
 
   /** 把持久化的登录会话复制到系统 WebView 的 Cookie 罐，供官方页面使用。 */
@@ -483,6 +531,14 @@ object BiliHttpClient {
     url: HttpUrl,
     now: Long = System.currentTimeMillis(),
   ): List<Cookie> = cookies.filter { it.expiresAt >= now && it.matches(url) }
+
+  /** 用目标账号凭据替换当前凭据，同时保留设备和公开接口 Cookie。 */
+  internal fun mergeLoginSessionCookies(
+    currentCookies: List<Cookie>,
+    targetSessionCookies: List<Cookie>,
+  ): List<Cookie> =
+    currentCookies.filterNot { it.name in LOGIN_COOKIE_NAMES } +
+      targetSessionCookies.filter { it.name in LOGIN_COOKIE_NAMES }
 
   /** 把 Cookie 序列化为 base64Url 字符串用于持久化。 */
   internal fun encodeCookie(cookie: Cookie): String =
@@ -522,4 +578,56 @@ object BiliHttpClient {
       }
       .getOrNull()
       ?.takeIf { it.expiresAt >= System.currentTimeMillis() }
+
+  private fun currentCookieMidLocked(): Long =
+    cookieStore
+      .filter { it.expiresAt >= System.currentTimeMillis() && it.name == "DedeUserID" }
+      .maxByOrNull { it.expiresAt }
+      ?.value
+      ?.toLongOrNull() ?: 0L
+
+  private fun currentSessionCookiesLocked(): List<Cookie> = cookieStore.filter {
+    it.expiresAt >= System.currentTimeMillis() && it.name in LOGIN_COOKIE_NAMES
+  }
+
+  private fun restoreAppAccessTokenLocked(session: SavedAccountSession) {
+    val editor = prefs?.edit() ?: return
+    if (
+      session.appToken.accessToken.isNotBlank() &&
+        session.appToken.expiresAt > System.currentTimeMillis()
+    ) {
+      editor
+        .putString(KEY_APP_ACCESS_TOKEN, session.appToken.accessToken)
+        .putString(KEY_APP_REFRESH_TOKEN, session.appToken.refreshToken)
+        .putLong(KEY_APP_TOKEN_EXPIRES_AT, session.appToken.expiresAt)
+    } else {
+      editor
+        .remove(KEY_APP_ACCESS_TOKEN)
+        .remove(KEY_APP_REFRESH_TOKEN)
+        .remove(KEY_APP_TOKEN_EXPIRES_AT)
+    }
+    editor.apply()
+  }
+
+  private fun clearAppAccessTokenPreferences() {
+    prefs
+      ?.edit()
+      ?.remove(KEY_APP_ACCESS_TOKEN)
+      ?.remove(KEY_APP_REFRESH_TOKEN)
+      ?.remove(KEY_APP_TOKEN_EXPIRES_AT)
+      ?.apply()
+  }
+
+  private fun clearWebViewLoginCookies() {
+    runCatching {
+      val manager = CookieManager.getInstance()
+      LOGIN_COOKIE_NAMES.forEach { name ->
+        manager.setCookie(
+          "https://bilibili.com/",
+          "$name=; Max-Age=0; Path=/; Domain=.bilibili.com; Secure",
+        )
+      }
+      manager.flush()
+    }
+  }
 }

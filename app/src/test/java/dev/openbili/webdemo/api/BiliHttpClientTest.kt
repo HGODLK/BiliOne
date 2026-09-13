@@ -93,4 +93,42 @@ class BiliHttpClientTest {
     assertEquals("value", BiliHttpClient.cookieValue("buvid3"))
     BiliHttpClient.replaceCookies(emptyList())
   }
+
+  @Test
+  fun switchingSessionReplacesOnlyAccountCookies() {
+    val future = 4_000_000_000_000L
+    fun cookie(name: String, value: String) =
+      Cookie.Builder()
+        .name(name)
+        .value(value)
+        .domain("bilibili.com")
+        .path("/")
+        .expiresAt(future)
+        .build()
+
+    val switched =
+      BiliHttpClient.mergeLoginSessionCookies(
+        currentCookies =
+          listOf(
+            cookie("SESSDATA", "account-a"),
+            cookie("bili_jct", "csrf-a"),
+            cookie("buvid3", "device-cookie"),
+            cookie("x-bili-gaia-vtoken", "risk-cookie"),
+          ),
+        targetSessionCookies =
+          listOf(
+            cookie("SESSDATA", "account-b"),
+            cookie("bili_jct", "csrf-b"),
+            cookie("DedeUserID", "200"),
+            cookie("buvid3", "other-device-cookie"),
+          ),
+      )
+
+    assertEquals("account-b", switched.last { it.name == "SESSDATA" }.value)
+    assertEquals("csrf-b", switched.last { it.name == "bili_jct" }.value)
+    assertEquals("200", switched.last { it.name == "DedeUserID" }.value)
+    assertEquals("device-cookie", switched.single { it.name == "buvid3" }.value)
+    assertEquals("risk-cookie", switched.single { it.name == "x-bili-gaia-vtoken" }.value)
+    assertFalse(switched.any { it.value == "account-a" || it.value == "csrf-a" })
+  }
 }
